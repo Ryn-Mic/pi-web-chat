@@ -1,4 +1,6 @@
-import { useChat } from "../lib/chat";
+import { useNavigate, useParams } from "@tanstack/react-router";
+import { useEffect } from "react";
+import { chatClient, useChat } from "../lib/chat";
 import { requestOpenSessionsDrawer } from "../lib/drawer";
 import { useT } from "../lib/i18n";
 import { useSidebarPinned } from "../lib/sidebar";
@@ -37,10 +39,31 @@ function connectionLabel(
 
 export function ChatPage() {
   const t = useT();
-  const { connection, snapshot, streamText, streamThinking, activeTools } = useChat();
+  const { connection, sessionId, snapshot, streamText, streamThinking, activeTools } = useChat();
   const isStreaming = snapshot?.isStreaming ?? false;
   const sidebarPinned = useSidebarPinned();
   const showConnectingOverlay = connection !== "connected" && !snapshot;
+  const params = useParams({ strict: false }) as { sessionId?: string };
+  const routeSessionId = params.sessionId ?? null;
+  const navigate = useNavigate();
+
+  // URL → 연결 ("/"는 새 세션)
+  useEffect(() => {
+    chatClient.connect(routeSessionId);
+  }, [routeSessionId]);
+
+  // 연결 → URL (새 세션 생성 / 포크 등으로 세션이 바뀌면 주소 교체).
+  // 렌더 시점 값이 아닌 현재 상태를 읽어 "/"로 갔다가 즉시 되돌아오는 경합을 막는다.
+  useEffect(() => {
+    const bound = chatClient.state.sessionId;
+    if (bound && bound !== routeSessionId) {
+      void navigate({
+        to: "/s/$sessionId",
+        params: { sessionId: bound },
+        replace: true,
+      });
+    }
+  }, [sessionId, routeSessionId, navigate]);
 
   // 왼쪽 가장자리 → 오른쪽 스와이프로 세션 드로어 열기 (고정 사이드바 아닐 때)
   useLeftEdgeSwipe({

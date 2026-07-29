@@ -11,6 +11,8 @@ export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 export interface ChatState {
   connection: ConnectionStatus;
+  /** 서버가 이 연결에 바인딩한 세션 id (URL 동기화용) */
+  sessionId: string | null;
   snapshot: UISnapshot | null;
   /** 현재 스트리밍 중인 assistant 텍스트 (아직 snapshot에 없음) */
   streamText: string;
@@ -24,6 +26,7 @@ export interface ChatState {
 
 const initialState: ChatState = {
   connection: "connecting",
+  sessionId: null,
   snapshot: null,
   streamText: "",
   streamThinking: "",
@@ -40,16 +43,36 @@ class ChatClient {
   /** After a drop, stay on "connecting" briefly before showing disconnected. */
   private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private everConnected = false;
+  /** 접속하려는 세션 id (null = 새 세션) */
+  private target: string | null = null;
   state: ChatState = initialState;
 
-  connect() {
-    if (this.ws || this.intentionalClose) return;
+  /**
+   * 세션에 연결. 이미 같은 세션에 붙어 있으면 무시하고,
+   * 다른 세션이면 기존 연결을 끓고 새로 연다.
+   */
+  connect(sessionId: string | null = null) {
+    if (this.ws) {
+      const current = this.state.sessionId ?? this.target;
+      if (sessionId === null ? this.target === null : sessionId === current) return;
+      // 세션 전환: 이전 연결 종료 + 화면 초기화
+      this.closeSocket();
+      this.update({
+        snapshot: null,
+        sessionId: null,
+        streamText: "",
+        streamThinking: "",
+        activeTools: [],
+      });
+    }
+    this.target = sessionId;
     if (this.state.connection === "disconnected") {
       this.update({ connection: "connecting" });
     }
 
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/ws`);
+    const query = sessionId ? `?session=${encodeURIComponent(sessionId)}` : "";
+    const ws = new WebSocket(`${proto}://${location.host}/ws${query}`);
     this.ws = ws;
 
     ws.onopen = () => {
@@ -74,10 +97,31 @@ class ChatClient {
         this.update({ connection: "connecting" });
       }
       this.scheduleDisconnected();
-      setTimeout(() => this.connect(), this.reconnectDelay);
+      // 재연결은 현재 바인딩된 세션으로 (새 세션이 또 생기지 않게)
+      const retryTarget = this.state.sessionId ?? this.target;
+      setTimeout(() => {
+        this.target = retryTarget;
+        this.connect(retryTarget);
+      }, this.reconnectDelay);
       this.reconnectDelay = Math.min(Math.round(this.reconnectDelay * 1.6), 8_000);
     };
     ws.onerror = () => ws.close();
+  }
+
+  /** 재연결 핸들러까지 떼고 소켓을 닫는다 (유령 연결/재연결 루프 방지) */
+  private closeSocket() {
+    const ws = this.ws;
+    this.ws = null;
+    if (!ws) return;
+    ws.onopen = null;
+    ws.onclose = null;
+    ws.onerror = null;
+    ws.onmessage = null;
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
   }
 
   send(cmd: ClientCommand) {
@@ -105,6 +149,10 @@ class ChatClient {
 
   private handle(event: ServerEvent) {
     switch (event.type) {
+      case "session_bound":
+        this.target = event.sessionId;
+        this.update({ sessionId: event.sessionId });
+        break;
       case "snapshot":
         // 완결된 메시지가 snapshot에 반영되므로 스트림 버퍼는 비운다
         this.update({ snapshot: event.snapshot, streamText: "", streamThinking: "" });

@@ -142,6 +142,7 @@ dist/public/              빌드된 프론트 (배포물)
 - **마크다운 렌더링** (react-markdown + GFM + highlight.js 코드 하이라이팅)
 - 툴 실행 표시 (bash, edit, read, ...) + 결과 펼쳐보기
 - 세션 목록 / 전환 / 새 세션 (pi CLI 세션과 공유됨)
+- **세션별 URL** (`/s/:sessionId`): 탭·기기마다 서로 다른 세션을 동시에 사용, 같은 URL은 실시간 동기화. `/` 로 접속하면 새 세션
 - **세션 포크**: 설정 메뉴에서 특정 유저 메시지 지점으로 새 세션 분기
 - 모델 전환 + **thinking level 전환**
 - **커스텀 모델 관리**: 설정 메뉴에서 `~/.pi/agent/models.json`의 커스텀 프로바이더/모델 추가·수정 (Ollama, LM Studio, vLLM, 프록시 등)

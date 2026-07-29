@@ -32,11 +32,12 @@ export function useInvalidateSessions() {
   return () => qc.invalidateQueries({ queryKey: SESSIONS_QUERY_KEY });
 }
 
-export function useForkPoints(enabled = true) {
+export function useForkPoints(sessionId: string | null, enabled = true) {
   return useQuery({
-    queryKey: ["fork-points"],
-    queryFn: () => fetchJson<UIForkPoint[]>("/api/fork-points"),
-    enabled,
+    queryKey: ["fork-points", sessionId],
+    queryFn: () =>
+      fetchJson<UIForkPoint[]>(`/api/fork-points?session=${encodeURIComponent(sessionId ?? "")}`),
+    enabled: enabled && !!sessionId,
     staleTime: 0,
   });
 }

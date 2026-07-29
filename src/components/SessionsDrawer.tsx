@@ -1,4 +1,5 @@
 import { Dialog } from "@base-ui-components/react/dialog";
+import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import type { UISessionInfo } from "../../shared/protocol";
 import { useInvalidateSessions, useSessions } from "../lib/api";
@@ -119,6 +120,7 @@ function SessionsPanel({
   onDock?: () => void;
 }) {
   const t = useT();
+  const navigate = useNavigate();
   const sidebarPinned = useSidebarPinned();
   const { data: sessions, refetch } = useSessions(active);
   useSessionListSync(active);
@@ -139,9 +141,8 @@ function SessionsPanel({
   };
 
   const startNewSession = () => {
-    chatClient.send({ type: "new_session" });
-    // sessionFile 변경 이벤트로 invalidate 되지만, 빈 세션이
-    // 목록에 바로 안 잡힐 수 있어 한 번 더 갱신
+    // "/" 로 가면 서버가 새 세션을 만들고 /s/:id 로 교체된다
+    void navigate({ to: "/" });
     window.setTimeout(() => void refetch(), 150);
     onClose?.();
     chatClient.requestComposerFocus();
@@ -197,7 +198,7 @@ function SessionsPanel({
             session={s}
             active={s.path === currentSessionFile}
             onSelect={() => {
-              chatClient.send({ type: "switch_session", path: s.path });
+              void navigate({ to: "/s/$sessionId", params: { sessionId: s.id } });
               onSelectSession?.();
             }}
           />

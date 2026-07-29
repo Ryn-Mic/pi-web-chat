@@ -36,9 +36,13 @@ export interface UISnapshot {
   /** 현재 모델이 지원하는 thinking level 목록 */
   thinkingLevels: UIThinkingLevel[];
   sessionFile?: string;
+  /** URL(/s/:id)에 쓰는 세션 식별자 */
+  sessionId?: string;
 }
 
 export interface UISessionInfo {
+  /** URL(/s/:id)에 쓰는 세션 식별자 */
+  id: string;
   path: string;
   name?: string;
   firstMessage: string;
@@ -120,6 +124,8 @@ export interface UIImageAttachment {
 
 export type ServerEvent =
   | { type: "snapshot"; snapshot: UISnapshot }
+  /** 이 연결이 바인딩된 세션 (포크 등으로 바뀌면 다시 전송) → 클라이언트는 URL 갱신 */
+  | { type: "session_bound"; sessionId: string }
   | { type: "delta"; kind: "text" | "thinking"; delta: string }
   | { type: "tool_start"; toolCallId: string; toolName: string }
   | { type: "tool_end"; toolCallId: string; toolName: string; isError: boolean }
@@ -131,8 +137,6 @@ export type ServerEvent =
 export type ClientCommand =
   | { type: "prompt"; text: string; images?: UIImageAttachment[] }
   | { type: "abort" }
-  | { type: "new_session" }
-  | { type: "switch_session"; path: string }
   | { type: "set_model"; provider: string; id: string }
   | { type: "set_thinking_level"; level: UIThinkingLevel }
   | { type: "fork"; entryId: string };

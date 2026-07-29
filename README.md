@@ -143,6 +143,7 @@ dist/public/              built frontend (published)
 - **Markdown rendering** (react-markdown + GFM + highlight.js)
 - Tool-call display (bash, edit, read, …) with expandable results
 - Session list / switch / new session (can share pi CLI sessions)
+- **Per-session URLs** (`/s/:sessionId`): each browser tab/device drives its own session; opening the same URL syncs live. `/` starts a fresh session
 - **Session fork** from a user message via the settings menu
 - Model switching + **thinking level**
 - **Custom model management**: add/edit custom providers and models in `~/.pi/agent/models.json` from the settings menu (Ollama, LM Studio, vLLM, proxies)

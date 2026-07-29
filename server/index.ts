@@ -82,24 +82,97 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionMan
   };
 };
 
-const runtime = await createAgentSessionRuntime(createRuntime, {
-  cwd: AGENT_CWD,
-  agentDir: getAgentDir(),
-  sessionManager: SessionManager.create(AGENT_CWD),
-});
-
 // ---------------------------------------------------------------------------
-// WebSocket 브로드캐스트
+// 세션 허브: 세션별로 독립된 런타임을 들고, 같은 세션을 보는 클라이언트끼리만
+// 브로드캐스트한다. URL /s/:sessionId 와 1:1 대응.
 // ---------------------------------------------------------------------------
 
-const clients = new Set<WebSocket>();
+interface SessionEntry {
+  id: string;
+  runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>>;
+  clients: Set<WebSocket>;
+  unsubscribe?: () => void;
+  lastActive: number;
+}
 
-function broadcast(event: ServerEvent) {
+const entries = new Map<string, SessionEntry>();
+const pending = new Map<string, Promise<SessionEntry>>();
+const wsEntry = new Map<WebSocket, SessionEntry>();
+/** 비어 있는 세션 런타임을 정리하기 전 유예 시간 */
+const IDLE_TTL_MS = 15 * 60_000;
+
+/** 세션 파일명(<timestamp>_<uuid>.jsonl) → URL 식별자 */
+function sessionIdOf(file?: string): string {
+  if (!file) return "";
+  const base = basename(file).replace(/\.jsonl$/, "");
+  const i = base.lastIndexOf("_");
+  return i >= 0 ? base.slice(i + 1) : base;
+}
+
+async function resolveSessionPath(id: string): Promise<string | undefined> {
+  const sessions = await SessionManager.list(AGENT_CWD);
+  return sessions.find((s) => sessionIdOf(s.path) === id)?.path;
+}
+
+function broadcastTo(entry: SessionEntry, event: ServerEvent) {
   const data = JSON.stringify(event);
-  for (const ws of clients) {
+  for (const ws of entry.clients) {
     if (ws.readyState === ws.OPEN) ws.send(data);
   }
 }
+
+/** 세션이 교체되면(포크 등) 키를 다시 맞추고 클라이언트에 알린다 */
+function rekeyEntry(entry: SessionEntry) {
+  const next = sessionIdOf(entry.runtime.session.sessionFile);
+  if (!next || next === entry.id) return;
+  entries.delete(entry.id);
+  entry.id = next;
+  entries.set(next, entry);
+  broadcastTo(entry, { type: "session_bound", sessionId: next });
+}
+
+async function createEntry(id: string | null): Promise<SessionEntry> {
+  const path = id ? await resolveSessionPath(id) : undefined;
+  const runtime = await createAgentSessionRuntime(createRuntime, {
+    cwd: AGENT_CWD,
+    agentDir: getAgentDir(),
+    sessionManager: SessionManager.create(AGENT_CWD),
+  });
+  if (path) await runtime.switchSession(path);
+  const entry: SessionEntry = {
+    id: sessionIdOf(runtime.session.sessionFile),
+    runtime,
+    clients: new Set(),
+    lastActive: Date.now(),
+  };
+  entries.set(entry.id, entry);
+  bindSession(entry);
+  return entry;
+}
+
+/** id가 없으면 새 세션, 있으면 기존 런타임 재사용 (동시 접속 경합 방지) */
+async function acquireEntry(id: string | null): Promise<SessionEntry> {
+  if (!id) return createEntry(null);
+  const hit = entries.get(id);
+  if (hit) return hit;
+  const inflight = pending.get(id);
+  if (inflight) return inflight;
+  const p = createEntry(id).finally(() => pending.delete(id));
+  pending.set(id, p);
+  return p;
+}
+
+/** 비어 있고 오래된 런타임 정리 */
+setInterval(() => {
+  const now = Date.now();
+  for (const entry of [...entries.values()]) {
+    if (entry.clients.size > 0 || entry.runtime.session.isStreaming) continue;
+    if (now - entry.lastActive < IDLE_TTL_MS) continue;
+    entries.delete(entry.id);
+    entry.unsubscribe?.();
+    void entry.runtime.dispose().catch(() => {});
+  }
+}, 60_000).unref();
 
 const ALL_THINKING_LEVELS: UIThinkingLevel[] = [
   "off",
@@ -126,8 +199,8 @@ function supportedThinkingLevels(model: unknown): UIThinkingLevel[] {
   });
 }
 
-function buildSnapshot(): UISnapshot {
-  const session = runtime.session;
+function buildSnapshot(entry: SessionEntry): UISnapshot {
+  const session = entry.runtime.session;
   const model = session.model;
   return {
     messages: serializeMessages(session.messages),
@@ -143,19 +216,20 @@ function buildSnapshot(): UISnapshot {
     thinkingLevel: session.thinkingLevel as UIThinkingLevel,
     thinkingLevels: supportedThinkingLevels(model),
     sessionFile: session.sessionFile,
+    sessionId: entry.id,
   };
 }
 
-function broadcastSnapshot() {
-  broadcast({ type: "snapshot", snapshot: buildSnapshot() });
+function broadcastSnapshot(entry: SessionEntry) {
+  broadcastTo(entry, { type: "snapshot", snapshot: buildSnapshot(entry) });
 }
 
-// 세션 이벤트 구독 (세션 교체 시 재구독 필요)
-let unsubscribe: (() => void) | undefined;
-
-function bindSession() {
-  unsubscribe?.();
-  unsubscribe = runtime.session.subscribe((event) => {
+/** 세션 이벤트 구독 (세션 교체 시 재구독 필요) */
+function bindSession(entry: SessionEntry) {
+  entry.unsubscribe?.();
+  entry.unsubscribe = entry.runtime.session.subscribe((event) => {
+    entry.lastActive = Date.now();
+    const broadcast = (e: ServerEvent) => broadcastTo(entry, e);
     switch (event.type) {
       case "message_update": {
         const e = event.assistantMessageEvent;
@@ -167,7 +241,7 @@ function bindSession() {
         break;
       }
       case "message_end":
-        broadcastSnapshot();
+        broadcastSnapshot(entry);
         break;
       case "tool_execution_start":
         broadcast({ type: "tool_start", toolCallId: event.toolCallId, toolName: event.toolName });
@@ -179,7 +253,7 @@ function bindSession() {
           toolName: event.toolName,
           isError: event.isError,
         });
-        broadcastSnapshot();
+        broadcastSnapshot(entry);
         break;
       case "agent_start":
         broadcast({ type: "agent_start" });
@@ -187,7 +261,7 @@ function bindSession() {
       case "agent_end": {
         broadcast({ type: "agent_end" });
         // agent_end 직후 session.isStreaming 이 아직 true일 수 있어 명시적으로 false
-        const snap = buildSnapshot();
+        const snap = buildSnapshot(entry);
         snap.isStreaming = false;
         broadcast({ type: "snapshot", snapshot: snap });
         break;
@@ -196,13 +270,15 @@ function bindSession() {
   });
 }
 
-bindSession();
-
 // ---------------------------------------------------------------------------
 // 클라이언트 커맨드 처리
 // ---------------------------------------------------------------------------
 
 async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
+  const entry = wsEntry.get(ws);
+  if (!entry) return;
+  entry.lastActive = Date.now();
+  const runtime = entry.runtime;
   const session = runtime.session;
   switch (cmd.type) {
     case "prompt": {
@@ -226,17 +302,7 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
     }
     case "abort":
       await session.abort();
-      broadcastSnapshot();
-      break;
-    case "new_session":
-      await runtime.newSession();
-      bindSession();
-      broadcastSnapshot();
-      break;
-    case "switch_session":
-      await runtime.switchSession(cmd.path);
-      bindSession();
-      broadcastSnapshot();
+      broadcastSnapshot(entry);
       break;
     case "set_model": {
       const model = modelRuntime.getModel(cmd.provider, cmd.id);
@@ -245,18 +311,19 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
         return;
       }
       await runtime.session.setModel(model);
-      broadcastSnapshot();
+      broadcastSnapshot(entry);
       break;
     }
     case "set_thinking_level":
       session.setThinkingLevel(cmd.level);
-      broadcastSnapshot();
+      broadcastSnapshot(entry);
       break;
     case "fork": {
       const result = await runtime.fork(cmd.entryId);
       if (result.cancelled) return;
-      bindSession();
-      broadcastSnapshot();
+      bindSession(entry);
+      rekeyEntry(entry);
+      broadcastSnapshot(entry);
       sendTo(ws, { type: "forked", selectedText: result.selectedText });
       break;
     }
@@ -305,26 +372,28 @@ async function reloadModelProviders(providers: UICustomProvider[]): Promise<stri
     return `models.json saved, but reloading failed: ${String(err)}`;
   }
 
-  const sessionModels = runtime.services.modelRuntime;
   try {
-    for (const key of previousKeys) {
-      if (!knownCustomProviderKeys.has(key)) sessionModels.unregisterProvider(key);
-    }
-    for (const p of providers) {
-      sessionModels.registerProvider(p.key, {
-        baseUrl: p.baseUrl,
-        apiKey: p.apiKey,
-        api: p.api,
-        models: p.models.map((m) => ({
-          id: m.id,
-          name: m.name ?? m.id,
-          reasoning: m.reasoning ?? false,
-          input: m.input && m.input.length > 0 ? m.input : ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: m.contextWindow ?? 128_000,
-          maxTokens: m.maxTokens ?? 8_192,
-        })),
-      });
+    for (const entry of entries.values()) {
+      const sessionModels = entry.runtime.services.modelRuntime;
+      for (const key of previousKeys) {
+        if (!knownCustomProviderKeys.has(key)) sessionModels.unregisterProvider(key);
+      }
+      for (const p of providers) {
+        sessionModels.registerProvider(p.key, {
+          baseUrl: p.baseUrl,
+          apiKey: p.apiKey,
+          api: p.api,
+          models: p.models.map((m) => ({
+            id: m.id,
+            name: m.name ?? m.id,
+            reasoning: m.reasoning ?? false,
+            input: m.input && m.input.length > 0 ? m.input : ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: m.contextWindow ?? 128_000,
+            maxTokens: m.maxTokens ?? 8_192,
+          })),
+        });
+      }
     }
   } catch (err) {
     return `models.json saved, but live reload failed (restart pi --web to apply): ${
@@ -371,6 +440,7 @@ const httpServer = createServer(async (req, res) => {
         .sort((a, b) => b.modified.getTime() - a.modified.getTime())
         .slice(0, 100)
         .map((s) => ({
+          id: sessionIdOf(s.path),
           path: s.path,
           name: s.name,
           firstMessage: s.firstMessage.slice(0, 200),
@@ -434,7 +504,13 @@ const httpServer = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/fork-points") {
-      const points = runtime.session.getUserMessagesForForking();
+      const entry = entries.get(url.searchParams.get("session") ?? "");
+      if (!entry) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end("[]");
+        return;
+      }
+      const points = entry.runtime.session.getUserMessagesForForking();
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
         JSON.stringify(points.map((p) => ({ entryId: p.entryId, text: p.text.slice(0, 200) }))),
@@ -443,7 +519,13 @@ const httpServer = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/extensions") {
-      const { extensions, errors } = runtime.session.resourceLoader.getExtensions();
+      const anyEntry = entries.values().next().value as SessionEntry | undefined;
+      if (!anyEntry) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ extensions: [], errors: [] }));
+        return;
+      }
+      const { extensions, errors } = anyEntry.runtime.session.resourceLoader.getExtensions();
       const shorten = (p: string) => (p.startsWith(HOME) ? `~${p.slice(HOME.length)}` : p);
       const list: UIExtensionInfo[] = extensions.map((ext) => {
         const { sourceInfo } = ext;
@@ -483,8 +565,22 @@ const httpServer = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/state") {
+      const requested = url.searchParams.get("session");
+      const entry = requested ? entries.get(requested) : undefined;
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(buildSnapshot()));
+      res.end(
+        JSON.stringify(
+          entry
+            ? buildSnapshot(entry)
+            : {
+                activeSessions: [...entries.values()].map((e) => ({
+                  id: e.id,
+                  clients: e.clients.size,
+                  isStreaming: e.runtime.session.isStreaming,
+                })),
+              },
+        ),
+      );
       return;
     }
 
@@ -510,9 +606,10 @@ const httpServer = createServer(async (req, res) => {
 
 const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
 
-wss.on("connection", (ws) => {
-  clients.add(ws);
-  sendTo(ws, { type: "snapshot", snapshot: buildSnapshot() });
+wss.on("connection", (ws, req) => {
+  const requested = new URL(req.url ?? "/ws", "http://localhost").searchParams.get("session");
+  const queue: ClientCommand[] = [];
+  let ready = false;
 
   ws.on("message", (raw) => {
     let cmd: ClientCommand;
@@ -521,12 +618,44 @@ wss.on("connection", (ws) => {
     } catch {
       return;
     }
+    // 세션 바인딩 완료 전에 도착한 커맨드는 잠시 보관
+    if (!ready) {
+      queue.push(cmd);
+      return;
+    }
     handleCommand(cmd, ws).catch((err) => {
       sendTo(ws, { type: "error", message: String(err instanceof Error ? err.message : err) });
     });
   });
 
-  ws.on("close", () => clients.delete(ws));
+  acquireEntry(requested)
+    .then((entry) => {
+      if (ws.readyState !== ws.OPEN) return;
+      entry.clients.add(ws);
+      entry.lastActive = Date.now();
+      wsEntry.set(ws, entry);
+      sendTo(ws, { type: "session_bound", sessionId: entry.id });
+      sendTo(ws, { type: "snapshot", snapshot: buildSnapshot(entry) });
+      ready = true;
+      for (const cmd of queue.splice(0)) {
+        handleCommand(cmd, ws).catch((err) => {
+          sendTo(ws, { type: "error", message: String(err instanceof Error ? err.message : err) });
+        });
+      }
+    })
+    .catch((err) => {
+      sendTo(ws, { type: "error", message: String(err instanceof Error ? err.message : err) });
+      ws.close();
+    });
+
+  ws.on("close", () => {
+    const entry = wsEntry.get(ws);
+    if (entry) {
+      entry.clients.delete(ws);
+      entry.lastActive = Date.now();
+      wsEntry.delete(ws);
+    }
+  });
 });
 
 httpServer.listen(PORT, HOST, () => {

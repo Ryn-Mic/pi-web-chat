@@ -1,6 +1,6 @@
 import { Dialog } from "@base-ui-components/react/dialog";
 import { useForkPoints } from "../lib/api";
-import { chatClient } from "../lib/chat";
+import { chatClient, useChat } from "../lib/chat";
 import { useT } from "../lib/i18n";
 
 /** 세션의 특정 유저 메시지 지점에서 새 세션으로 fork */
@@ -12,7 +12,8 @@ export function ForkDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const t = useT();
-  const { data: points, refetch } = useForkPoints(open);
+  const { sessionId } = useChat();
+  const { data: points, refetch } = useForkPoints(sessionId, open);
 
   return (
     <Dialog.Root

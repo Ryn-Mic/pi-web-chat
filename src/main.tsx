@@ -9,7 +9,6 @@ import {
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { ChatPage } from "./components/ChatPage";
-import { chatClient } from "./lib/chat";
 import { initLocale } from "./lib/i18n";
 import { initTheme } from "./lib/theme";
 import { initViewportLock } from "./lib/viewport";
@@ -19,13 +18,23 @@ const rootRoute = createRootRoute({
   component: () => <Outlet />,
 });
 
+/** 새 세션 (서버가 세션을 만들면 /s/$sessionId 로 교체된다) */
 const chatRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: ChatPage,
 });
 
-const router = createRouter({ routeTree: rootRoute.addChildren([chatRoute]) });
+/** 세션별 딥링크 */
+const sessionRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/s/$sessionId",
+  component: ChatPage,
+});
+
+const router = createRouter({
+  routeTree: rootRoute.addChildren([chatRoute, sessionRoute]),
+});
 
 declare module "@tanstack/react-router" {
   interface Register {
@@ -38,7 +47,6 @@ const queryClient = new QueryClient();
 initViewportLock();
 initTheme();
 initLocale();
-chatClient.connect();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
