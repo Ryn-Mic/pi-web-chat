@@ -14,7 +14,7 @@ export const ko: Messages = {
   language: "언어",
 
   sessions: "세션",
-  newSession: "+ 새 세션",
+  newSession: "새 세션",
   emptySession: "(빈 세션)",
   messageCount: "메시지 {count}",
   noSavedSessions: "저장된 세션 없음",

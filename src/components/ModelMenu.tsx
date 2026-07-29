@@ -38,17 +38,17 @@ export function ModelMenu({ current }: { current: UIModel | null }) {
 
   return (
     <Menu.Root open={open} onOpenChange={setOpen}>
-      <Menu.Trigger className="max-w-[40vw] truncate rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-1.5 text-sm text-neutral-700 hover:border-neutral-400 sm:max-w-xs dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:border-neutral-600">
+      <Menu.Trigger className="max-w-[40vw] truncate rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-hover hover:text-ink sm:max-w-xs">
         {current ? (current.name ?? current.id) : t("selectModel")}
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner sideOffset={6} align="end">
-          <Menu.Popup className="flex w-72 flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl outline-none dark:border-neutral-800 dark:bg-neutral-900">
-            <div className="border-b border-neutral-200 p-2 dark:border-neutral-800">
-              <div className="flex items-center gap-2 rounded-lg bg-neutral-100 px-2.5 dark:bg-neutral-800">
+          <Menu.Popup className="flex w-72 flex-col overflow-hidden rounded-xl border border-line bg-card shadow-xl outline-none">
+            <div className="border-b border-line p-2">
+              <div className="flex items-center gap-2 rounded-lg bg-hover px-2.5">
                 <svg
                   viewBox="0 0 24 24"
-                  className="size-4 shrink-0 fill-none stroke-neutral-400 stroke-2"
+                  className="size-4 shrink-0 fill-none stroke-current stroke-2 text-faint"
                   aria-hidden
                 >
                   <circle cx="11" cy="11" r="7" />
@@ -61,7 +61,7 @@ export function ModelMenu({ current }: { current: UIModel | null }) {
                   placeholder={t("searchModels")}
                   aria-label={t("searchModels")}
                   autoFocus
-                  className="w-full bg-transparent py-2 text-sm text-neutral-800 outline-none placeholder:text-neutral-400 dark:text-neutral-100 dark:placeholder:text-neutral-500"
+                  className="w-full bg-transparent py-2 text-sm text-ink outline-none placeholder:text-faint"
                   // 메뉴 typeahead / 화살표 네비와 충돌 방지
                   onKeyDown={(e) => {
                     if (e.key === "Escape") return;
@@ -82,7 +82,7 @@ export function ModelMenu({ current }: { current: UIModel | null }) {
                       setQuery("");
                       inputRef.current?.focus();
                     }}
-                    className="shrink-0 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200"
+                    className="shrink-0 text-faint hover:text-ink"
                     aria-label={t("clearSearch")}
                   >
                     <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2">
@@ -102,19 +102,17 @@ export function ModelMenu({ current }: { current: UIModel | null }) {
                     onClick={() =>
                       chatClient.send({ type: "set_model", provider: m.provider, id: m.id })
                     }
-                    className={`flex cursor-pointer flex-col px-3 py-2 text-sm outline-none data-[highlighted]:bg-neutral-100 dark:data-[highlighted]:bg-neutral-800 ${
-                      active
-                        ? "text-indigo-600 dark:text-indigo-400"
-                        : "text-neutral-700 dark:text-neutral-200"
+                    className={`flex cursor-pointer flex-col px-3 py-2 text-sm outline-none data-[highlighted]:bg-hover ${
+                      active ? "text-accent" : "text-ink"
                     }`}
                   >
                     <span className="truncate">{m.name ?? m.id}</span>
-                    <span className="text-xs text-neutral-500">{m.provider}</span>
+                    <span className="text-xs text-faint">{m.provider}</span>
                   </Menu.Item>
                 );
               })}
               {filtered.length === 0 && (
-                <div className="px-3 py-6 text-center text-sm text-neutral-500">
+                <div className="px-3 py-6 text-center text-sm text-faint">
                   {models && models.length === 0 ? t("noModelsAvailable") : t("noSearchResults")}
                 </div>
               )}

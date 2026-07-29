@@ -13,7 +13,7 @@ import { ThinkingMenu } from "./ThinkingMenu";
 function connectionDotClass(connection: "connecting" | "connected" | "disconnected"): string {
   switch (connection) {
     case "connected":
-      return "bg-emerald-500";
+      return "bg-emerald-500/80";
     case "connecting":
       return "bg-amber-400 animate-pulse";
     case "disconnected":
@@ -50,16 +50,16 @@ export function ChatPage() {
 
   // #root is the flex/dvh shell; fill it (no position:fixed — iOS 26 safe).
   return (
-    <div className="flex h-full min-h-0 w-full flex-1">
+    <div className="flex h-full min-h-0 w-full flex-1 bg-sidebar">
       {sidebarPinned && <SessionsSidebar currentSessionFile={snapshot?.sessionFile} />}
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex shrink-0 items-center gap-1.5 border-b border-neutral-200 px-3 py-2 pt-[max(0.5rem,var(--safe-top))] dark:border-neutral-800">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas md:my-2 md:mr-2 md:rounded-2xl md:border md:border-line md:shadow-sm">
+        <header className="flex shrink-0 items-center gap-1 px-2.5 py-2 pt-[max(0.5rem,var(--safe-top))]">
           <SessionsDrawer currentSessionFile={snapshot?.sessionFile} />
-          <div className="flex items-center gap-2">
-            <span className="text-lg font-semibold">π</span>
+          <div className="flex min-w-0 items-center gap-2 px-1">
+            {!sidebarPinned && <span className="truncate text-sm font-medium text-ink">pi</span>}
             <span
-              className={`size-2 rounded-full ${connectionDotClass(connection)}`}
+              className={`size-1.5 shrink-0 rounded-full ${connectionDotClass(connection)}`}
               title={connectionLabel(connection, t)}
               aria-label={connectionLabel(connection, t)}
             />
@@ -79,7 +79,7 @@ export function ChatPage() {
               className={`size-2.5 rounded-full ${connectionDotClass(connection)}`}
               aria-hidden
             />
-            <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            <p className="text-sm text-muted">
               {connection === "disconnected" ? t("connectionLost") : t("connectingHint")}
             </p>
           </div>

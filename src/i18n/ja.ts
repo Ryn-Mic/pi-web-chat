@@ -14,7 +14,7 @@ export const ja: Messages = {
   language: "言語",
 
   sessions: "セッション",
-  newSession: "+ 新しいセッション",
+  newSession: "新しいセッション",
   emptySession: "(空のセッション)",
   messageCount: "メッセージ {count}",
   noSavedSessions: "保存されたセッションはありません",

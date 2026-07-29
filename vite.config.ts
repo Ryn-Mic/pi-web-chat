@@ -26,8 +26,8 @@ export default defineConfig({
         name: "pi web chat",
         short_name: "pi chat",
         description: "pi coding agent web client",
-        theme_color: "#0a0a0a",
-        background_color: "#0a0a0a",
+        theme_color: "#faf9f5",
+        background_color: "#faf9f5",
         display: "standalone",
         start_url: "/",
         icons: [

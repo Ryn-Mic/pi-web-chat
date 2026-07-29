@@ -15,7 +15,7 @@ export const zh: Messages = {
   language: "语言",
 
   sessions: "会话",
-  newSession: "+ 新建会话",
+  newSession: "新建会话",
   emptySession: "（空会话）",
   messageCount: "{count} 条消息",
   noSavedSessions: "没有已保存的会话",

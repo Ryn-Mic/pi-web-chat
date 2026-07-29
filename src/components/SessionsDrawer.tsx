@@ -16,32 +16,31 @@ function formatDate(iso: string, locale: string) {
   );
 }
 
-/** 사이드바 패널 고정 아이콘 */
-function SidebarPinIcon({ filled }: { filled: boolean }) {
+/** 사이드바 토글 아이콘 (Claude/ChatGPT desktop 스타일 패널 아이콘) */
+function SidebarPanelIcon() {
   return (
-    <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2">
-      {filled ? (
-        <path
-          d="M16 3H8v2l1.5 1.5L8 12h3v7l1 2 1-2v-7h3l-1.5-5.5L16 5V3z"
-          className="fill-current"
-          strokeLinejoin="round"
-          strokeLinecap="round"
-        />
-      ) : (
-        <path
-          d="M16 3H8v2l1.5 1.5L8 12h3v7l1 2 1-2v-7h3l-1.5-5.5L16 5V3z"
-          strokeLinejoin="round"
-          strokeLinecap="round"
-        />
-      )}
+    <svg viewBox="0 0 24 24" className="size-[18px] fill-none stroke-current stroke-[1.8]">
+      <rect x="3" y="4" width="18" height="16" rx="3" />
+      <path d="M9.5 4v16" />
     </svg>
   );
 }
 
-function MenuIcon() {
+function PlusIcon() {
   return (
-    <svg viewBox="0 0 24 24" className="size-5 fill-none stroke-current stroke-2">
-      <path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round" />
+    <svg viewBox="0 0 24 24" className="size-[18px] fill-none stroke-current stroke-[1.8]">
+      <path d="M12 5v14M5 12h14" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ChatIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className="size-4 shrink-0 fill-none stroke-current stroke-[1.6] opacity-70"
+    >
+      <path d="M21 12a8 8 0 0 1-8 8H7l-4 3 1-5.2A8 8 0 1 1 21 12Z" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -57,20 +56,20 @@ function SessionRow({
 }) {
   const t = useT();
   const locale = useLocale();
+  const title = session.name ?? session.firstMessage ?? t("emptySession");
+  const meta = `${formatDate(session.modified, localeTag(locale))} · ${t("messageCount", {
+    count: session.messageCount,
+  })}`;
   return (
     <button
       onClick={onSelect}
-      className={`w-full border-b border-neutral-200/60 px-4 py-3 text-left hover:bg-neutral-100 dark:border-neutral-800/60 dark:hover:bg-neutral-800/50 ${
-        active ? "bg-neutral-100 dark:bg-neutral-800/70" : ""
+      title={`${title}\n${meta}`}
+      className={`group flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${
+        active ? "bg-selected text-ink" : "text-muted hover:bg-hover hover:text-ink"
       }`}
     >
-      <div className="truncate text-sm text-neutral-800 dark:text-neutral-200">
-        {session.name ?? session.firstMessage ?? t("emptySession")}
-      </div>
-      <div className="mt-0.5 text-xs text-neutral-500">
-        {formatDate(session.modified, localeTag(locale))} ·{" "}
-        {t("messageCount", { count: session.messageCount })}
-      </div>
+      <ChatIcon />
+      <span className="truncate text-[13.5px]">{title}</span>
     </button>
   );
 }
@@ -139,65 +138,59 @@ function SessionsPanel({
     else setSidebarPinned(true);
   };
 
+  const startNewSession = () => {
+    chatClient.send({ type: "new_session" });
+    // sessionFile 변경 이벤트로 invalidate 되지만, 빈 세션이
+    // 목록에 바로 안 잡힐 수 있어 한 번 더 갱신
+    window.setTimeout(() => void refetch(), 150);
+    onClose?.();
+    chatClient.requestComposerFocus();
+  };
+
   return (
     <>
       <div
-        className={`flex items-center justify-between border-b border-neutral-200 px-4 py-3 dark:border-neutral-800 ${
-          docked ? "pt-3" : "pt-[calc(0.75rem+env(safe-area-inset-top))]"
+        className={`flex items-center justify-between gap-1 px-3 py-2.5 ${
+          docked ? "pt-2.5" : "pt-[calc(0.75rem+env(safe-area-inset-top))]"
         }`}
       >
-        <div className="flex items-center gap-2">
-          {docked ? (
-            <h2 className="text-sm font-semibold">{t("sessions")}</h2>
-          ) : (
-            <Dialog.Title className="text-sm font-semibold">{t("sessions")}</Dialog.Title>
-          )}
+        {docked ? (
+          <h2 className="px-1 text-[15px] font-semibold tracking-tight text-ink">pi</h2>
+        ) : (
+          <Dialog.Title className="px-1 text-[15px] font-semibold tracking-tight text-ink">
+            {t("sessions")}
+          </Dialog.Title>
+        )}
+        <div className="flex items-center gap-1">
           {/* 데스크톱에서만 사이드바 고정 토글 */}
           <button
             type="button"
             onClick={toggleDock}
-            title={sidebarPinned ? t("unpinSidebar") : t("pinSidebar")}
-            aria-label={sidebarPinned ? t("unpinSidebar") : t("pinSidebar")}
+            title={sidebarPinned ? t("closeSidebar") : t("pinSidebar")}
+            aria-label={sidebarPinned ? t("closeSidebar") : t("pinSidebar")}
             aria-pressed={sidebarPinned}
-            className={`hidden size-8 items-center justify-center rounded-lg transition-colors md:flex ${
-              sidebarPinned
-                ? "bg-indigo-50 text-indigo-600 dark:bg-indigo-950/50 dark:text-indigo-400"
-                : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-            }`}
+            className="hidden size-8 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink md:flex"
           >
-            <SidebarPinIcon filled={sidebarPinned} />
+            <SidebarPanelIcon />
           </button>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => {
-              chatClient.send({ type: "new_session" });
-              // sessionFile 변경 이벤트로 invalidate 되지만, 빈 세션이
-              // 목록에 바로 안 잡힐 수 있어 한 번 더 갱신
-              window.setTimeout(() => void refetch(), 150);
-              onClose?.();
-              chatClient.requestComposerFocus();
-            }}
-            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white active:bg-indigo-500"
-          >
-            {t("newSession")}
-          </button>
-          {docked && (
-            <button
-              type="button"
-              onClick={() => setSidebarPinned(false)}
-              className="flex size-8 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-              aria-label={t("closeSidebar")}
-              title={t("closeSidebar")}
-            >
-              <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2">
-                <path d="M18 6 6 18M6 6l12 12" strokeLinecap="round" />
-              </svg>
-            </button>
-          )}
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+
+      <div className="px-2 pb-1">
+        <button
+          onClick={startNewSession}
+          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13.5px] font-medium text-accent transition-colors hover:bg-hover"
+        >
+          <PlusIcon />
+          {t("newSession")}
+        </button>
+      </div>
+
+      <div className="px-4 pt-3 pb-1 text-[11px] font-medium tracking-wide text-faint uppercase">
+        {t("sessions")}
+      </div>
+
+      <div className="thin-scroll flex-1 overflow-y-auto px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
         {(sessions ?? []).map((s) => (
           <SessionRow
             key={s.path}
@@ -210,7 +203,7 @@ function SessionsPanel({
           />
         ))}
         {sessions && sessions.length === 0 && (
-          <div className="px-4 py-8 text-center text-sm text-neutral-500">{t("noSavedSessions")}</div>
+          <div className="px-4 py-8 text-center text-sm text-faint">{t("noSavedSessions")}</div>
         )}
       </div>
     </>
@@ -220,7 +213,7 @@ function SessionsPanel({
 /** 데스크톱 고정 사이드바 */
 export function SessionsSidebar({ currentSessionFile }: { currentSessionFile?: string }) {
   return (
-    <aside className="hidden h-full min-h-0 w-72 shrink-0 flex-col border-r border-neutral-200 bg-white md:flex dark:border-neutral-800 dark:bg-neutral-900 overflow-hidden">
+    <aside className="hidden h-full min-h-0 w-64 shrink-0 flex-col overflow-hidden bg-sidebar md:flex">
       <SessionsPanel currentSessionFile={currentSessionFile} docked active />
     </aside>
   );
@@ -258,17 +251,17 @@ export function SessionsDrawer({ currentSessionFile }: { currentSessionFile?: st
       }}
     >
       <Dialog.Trigger
-        className={`flex size-9 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 dark:hover:bg-neutral-900 dark:hover:text-neutral-200 ${
+        className={`flex size-9 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink ${
           sidebarPinned ? "md:hidden" : ""
         }`}
         aria-label={t("sessionList")}
       >
-        <MenuIcon />
+        <SidebarPanelIcon />
       </Dialog.Trigger>
       {!instantHide && (
         <Dialog.Portal>
-          <Dialog.Backdrop className="fixed inset-0 bg-black/60 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
-          <Dialog.Popup className="fixed inset-y-0 left-0 flex w-[85vw] max-w-sm flex-col bg-white shadow-2xl outline-none transition-transform data-[starting-style]:-translate-x-full data-[ending-style]:-translate-x-full dark:bg-neutral-900">
+          <Dialog.Backdrop className="fixed inset-0 bg-black/40 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
+          <Dialog.Popup className="fixed inset-y-0 left-0 flex w-[82vw] max-w-xs flex-col bg-sidebar shadow-2xl outline-none transition-transform data-[starting-style]:-translate-x-full data-[ending-style]:-translate-x-full">
             <SessionsPanel
               currentSessionFile={currentSessionFile}
               active={open}

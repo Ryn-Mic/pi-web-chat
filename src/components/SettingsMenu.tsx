@@ -10,7 +10,7 @@ import { ExtensionsDialog } from "./ExtensionsDialog";
 import { ForkDialog } from "./ForkDialog";
 
 const itemClass =
-  "flex cursor-pointer items-center gap-2 px-3 py-2 text-sm text-neutral-700 outline-none data-[highlighted]:bg-neutral-100 dark:text-neutral-200 dark:data-[highlighted]:bg-neutral-800";
+  "flex cursor-pointer items-center gap-2 px-3 py-2 text-sm text-ink outline-none data-[highlighted]:bg-hover";
 
 export function SettingsMenu() {
   const t = useT();
@@ -29,7 +29,7 @@ export function SettingsMenu() {
     <>
       <Menu.Root>
         <Menu.Trigger
-          className="flex size-9 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 dark:hover:bg-neutral-900 dark:hover:text-neutral-200"
+          className="flex size-9 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink"
           aria-label={t("settings")}
           title={t("settings")}
         >
@@ -44,9 +44,9 @@ export function SettingsMenu() {
         </Menu.Trigger>
         <Menu.Portal>
           <Menu.Positioner sideOffset={6} align="end">
-            <Menu.Popup className="w-52 rounded-xl border border-neutral-200 bg-white py-1 shadow-2xl outline-none dark:border-neutral-800 dark:bg-neutral-900">
+            <Menu.Popup className="w-52 rounded-xl border border-line bg-card py-1 shadow-xl outline-none">
               <Menu.Group>
-                <Menu.GroupLabel className="px-3 pt-2 pb-1 text-[11px] font-medium tracking-wide text-neutral-400 uppercase">
+                <Menu.GroupLabel className="px-3 pt-2 pb-1 text-[11px] font-medium tracking-wide text-faint uppercase">
                   {t("theme")}
                 </Menu.GroupLabel>
                 <Menu.RadioGroup
@@ -64,16 +64,10 @@ export function SettingsMenu() {
                       closeOnClick
                       className={itemClass}
                     >
-                      <span className="flex size-3.5 items-center justify-center rounded-full border border-neutral-400 dark:border-neutral-500">
-                        <Menu.RadioItemIndicator className="size-1.5 rounded-full bg-indigo-500" />
+                      <span className="flex size-3.5 items-center justify-center rounded-full border border-faint">
+                        <Menu.RadioItemIndicator className="size-1.5 rounded-full bg-accent" />
                       </span>
-                      <span
-                        className={
-                          preference === opt.value
-                            ? "font-medium text-indigo-600 dark:text-indigo-400"
-                            : undefined
-                        }
-                      >
+                      <span className={preference === opt.value ? "font-medium text-accent" : undefined}>
                         {opt.label}
                       </span>
                     </Menu.RadioItem>
@@ -81,10 +75,10 @@ export function SettingsMenu() {
                 </Menu.RadioGroup>
               </Menu.Group>
 
-              <div className="my-1 border-t border-neutral-200 dark:border-neutral-800" />
+              <div className="my-1 border-t border-line" />
 
               <Menu.Group>
-                <Menu.GroupLabel className="px-3 pt-2 pb-1 text-[11px] font-medium tracking-wide text-neutral-400 uppercase">
+                <Menu.GroupLabel className="px-3 pt-2 pb-1 text-[11px] font-medium tracking-wide text-faint uppercase">
                   {t("language")}
                 </Menu.GroupLabel>
                 <Menu.RadioGroup
@@ -100,16 +94,10 @@ export function SettingsMenu() {
                       closeOnClick
                       className={itemClass}
                     >
-                      <span className="flex size-3.5 items-center justify-center rounded-full border border-neutral-400 dark:border-neutral-500">
-                        <Menu.RadioItemIndicator className="size-1.5 rounded-full bg-indigo-500" />
+                      <span className="flex size-3.5 items-center justify-center rounded-full border border-faint">
+                        <Menu.RadioItemIndicator className="size-1.5 rounded-full bg-accent" />
                       </span>
-                      <span
-                        className={
-                          locale === opt.value
-                            ? "font-medium text-indigo-600 dark:text-indigo-400"
-                            : undefined
-                        }
-                      >
+                      <span className={locale === opt.value ? "font-medium text-accent" : undefined}>
                         {opt.nativeLabel}
                       </span>
                     </Menu.RadioItem>
@@ -117,7 +105,7 @@ export function SettingsMenu() {
                 </Menu.RadioGroup>
               </Menu.Group>
 
-              <div className="my-1 border-t border-neutral-200 dark:border-neutral-800" />
+              <div className="my-1 border-t border-line" />
 
               <Menu.Item className={itemClass} onClick={() => setForkOpen(true)}>
                 <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2">
@@ -143,8 +131,8 @@ export function SettingsMenu() {
                 {t("activeExtensionsEllipsis")}
               </Menu.Item>
 
-              <div className="my-1 border-t border-neutral-200 dark:border-neutral-800" />
-              <div className="px-3 pt-1 pb-2 text-[11px] text-neutral-400 dark:text-neutral-600">
+              <div className="my-1 border-t border-line" />
+              <div className="px-3 pt-1 pb-2 text-[11px] text-faint">
                 pi-web-chat v{__APP_VERSION__}
               </div>
             </Menu.Popup>

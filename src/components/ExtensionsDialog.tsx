@@ -7,8 +7,8 @@ function DetailRow({ label, items }: { label: string; items: string[] }) {
   if (items.length === 0) return null;
   return (
     <div className="mt-1 flex items-baseline gap-1.5 text-[11px] leading-relaxed">
-      <span className="shrink-0 text-neutral-400 dark:text-neutral-500">{label}</span>
-      <span className="font-mono break-all text-neutral-500 dark:text-neutral-400">
+      <span className="shrink-0 text-faint">{label}</span>
+      <span className="font-mono break-all text-muted">
         {items.join(", ")}
       </span>
     </div>
@@ -43,11 +43,11 @@ export function ExtensionsDialog({
       }}
     >
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 bg-black/60 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
-        <Dialog.Popup className="fixed top-1/2 left-1/2 flex max-h-[75vh] w-[90vw] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-neutral-200 bg-white shadow-2xl outline-none dark:border-neutral-800 dark:bg-neutral-900">
-          <div className="border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
+        <Dialog.Backdrop className="fixed inset-0 bg-black/40 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
+        <Dialog.Popup className="fixed top-1/2 left-1/2 flex max-h-[75vh] w-[90vw] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-line bg-card shadow-xl outline-none">
+          <div className="border-b border-line px-4 py-3">
             <Dialog.Title className="text-sm font-semibold">{t("activeExtensions")}</Dialog.Title>
-            <Dialog.Description className="mt-0.5 text-xs text-neutral-500">
+            <Dialog.Description className="mt-0.5 text-xs text-faint">
               {data
                 ? t("extensionsLoaded", { count: extensions.length })
                 : t("extensionsLoading")}
@@ -74,14 +74,14 @@ export function ExtensionsDialog({
             {extensions.map((ext) => (
               <div
                 key={ext.path}
-                className="border-b border-neutral-100 px-4 py-3 last:border-0 dark:border-neutral-800/60"
+                className="border-b border-line px-4 py-3 last:border-0"
               >
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-sm font-medium text-neutral-800 dark:text-neutral-100">
+                  <span className="text-sm font-medium text-ink">
                     {ext.name}
                   </span>
                   {ext.packageName && (
-                    <span className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[10px] text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+                    <span className="rounded bg-hover px-1.5 py-0.5 font-mono text-[10px] text-muted">
                       {ext.packageName}
                     </span>
                   )}
@@ -91,13 +91,13 @@ export function ExtensionsDialog({
                         ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400"
                         : ext.scope === "temporary"
                           ? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"
-                          : "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400"
+                          : "bg-accent-soft text-accent"
                     }`}
                   >
                     {scopeLabel[ext.scope]}
                   </span>
                 </div>
-                <div className="mt-0.5 truncate font-mono text-[11px] text-neutral-400 dark:text-neutral-500">
+                <div className="mt-0.5 truncate font-mono text-[11px] text-faint">
                   {ext.path}
                 </div>
                 <DetailRow label={t("tools")} items={ext.tools} />
@@ -108,7 +108,7 @@ export function ExtensionsDialog({
             ))}
 
             {data && extensions.length === 0 && (
-              <div className="px-4 py-8 text-center text-sm text-neutral-500">
+              <div className="px-4 py-8 text-center text-sm text-faint">
                 {t("noExtensionsLoaded")}
               </div>
             )}

@@ -60,20 +60,20 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
   };
 
   return (
-    <div className="composer-bar shrink-0 border-t border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
-      <div className="mx-auto max-w-3xl">
+    <div className="composer-bar shrink-0 bg-canvas md:rounded-b-2xl">
+      <div className="mx-auto max-w-3xl rounded-2xl border border-line bg-card px-2 pt-2 pb-2 shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-colors focus-within:border-faint">
         {images.length > 0 && (
-          <div className="mb-2 flex flex-wrap gap-2">
+          <div className="mb-2 flex flex-wrap gap-2 px-1">
             {images.map((img, i) => (
               <div key={i} className="relative">
                 <img
                   src={img.previewUrl}
                   alt=""
-                  className="size-16 rounded-lg border border-neutral-200 object-cover dark:border-neutral-700"
+                  className="size-16 rounded-lg border border-line object-cover"
                 />
                 <button
                   onClick={() => setImages((prev) => prev.filter((_, j) => j !== i))}
-                  className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-neutral-700 text-xs text-white"
+                  className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-ink text-xs text-canvas"
                   aria-label={t("removeImage")}
                 >
                   ×
@@ -82,7 +82,7 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
             ))}
           </div>
         )}
-        <div className="flex items-end gap-2">
+        <div className="flex flex-col">
           <input
             ref={fileInputRef}
             type="file"
@@ -94,25 +94,12 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
               e.target.value = "";
             }}
           />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="flex size-11 shrink-0 items-center justify-center rounded-xl text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 dark:hover:bg-neutral-900 dark:hover:text-neutral-300"
-            aria-label={t("attachImage")}
-          >
-            <svg viewBox="0 0 24 24" className="size-5 fill-none stroke-current stroke-2">
-              <path
-                d="M21 15V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h9M8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM21 15l-5-5L5 21M19 22v-6M16 19h6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
           <textarea
             ref={textareaRef}
             value={text}
             rows={1}
             placeholder={isStreaming ? t("streamingPlaceholder") : t("sendMessage")}
-            className="composer-textarea max-h-40 flex-1 resize-none rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-[15px] leading-relaxed outline-none placeholder:text-neutral-400 focus:border-neutral-400 dark:border-neutral-800 dark:bg-neutral-900 dark:placeholder:text-neutral-600 dark:focus:border-neutral-600"
+            className="composer-textarea max-h-40 w-full resize-none bg-transparent px-3 pt-2 pb-1 text-[15px] leading-relaxed text-ink outline-none placeholder:text-faint"
             onChange={(e) => {
               setText(e.target.value);
               e.target.style.height = "auto";
@@ -139,28 +126,41 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
               }
             }}
           />
-          {isStreaming ? (
+          {/* 하단 컨트롤 행 (Claude/ChatGPT desktop 레이아웃) */}
+          <div className="mt-1 flex items-center gap-1 px-1">
             <button
-              onClick={() => chatClient.send({ type: "abort" })}
-              className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-neutral-200 text-neutral-700 active:bg-neutral-300 dark:bg-neutral-800 dark:text-neutral-300 dark:active:bg-neutral-700"
-              aria-label={t("abort")}
+              onClick={() => fileInputRef.current?.click()}
+              className="flex size-8 shrink-0 items-center justify-center rounded-full border border-line text-muted transition-colors hover:bg-hover hover:text-ink"
+              aria-label={t("attachImage")}
             >
-              <svg viewBox="0 0 24 24" className="size-4 fill-current">
-                <rect x="6" y="6" width="12" height="12" rx="2" />
+              <svg viewBox="0 0 24 24" className="size-[18px] fill-none stroke-current stroke-[1.8]">
+                <path d="M12 5v14M5 12h14" strokeLinecap="round" />
               </svg>
             </button>
-          ) : (
-            <button
-              onClick={send}
-              disabled={!text.trim() && images.length === 0}
-              className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white transition-opacity disabled:opacity-30 active:bg-indigo-500"
-              aria-label={t("send")}
-            >
-              <svg viewBox="0 0 24 24" className="size-5 fill-none stroke-current stroke-2">
-                <path d="M12 19V5M5 12l7-7 7 7" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-          )}
+            <div className="flex-1" />
+            {isStreaming ? (
+              <button
+                onClick={() => chatClient.send({ type: "abort" })}
+                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink text-canvas transition-opacity hover:opacity-85"
+                aria-label={t("abort")}
+              >
+                <svg viewBox="0 0 24 24" className="size-3 fill-current">
+                  <rect x="6" y="6" width="12" height="12" rx="2" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                onClick={send}
+                disabled={!text.trim() && images.length === 0}
+                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-30"
+                aria-label={t("send")}
+              >
+                <svg viewBox="0 0 24 24" className="size-[18px] fill-none stroke-current stroke-2">
+                  <path d="M12 19V5M5 12l7-7 7 7" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

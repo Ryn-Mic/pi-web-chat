@@ -5,12 +5,67 @@
 /* class 기반 다크모드 (html.dark) */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+ * Claude / ChatGPT desktop 스타일 토큰.
+ * 실제 색은 --c-* 에서 오고, .dark 에서 값만 갈아끼운다.
+ */
+@theme {
+  --color-canvas: var(--c-canvas);
+  --color-sidebar: var(--c-sidebar);
+  --color-card: var(--c-card);
+  --color-line: var(--c-line);
+  --color-ink: var(--c-ink);
+  --color-muted: var(--c-muted);
+  --color-faint: var(--c-faint);
+  --color-accent: var(--c-accent);
+  --color-accent-ink: var(--c-accent-ink);
+  --color-accent-soft: var(--c-accent-soft);
+  --color-bubble: var(--c-bubble);
+  --color-hover: var(--c-hover);
+  --color-selected: var(--c-selected);
+
+  --font-sans:
+    ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", sans-serif;
+}
+
 :root {
   --safe-top: 0px;
   --safe-bottom: 0px;
   --composer-pad-x: 0.75rem;
   --composer-pad-top: 0.5rem;
   --composer-safe-bottom-max: 34px;
+
+  /* light — Claude 특유의 따뜻한 아이보리 */
+  --c-canvas: #faf9f5;
+  --c-sidebar: #f2f0e9;
+  --c-card: #ffffff;
+  --c-line: #e6e3da;
+  --c-ink: #1f1e1d;
+  --c-muted: #6f6d66;
+  --c-faint: #9c9a93;
+  --c-accent: #c96442;
+  --c-accent-ink: #ffffff;
+  --c-accent-soft: #f2e3dc;
+  --c-bubble: #f0eee6;
+  --c-hover: rgba(0, 0, 0, 0.045);
+  --c-selected: rgba(0, 0, 0, 0.075);
+}
+
+.dark {
+  --c-canvas: #262624;
+  --c-sidebar: #1c1c1b;
+  --c-card: #30302e;
+  --c-line: #3c3c39;
+  --c-ink: #f2f0e9;
+  --c-muted: #a3a099;
+  --c-faint: #7d7a73;
+  --c-accent: #d97757;
+  --c-accent-ink: #1f1e1d;
+  --c-accent-soft: #3a2d27;
+  --c-bubble: #373734;
+  --c-hover: rgba(255, 255, 255, 0.06);
+  --c-selected: rgba(255, 255, 255, 0.1);
 }
 
 /*
@@ -32,7 +87,7 @@ body {
 body {
   position: fixed;
   inset: 0;
-  @apply bg-white text-neutral-900 antialiased dark:bg-neutral-950 dark:text-neutral-100;
+  @apply bg-canvas text-ink antialiased;
 }
 
 #root {
@@ -59,6 +114,24 @@ body {
   display: none;
 }
 
+/* 얇은 스크롤바 (데스크톱 앱 느낌) */
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-faint) transparent;
+}
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--c-faint) 55%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 /*
  * Bottom bar: floor padding + capped home-indicator inset. When the keyboard
  * is open there is no home indicator, so drop the safe-area entirely.
@@ -76,10 +149,29 @@ html.ua-keyboard .composer-bar {
   padding-bottom: 0.5rem;
 }
 
+/* 마크다운 본문 색을 토큰에 맞춤 (라이트/다크 자동) */
+.prose {
+  --tw-prose-body: var(--c-ink);
+  --tw-prose-headings: var(--c-ink);
+  --tw-prose-lead: var(--c-muted);
+  --tw-prose-links: var(--c-accent);
+  --tw-prose-bold: var(--c-ink);
+  --tw-prose-counters: var(--c-muted);
+  --tw-prose-bullets: var(--c-faint);
+  --tw-prose-hr: var(--c-line);
+  --tw-prose-quotes: var(--c-muted);
+  --tw-prose-quote-borders: var(--c-line);
+  --tw-prose-captions: var(--c-muted);
+  --tw-prose-code: var(--c-ink);
+  --tw-prose-th-borders: var(--c-line);
+  --tw-prose-td-borders: var(--c-line);
+}
+
 .prose pre {
-  @apply rounded-lg border border-neutral-800 bg-[#0d1117] text-[13px];
+  @apply rounded-xl border border-neutral-800 bg-[#0d1117] text-[13px];
 }
 
 .prose :not(pre) > code {
-  @apply rounded bg-neutral-100 px-1.5 py-0.5 text-[13px] font-normal text-neutral-800 before:content-none after:content-none dark:bg-neutral-800 dark:text-neutral-200;
+  background-color: var(--c-bubble);
+  @apply rounded px-1.5 py-0.5 text-[13px] font-normal before:content-none after:content-none;
 }

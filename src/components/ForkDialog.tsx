@@ -23,11 +23,11 @@ export function ForkDialog({
       }}
     >
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 bg-black/60 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
-        <Dialog.Popup className="fixed top-1/2 left-1/2 flex max-h-[75vh] w-[90vw] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-neutral-200 bg-white shadow-2xl outline-none dark:border-neutral-800 dark:bg-neutral-900">
-          <div className="border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
+        <Dialog.Backdrop className="fixed inset-0 bg-black/40 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
+        <Dialog.Popup className="fixed top-1/2 left-1/2 flex max-h-[75vh] w-[90vw] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-line bg-card shadow-xl outline-none">
+          <div className="border-b border-line px-4 py-3">
             <Dialog.Title className="text-sm font-semibold">{t("forkSession")}</Dialog.Title>
-            <Dialog.Description className="mt-0.5 text-xs text-neutral-500">
+            <Dialog.Description className="mt-0.5 text-xs text-faint">
               {t("forkDescription")}
             </Dialog.Description>
           </div>
@@ -39,16 +39,16 @@ export function ForkDialog({
                   chatClient.send({ type: "fork", entryId: p.entryId });
                   onOpenChange(false);
                 }}
-                className="block w-full px-4 py-2.5 text-left hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                className="block w-full px-4 py-2.5 text-left hover:bg-hover"
               >
-                <span className="mr-2 font-mono text-xs text-neutral-400">#{i + 1}</span>
-                <span className="text-sm text-neutral-700 dark:text-neutral-200">
+                <span className="mr-2 font-mono text-xs text-faint">#{i + 1}</span>
+                <span className="text-sm text-ink">
                   {p.text.slice(0, 100) || t("emptyMessage")}
                 </span>
               </button>
             ))}
             {points && points.length === 0 && (
-              <div className="px-4 py-8 text-center text-sm text-neutral-500">
+              <div className="px-4 py-8 text-center text-sm text-faint">
                 {t("noForkPoints")}
               </div>
             )}

@@ -81,7 +81,7 @@ export const en: Messages = {
   language: "Language",
 
   sessions: "Sessions",
-  newSession: "+ New session",
+  newSession: "New session",
   emptySession: "(empty session)",
   messageCount: "{count} messages",
   noSavedSessions: "No saved sessions",
