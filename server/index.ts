@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,11 +16,14 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type {
   ClientCommand,
   ServerEvent,
+  UICustomModelsResponse,
+  UICustomProvider,
   UIExtensionInfo,
   UISessionInfo,
   UISnapshot,
   UIThinkingLevel,
 } from "../shared/protocol.ts";
+import { readCustomModels, validateProviders, writeCustomModels } from "./models-config.ts";
 import { serializeMessages } from "./serialize.ts";
 
 const PORT = Number(process.env.PORT ?? 3141);
@@ -68,7 +71,7 @@ const DIST_DIR = (() => {
 // pi 세션 런타임
 // ---------------------------------------------------------------------------
 
-const modelRuntime = await ModelRuntime.create();
+let modelRuntime = await ModelRuntime.create();
 
 const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
   const services = await createAgentSessionServices({ cwd });
@@ -265,6 +268,75 @@ function sendTo(ws: WebSocket, event: ServerEvent) {
 }
 
 // ---------------------------------------------------------------------------
+// 커스텀 모델 (models.json) 반영
+// ---------------------------------------------------------------------------
+
+function readBody(req: IncomingMessage, limit = 1_000_000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => {
+      size += c.length;
+      if (size > limit) {
+        reject(new Error("request body too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+/**
+ * 저장된 providers 를 실행 중인 런타임에 반영한다.
+ * - 목록용 modelRuntime 은 재생성 (models.json 을 다시 읽음)
+ * - 대화 중인 세션 런타임에는 registerProvider 로 라이브 등록
+ * 실패하면 재시작이 필요하다는 경고 문자열을 돌려준다.
+ */
+async function reloadModelProviders(providers: UICustomProvider[]): Promise<string | undefined> {
+  const previousKeys = new Set(knownCustomProviderKeys);
+  knownCustomProviderKeys = new Set(providers.map((p) => p.key));
+
+  try {
+    modelRuntime = await ModelRuntime.create();
+  } catch (err) {
+    return `models.json saved, but reloading failed: ${String(err)}`;
+  }
+
+  const sessionModels = runtime.services.modelRuntime;
+  try {
+    for (const key of previousKeys) {
+      if (!knownCustomProviderKeys.has(key)) sessionModels.unregisterProvider(key);
+    }
+    for (const p of providers) {
+      sessionModels.registerProvider(p.key, {
+        baseUrl: p.baseUrl,
+        apiKey: p.apiKey,
+        api: p.api,
+        models: p.models.map((m) => ({
+          id: m.id,
+          name: m.name ?? m.id,
+          reasoning: m.reasoning ?? false,
+          input: m.input && m.input.length > 0 ? m.input : ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: m.contextWindow ?? 128_000,
+          maxTokens: m.maxTokens ?? 8_192,
+        })),
+      });
+    }
+  } catch (err) {
+    return `models.json saved, but live reload failed (restart pi --web to apply): ${
+      err instanceof Error ? err.message : String(err)
+    }`;
+  }
+  return undefined;
+}
+
+let knownCustomProviderKeys = new Set(readCustomModels().providers.map((p) => p.key));
+
+// ---------------------------------------------------------------------------
 // HTTP 서버 (API + 정적 파일)
 // ---------------------------------------------------------------------------
 
@@ -323,6 +395,41 @@ const httpServer = createServer(async (req, res) => {
           })),
         ),
       );
+      return;
+    }
+
+    // 커스텀 모델 관리 (~/.pi/agent/models.json)
+    if (url.pathname === "/api/custom-models") {
+      if (req.method === "GET") {
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify(readCustomModels()));
+        return;
+      }
+      if (req.method === "PUT") {
+        const body = await readBody(req);
+        let providers: UICustomProvider[];
+        try {
+          providers = (JSON.parse(body) as { providers: UICustomProvider[] }).providers;
+        } catch (err) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: `invalid JSON: ${String(err)}` }));
+          return;
+        }
+        const invalid = validateProviders(providers);
+        if (invalid) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: invalid }));
+          return;
+        }
+        writeCustomModels(providers);
+        const warning = await reloadModelProviders(providers);
+        const result: UICustomModelsResponse = { ...readCustomModels(), warning };
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(result));
+        return;
+      }
+      res.writeHead(405, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "method not allowed" }));
       return;
     }
 

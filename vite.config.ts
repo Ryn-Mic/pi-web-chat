@@ -8,6 +8,8 @@ const pkg = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf8"),
 ) as { version: string };
 
+const DEV_SERVER_PORT = process.env.PI_WEB_DEV_PORT ?? "3141";
+
 export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
@@ -62,8 +64,9 @@ export default defineConfig({
     port: 5173,
     host: true, // 모바일 기기에서 같은 네트워크로 접속 가능
     proxy: {
-      "/api": "http://localhost:3141",
-      "/ws": { target: "ws://localhost:3141", ws: true },
+      // dev 서버 포트를 바꾸려면 PI_WEB_DEV_PORT (기본 3141)
+      "/api": `http://localhost:${DEV_SERVER_PORT}`,
+      "/ws": { target: `ws://localhost:${DEV_SERVER_PORT}`, ws: true },
     },
   },
 });

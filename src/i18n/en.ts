@@ -60,6 +60,32 @@ export type Messages = {
   flags: string;
   events: string;
 
+  // custom models
+  manageModels: string;
+  manageModelsEllipsis: string;
+  customModelsDescription: string;
+  addProvider: string;
+  addModel: string;
+  removeProvider: string;
+  removeModel: string;
+  providerKey: string;
+  apiType: string;
+  baseUrl: string;
+  apiKey: string;
+  apiKeyHint: string;
+  modelId: string;
+  modelName: string;
+  contextWindow: string;
+  maxTokens: string;
+  reasoning: string;
+  imageInput: string;
+  noCustomProviders: string;
+  save: string;
+  saving: string;
+  saved: string;
+  cancel: string;
+  optional: string;
+
   // messages
   emptyPrompt: string;
   attachedImage: string;
@@ -123,6 +149,31 @@ export const en: Messages = {
   commands: "Commands",
   flags: "Flags",
   events: "Events",
+
+  manageModels: "Manage models",
+  manageModelsEllipsis: "Manage models…",
+  customModelsDescription: "Custom providers and models in {path}",
+  addProvider: "Add provider",
+  addModel: "Add model",
+  removeProvider: "Remove provider",
+  removeModel: "Remove model",
+  providerKey: "Provider key",
+  apiType: "API",
+  baseUrl: "Base URL",
+  apiKey: "API key",
+  apiKeyHint: "Value or $ENV_VAR (local servers can use a dummy value)",
+  modelId: "Model ID",
+  modelName: "Display name",
+  contextWindow: "Context window",
+  maxTokens: "Max tokens",
+  reasoning: "Reasoning",
+  imageInput: "Image input",
+  noCustomProviders: "No custom providers yet",
+  save: "Save",
+  saving: "Saving…",
+  saved: "Saved",
+  cancel: "Cancel",
+  optional: "optional",
 
   emptyPrompt: "How can I help?",
   attachedImage: "Attached image",

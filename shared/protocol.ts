@@ -75,6 +75,43 @@ export interface UIExtensionsResponse {
   errors: { path: string; error: string }[];
 }
 
+/** ~/.pi/agent/models.json 의 커스텀 모델 (편집 가능한 필드만 노출) */
+export interface UICustomModel {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+  /** 입력 모달리티 (기본 ["text"]) */
+  input?: ("text" | "image")[];
+}
+
+export type UICustomApi =
+  | "openai-completions"
+  | "openai-responses"
+  | "anthropic-messages"
+  | "google-generative-ai";
+
+export interface UICustomProvider {
+  /** models.json 의 providers 키 (예: "ollama") */
+  key: string;
+  baseUrl: string;
+  api: UICustomApi;
+  /** 값 또는 "$ENV_VAR" 형식 */
+  apiKey?: string;
+  models: UICustomModel[];
+}
+
+export interface UICustomModelsResponse {
+  /** ~ 로 축약한 models.json 경로 */
+  path: string;
+  providers: UICustomProvider[];
+  /** 파싱 실패 시 메시지 (이 경우 편집 저장은 위험하므로 UI에서 경고) */
+  parseError?: string;
+  /** 저장 후 재시작 없이 반영되지 않은 경우의 안내 */
+  warning?: string;
+}
+
 export interface UIImageAttachment {
   /** base64 (data URL 아님) */
   data: string;

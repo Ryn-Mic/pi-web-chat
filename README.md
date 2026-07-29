@@ -145,8 +145,9 @@ dist/public/              built frontend (published)
 - Session list / switch / new session (can share pi CLI sessions)
 - **Session fork** from a user message via the settings menu
 - Model switching + **thinking level**
+- **Custom model management**: add/edit custom providers and models in `~/.pi/agent/models.json` from the settings menu (Ollama, LM Studio, vLLM, proxies)
 - **Image attachments** (file picker / clipboard paste)
-- **Settings menu:** theme (system/light/dark) + session fork
+- **Settings menu:** theme (system/light/dark), language, model management, session fork, extensions
 - Send while streaming → steering
 - Abort
 - Mobile: safe-area, `dvh` layout, session drawer

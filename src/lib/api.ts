@@ -1,5 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
+  UICustomModelsResponse,
+  UICustomProvider,
   UIExtensionsResponse,
   UIForkPoint,
   UIModel,
@@ -54,4 +56,36 @@ export function useModels() {
     queryFn: () => fetchJson<UIModel[]>("/api/models"),
     staleTime: 5 * 60_000,
   });
+}
+
+export const CUSTOM_MODELS_QUERY_KEY = ["custom-models"] as const;
+
+/** ~/.pi/agent/models.json 의 커스텀 프로바이더/모델 */
+export function useCustomModels(enabled = true) {
+  return useQuery({
+    queryKey: CUSTOM_MODELS_QUERY_KEY,
+    queryFn: () => fetchJson<UICustomModelsResponse>("/api/custom-models"),
+    enabled,
+    staleTime: 0,
+    refetchOnMount: "always",
+  });
+}
+
+export async function saveCustomModels(
+  providers: UICustomProvider[],
+): Promise<UICustomModelsResponse> {
+  const res = await fetch("/api/custom-models", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ providers }),
+  });
+  const json = (await res.json()) as UICustomModelsResponse & { error?: string };
+  if (!res.ok) throw new Error(json.error ?? `save failed: ${res.status}`);
+  return json;
+}
+
+/** 모델 목록 재조회 (커스텀 모델 저장 후) */
+export function useInvalidateModels() {
+  const qc = useQueryClient();
+  return () => qc.invalidateQueries({ queryKey: ["models"] });
 }

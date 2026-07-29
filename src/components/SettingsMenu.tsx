@@ -8,6 +8,7 @@ import {
 } from "../lib/theme";
 import { ExtensionsDialog } from "./ExtensionsDialog";
 import { ForkDialog } from "./ForkDialog";
+import { ModelsDialog } from "./ModelsDialog";
 
 const itemClass =
   "flex cursor-pointer items-center gap-2 px-3 py-2 text-sm text-ink outline-none data-[highlighted]:bg-hover";
@@ -18,6 +19,7 @@ export function SettingsMenu() {
   const locale = useLocale();
   const [forkOpen, setForkOpen] = useState(false);
   const [extensionsOpen, setExtensionsOpen] = useState(false);
+  const [modelsOpen, setModelsOpen] = useState(false);
 
   const themeOptions: { value: ThemePreference; label: string }[] = [
     { value: "system", label: t("themeSystem") },
@@ -107,6 +109,17 @@ export function SettingsMenu() {
 
               <div className="my-1 border-t border-line" />
 
+              <Menu.Item className={itemClass} onClick={() => setModelsOpen(true)}>
+                <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2">
+                  <path
+                    d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Zm0 0v9m0 0 8-4.5M12 12l-8-4.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                {t("manageModelsEllipsis")}
+              </Menu.Item>
+
               <Menu.Item className={itemClass} onClick={() => setForkOpen(true)}>
                 <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2">
                   <circle cx="6" cy="5" r="2" />
@@ -140,6 +153,7 @@ export function SettingsMenu() {
         </Menu.Portal>
       </Menu.Root>
 
+      <ModelsDialog open={modelsOpen} onOpenChange={setModelsOpen} />
       <ForkDialog open={forkOpen} onOpenChange={setForkOpen} />
       <ExtensionsDialog open={extensionsOpen} onOpenChange={setExtensionsOpen} />
     </>
