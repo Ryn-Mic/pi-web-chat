@@ -124,7 +124,11 @@ export interface UIImageAttachment {
 
 export type ServerEvent =
   | { type: "snapshot"; snapshot: UISnapshot }
-  /** 이 연결이 바인딩된 세션 (포크 등으로 바뀌면 다시 전송) → 클라이언트는 URL 갱신 */
+  /**
+   * 이 연결이 URL에 공개된 세션.
+   * 기존 /s/:id 접속 시 즉시, `/` 초안은 첫 prompt 때 전송 → 클라이언트는 /s/:id 로 교체.
+   * 포크 등으로 id가 바뀌면 다시 전송.
+   */
   | { type: "session_bound"; sessionId: string }
   | { type: "delta"; kind: "text" | "thinking"; delta: string }
   | { type: "tool_start"; toolCallId: string; toolName: string }

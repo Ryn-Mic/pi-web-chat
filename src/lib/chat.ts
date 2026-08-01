@@ -49,12 +49,15 @@ class ChatClient {
 
   /**
    * 세션에 연결. 이미 같은 세션에 붙어 있으면 무시하고,
-   * 다른 세션이면 기존 연결을 끓고 새로 연다.
+   * 다른 세션이면 기존 연결을 끊고 새로 연다.
+   * `force: true` — 이미 `/`(새 초안)에 있어도 새 초안 연결을 다시 연다.
    */
-  connect(sessionId: string | null = null) {
+  connect(sessionId: string | null = null, opts?: { force?: boolean }) {
     if (this.ws) {
       const current = this.state.sessionId ?? this.target;
-      if (sessionId === null ? this.target === null : sessionId === current) return;
+      if (!opts?.force && (sessionId === null ? this.target === null : sessionId === current)) {
+        return;
+      }
       // 세션 전환: 이전 연결 종료 + 화면 초기화
       this.closeSocket();
       this.update({
@@ -150,6 +153,7 @@ class ChatClient {
   private handle(event: ServerEvent) {
     switch (event.type) {
       case "session_bound":
+        // 첫 메시지(또는 기존 세션 접속) 후 서버가 id를 알려 주면 URL 동기화 대상이 된다
         this.target = event.sessionId;
         this.update({ sessionId: event.sessionId });
         break;

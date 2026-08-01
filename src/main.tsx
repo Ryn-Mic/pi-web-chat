@@ -18,7 +18,7 @@ const rootRoute = createRootRoute({
   component: () => <Outlet />,
 });
 
-/** 새 세션 (서버가 세션을 만들면 /s/$sessionId 로 교체된다) */
+/** 새 대화 초안 — 첫 메시지 전송 시 서버 session_bound 로 /s/$sessionId 교체 */
 const chatRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",

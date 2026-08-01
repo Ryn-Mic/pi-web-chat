@@ -141,8 +141,10 @@ function SessionsPanel({
   };
 
   const startNewSession = () => {
-    // "/" 로 가면 서버가 새 세션을 만들고 /s/:id 로 교체된다
+    // "/" 초안 화면. 이미 / 에 있어도 force 로 새 초안 WS를 연다.
+    // 세션 id는 첫 메시지 때 서버가 내려주고 /s/:id 로 교체된다.
     void navigate({ to: "/" });
+    chatClient.connect(null, { force: true });
     window.setTimeout(() => void refetch(), 150);
     onClose?.();
     chatClient.requestComposerFocus();

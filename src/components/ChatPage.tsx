@@ -47,12 +47,12 @@ export function ChatPage() {
   const routeSessionId = params.sessionId ?? null;
   const navigate = useNavigate();
 
-  // URL → 연결 ("/"는 새 세션)
+  // URL → 연결 ("/"는 아직 id 없는 초안, 첫 입력 때 서버가 session_bound)
   useEffect(() => {
     chatClient.connect(routeSessionId);
   }, [routeSessionId]);
 
-  // 연결 → URL (새 세션 생성 / 포크 등으로 세션이 바뀌면 주소 교체).
+  // 연결 → URL (첫 메시지 / 포크 등으로 세션이 공개되면 주소 교체).
   // 렌더 시점 값이 아닌 현재 상태를 읽어 "/"로 갔다가 즉시 되돌아오는 경합을 막는다.
   useEffect(() => {
     const bound = chatClient.state.sessionId;

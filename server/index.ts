@@ -93,6 +93,11 @@ interface SessionEntry {
   clients: Set<WebSocket>;
   unsubscribe?: () => void;
   lastActive: number;
+  /**
+   * URL(/s/:id)에 공개했는지.
+   * `/` 접속으로 만든 빈 초안은 첫 prompt 전까지 false — 주소에 sessionId를 붙이지 않는다.
+   */
+  published: boolean;
 }
 
 const entries = new Map<string, SessionEntry>();
@@ -121,6 +126,14 @@ function broadcastTo(entry: SessionEntry, event: ServerEvent) {
   }
 }
 
+/** 세션을 URL에 공개 (idempotent). 첫 메시지·기존 세션 접속·포크 시 호출 */
+function publishEntry(entry: SessionEntry, ws?: WebSocket) {
+  entry.published = true;
+  const event: ServerEvent = { type: "session_bound", sessionId: entry.id };
+  if (ws) sendTo(ws, event);
+  else broadcastTo(entry, event);
+}
+
 /** 세션이 교체되면(포크 등) 키를 다시 맞추고 클라이언트에 알린다 */
 function rekeyEntry(entry: SessionEntry) {
   const next = sessionIdOf(entry.runtime.session.sessionFile);
@@ -128,6 +141,7 @@ function rekeyEntry(entry: SessionEntry) {
   entries.delete(entry.id);
   entry.id = next;
   entries.set(next, entry);
+  entry.published = true;
   broadcastTo(entry, { type: "session_bound", sessionId: next });
 }
 
@@ -144,6 +158,8 @@ async function createEntry(id: string | null): Promise<SessionEntry> {
     runtime,
     clients: new Set(),
     lastActive: Date.now(),
+    // 명시적 세션 id로 연 경우만 즉시 공개. null 접속은 빈 초안.
+    published: id !== null,
   };
   entries.set(entry.id, entry);
   bindSession(entry);
@@ -289,6 +305,8 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
         mimeType: img.mimeType,
       }));
       if (!text && images.length === 0) return;
+      // 첫 입력 시점에 세션을 URL에 공개 → 클라이언트가 /s/:id 로 교체
+      if (!entry.published) publishEntry(entry, ws);
       // prompt()는 전체 런이 끝날 때까지 resolve되지 않으므로 await하지 않는다
       session
         .prompt(text, {
@@ -634,7 +652,11 @@ wss.on("connection", (ws, req) => {
       entry.clients.add(ws);
       entry.lastActive = Date.now();
       wsEntry.set(ws, entry);
-      sendTo(ws, { type: "session_bound", sessionId: entry.id });
+      // 기존 세션(/s/:id) 또는 이미 공개된 세션만 즉시 바인딩.
+      // `/` 빈 초안은 첫 prompt 때 session_bound → URL 정리.
+      if (entry.published || requested) {
+        publishEntry(entry, ws);
+      }
       sendTo(ws, { type: "snapshot", snapshot: buildSnapshot(entry) });
       ready = true;
       for (const cmd of queue.splice(0)) {
