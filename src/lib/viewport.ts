@@ -58,21 +58,37 @@ export function initViewportLock() {
     const vvHeight = Math.round(vv?.height ?? inner);
     const offsetTop = Math.round(vv?.offsetTop ?? 0);
 
-    // Keyboard (or other overlay) shrank the visible viewport.
-    const keyboardOpen = vvHeight < inner - 80 || offsetTop > 0;
-    // When the keyboard is closed, size to the full height. In iOS standalone
-    // (home-screen PWA) either innerHeight or visualViewport.height can
-    // under-report, so take the larger of the two — otherwise the composer
-    // floats above dead space at the bottom.
-    const height = keyboardOpen ? vvHeight : Math.max(Math.round(inner), vvHeight);
-    root.style.setProperty("--app-height", `${height}px`);
-    root.style.setProperty("--app-top", `${offsetTop}px`);
+    // Keyboard (or other overlay) shrank the visible viewport. The offsetTop
+    // threshold tolerates tiny iOS scroll jitter so we don't flip-flop.
+    const keyboardOpen = vvHeight < inner - 80 || offsetTop > 4;
 
-    root.classList.toggle("ua-keyboard", keyboardOpen);
     if (keyboardOpen) {
+      // Keyboard covers the layout viewport: shrink the app to the visible area.
+      root.style.setProperty("--app-height", `${vvHeight}px`);
+      root.classList.add("ua-keyboard");
       // Counteract iOS auto-scrolling the locked page.
-      window.scrollTo(0, 0);
+      if (window.scrollY > 0) window.scrollTo(0, 0);
+    } else {
+      // No keyboard: fall back to CSS height:100% (body is fixed inset:0, so
+      // this is the layout viewport — reliable in iOS standalone, unlike JS
+      // viewport numbers which can under-report and leave dead space below
+      // the composer).
+      root.style.removeProperty("--app-height");
+      root.classList.remove("ua-keyboard");
     }
+    root.style.setProperty("--app-top", `${offsetTop}px`);
+  };
+
+  // Throttle visualViewport resize/scroll storms (iOS fires these constantly
+  // while scrolling or during keyboard animations) to one write per frame.
+  let pendingHeight = false;
+  const scheduleHeight = () => {
+    if (pendingHeight) return;
+    pendingHeight = true;
+    requestAnimationFrame(() => {
+      pendingHeight = false;
+      applyHeight();
+    });
   };
 
   const applyAll = () => {
@@ -81,31 +97,40 @@ export function initViewportLock() {
     applyHeight();
   };
 
+  let pendingAll = false;
+  const scheduleAll = () => {
+    if (pendingAll) return;
+    pendingAll = true;
+    requestAnimationFrame(() => {
+      pendingAll = false;
+      applyAll();
+    });
+  };
+
   if (document.body) applyAll();
   else document.addEventListener("DOMContentLoaded", applyAll, { once: true });
 
   // iOS standalone can report a wrong viewport height right at load (before the
-  // layout viewport settles), and no resize event follows. Re-measure a few
-  // times after load so the composer isn't left floating above dead space.
+  // layout viewport settles), and no resize event follows. Re-measure a couple
+  // of times after load so the composer isn't left floating above dead space.
   const stabilize = () => {
     requestAnimationFrame(() => {
       requestAnimationFrame(applyAll);
       setTimeout(applyAll, 300);
-      setTimeout(applyAll, 800);
     });
   };
   window.addEventListener("load", stabilize, { once: true });
-  setTimeout(stabilize, 1_200);
+  setTimeout(stabilize, 1_000);
 
-  window.visualViewport?.addEventListener("resize", applyHeight);
-  window.visualViewport?.addEventListener("scroll", applyHeight);
-  window.addEventListener("resize", applyAll);
+  window.visualViewport?.addEventListener("resize", scheduleHeight);
+  window.visualViewport?.addEventListener("scroll", scheduleHeight);
+  window.addEventListener("resize", scheduleAll);
   window.addEventListener("orientationchange", () => {
     requestAnimationFrame(() => requestAnimationFrame(applyAll));
   });
   // iOS sometimes fires focus before the viewport resizes.
   window.addEventListener("focusin", () => {
-    requestAnimationFrame(applyHeight);
+    scheduleHeight();
     setTimeout(applyHeight, 300);
   });
   window.addEventListener("focusout", () => {
