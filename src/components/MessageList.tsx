@@ -439,7 +439,8 @@ export function MessageList({
           })()}
           {streamText && (
             <div className="min-w-0 text-[15px]">
-              <Markdown text={escapeUnclosedMarkdown(streamText)} />
+              {/* Streamdown handles incomplete markdown natively — no manual escaping */}
+              <Markdown text={streamText} />
             </div>
           )}
           {activeTools.map((tool) => (

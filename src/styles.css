@@ -2,6 +2,9 @@
 @plugin "@tailwindcss/typography";
 @import "highlight.js/styles/github-dark.css";
 
+/* Streamdown (streaming markdown) utility classes */
+@source "../node_modules/streamdown/dist/*.js";
+
 /* JetBrainsMono Nerd Font (Medium, converted to woff2 locally for packaging) */
 @font-face {
   font-family: "JetBrainsMono Nerd Font";
@@ -62,6 +65,19 @@
   --c-bubble: #f0eee6;
   --c-hover: rgba(0, 0, 0, 0.045);
   --c-selected: rgba(0, 0, 0, 0.075);
+
+  /* shadcn-style tokens consumed by Streamdown components (mapped to theme) */
+  --background: var(--c-canvas);
+  --foreground: var(--c-ink);
+  --card: var(--c-card);
+  --card-foreground: var(--c-ink);
+  --muted: var(--c-bubble);
+  --muted-foreground: var(--c-muted);
+  --border: var(--c-line);
+  --input: var(--c-line);
+  --primary: var(--c-accent);
+  --primary-foreground: var(--c-accent-ink);
+  --radius: 0.625rem;
 }
 
 .dark {
@@ -78,6 +94,17 @@
   --c-bubble: #373734;
   --c-hover: rgba(255, 255, 255, 0.06);
   --c-selected: rgba(255, 255, 255, 0.1);
+
+  --background: var(--c-canvas);
+  --foreground: var(--c-ink);
+  --card: var(--c-card);
+  --card-foreground: var(--c-ink);
+  --muted: var(--c-bubble);
+  --muted-foreground: var(--c-muted);
+  --border: var(--c-line);
+  --input: var(--c-line);
+  --primary: var(--c-accent);
+  --primary-foreground: var(--c-accent-ink);
 }
 
 /*

@@ -14,6 +14,7 @@ import { checkAuth, useAuthStatus } from "./lib/auth";
 import { initLocale } from "./lib/i18n";
 import { initTheme } from "./lib/theme";
 import { initViewportLock } from "./lib/viewport";
+import "streamdown/styles.css";
 import "./styles.css";
 
 const rootRoute = createRootRoute({
