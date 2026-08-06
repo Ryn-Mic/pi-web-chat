@@ -69,6 +69,8 @@ export interface UISessionInfo {
   firstMessage: string;
   modified: string;
   messageCount: number;
+  /** Whether a loaded runtime for this session is streaming (running dot in sidebar) */
+  isStreaming?: boolean;
 }
 
 export interface UIForkPoint {

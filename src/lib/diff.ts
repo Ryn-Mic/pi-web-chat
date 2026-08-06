@@ -97,10 +97,71 @@ export function parseEditArgs(args: unknown): EditArgs | null {
 }
 
 /**
- * Edit tool args → git-diff-style string.
- * One header (---/+++) per file, one hunk (@@) per replacement.
+ * Render ops as compact unified-diff hunk lines: only the changed regions
+ * plus CONTEXT unchanged lines around each, with accurate old/new line
+ * numbers. Returns null when there are no changes.
  */
-export function buildEditDiffFromArgs(args: unknown): { path: string; diff: string } | null {
+function compactDiffLines(
+  ops: DiffOp[],
+  context = 2,
+): string[] | null {
+  const changes: number[] = [];
+  for (let i = 0; i < ops.length; i++) {
+    if (ops[i].type !== "keep") changes.push(i);
+  }
+  if (changes.length === 0) return null;
+
+  // Merge change clusters that are close enough that their context windows overlap
+  const segs: Array<[number, number]> = [];
+  let s = changes[0]!;
+  let e = changes[0]!;
+  for (let i = 1; i < changes.length; i++) {
+    if (changes[i]! - e <= context * 2 + 1) e = changes[i]!;
+    else {
+      segs.push([s, e]);
+      s = e = changes[i]!;
+    }
+  }
+  segs.push([s, e]);
+
+  const out: string[] = [];
+  for (const [segStart, segEnd] of segs) {
+    const start = Math.max(0, segStart - context);
+    const end = Math.min(ops.length - 1, segEnd + context);
+    if (out.length > 0) out.push("…"); // omitted lines between hunks
+
+    // Old/new line numbers at `start`
+    let oldNo = 1;
+    let newNo = 1;
+    for (let i = 0; i < start; i++) {
+      const t = ops[i]!.type;
+      if (t !== "add") oldNo++;
+      if (t !== "del") newNo++;
+    }
+    let oldCount = 0;
+    let newCount = 0;
+    for (let i = start; i <= end; i++) {
+      if (ops[i]!.type !== "add") oldCount++;
+      if (ops[i]!.type !== "del") newCount++;
+    }
+    out.push(`@@ -${oldNo},${oldCount} +${newNo},${newCount} @@`);
+    for (let i = start; i <= end; i++) {
+      const op = ops[i]!;
+      if (op.type === "keep") out.push(" " + op.text);
+      else if (op.type === "add") out.push("+" + op.text);
+      else out.push("-" + op.text);
+    }
+  }
+  return out;
+}
+
+/**
+ * Edit tool args → git-diff-style string.
+ * One header (---/+++) per file, one compact hunk (@@) per replacement.
+ */
+export function buildEditDiffFromArgs(
+  args: unknown,
+): { path: string; diff: string; stats: EditDiffStats } | null {
   const parsed = parseEditArgs(args);
   if (!parsed) return null;
   const { path, edits } = parsed;
@@ -108,18 +169,29 @@ export function buildEditDiffFromArgs(args: unknown): { path: string; diff: stri
   const lines: string[] = [];
   lines.push(`--- a/${path}`);
   lines.push(`+++ b/${path}`);
+  let added = 0;
+  let deleted = 0;
+  let rendered = 0;
   for (const e of edits) {
     const a = e.oldText.split("\n");
     const b = e.newText.split("\n");
-    // The real change location is unknown, so the hunk range covers the whole file
-    lines.push(`@@ -1,${a.length} +1,${b.length} @@`);
-    for (const op of lineDiff(a, b)) {
-      if (op.type === "keep") lines.push(" " + op.text);
-      else if (op.type === "add") lines.push("+" + op.text);
-      else lines.push("-" + op.text);
+    const ops = lineDiff(a, b);
+    const compact = compactDiffLines(ops, 2);
+    if (!compact) continue;
+    for (const op of ops) {
+      if (op.type === "add") added++;
+      else if (op.type === "del") deleted++;
     }
+    lines.push(...compact);
+    rendered++;
   }
-  return { path, diff: lines.join("\n") };
+  if (rendered === 0) return null;
+  return { path, diff: lines.join("\n"), stats: { added, deleted } };
+}
+
+export interface EditDiffStats {
+  added: number;
+  deleted: number;
 }
 
 export type DiffLineKind =
@@ -129,6 +201,7 @@ export type DiffLineKind =
   | "del"
   | "context"
   | "nonewline"
+  | "ellipsis"
   | "plain";
 
 /** One diff line: kind + old/new line numbers (null when absent) */
@@ -179,6 +252,10 @@ export function parseDiff(text: string): DiffLine[] {
       });
       if (oldNo) oldNo++;
       if (newNo) newNo++;
+      continue;
+    }
+    if (line === "…") {
+      out.push({ kind: "ellipsis", text: line, oldNo: null, newNo: null });
       continue;
     }
     out.push({ kind: "plain", text: line, oldNo: null, newNo: null });

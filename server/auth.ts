@@ -11,11 +11,14 @@
  * generation, but this module only creates/verifies codes.
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 const STATE_DIR = join(homedir(), ".pi", "web-chat");
+// Auth is constructed at import time, before server/index.ts creates the
+// workspace dir — make sure it exists so token/secret writes don't silently fail.
+mkdirSync(STATE_DIR, { recursive: true });
 const TOKEN_FILE = join(STATE_DIR, "token");
 const SECRET_FILE = join(STATE_DIR, "2fa.secret");
 const SESSIONS_FILE = join(STATE_DIR, "sessions.json");

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { UIImageAttachment } from "../../shared/protocol";
 import { chatClient, useChat } from "../lib/chat";
 import { useComposerOpacity } from "../lib/composer";
@@ -110,8 +110,17 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
   return (
     <div className="composer-bar shrink-0 bg-canvas md:rounded-b-2xl">
       <div
-        className="composer-panel mx-auto max-w-3xl rounded-2xl border border-line px-2 pt-2 pb-2 shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-colors focus-within:border-faint"
-        style={{ "--composer-bg-opacity": `${Math.round(composerOpacity * 100)}%` } as CSSProperties}
+        className="composer-panel mx-auto max-w-3xl rounded-2xl border border-line bg-card px-2 pt-2 pb-2 shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-colors focus-within:border-faint"
+        style={
+          composerOpacity < 1
+            ? // Blend --c-card over --c-canvas with a literal percentage so it
+              // works even in browsers that don't support var() as a color-mix
+              // percentage (e.g. older iOS Safari).
+              ({
+                backgroundColor: `color-mix(in srgb, var(--c-card) ${Math.round(composerOpacity * 100)}%, var(--c-canvas))`,
+              } as React.CSSProperties)
+            : undefined
+        }
       >
         {images.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2 px-1">

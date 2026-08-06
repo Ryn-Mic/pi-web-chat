@@ -152,6 +152,17 @@ dist/public/**      # 프론트 + PWA sw/manifest
 - `pi --web` → 즉시 exit, `http://localhost:3141` 200
 - `pi --web status` / `stop`
 
+### 검증 규칙 (Verification rules)
+
+- **절대 프로덕션 daemon 을 건드리지 않는다**: 실제 서버는 기본 포트(3141)에서
+  돌고 있다. 모든 스모크 테스트/재시작은 전용 임시 포트(예: 43xxx)를 사용하고
+  메인 daemon 을 죽이거나 재시작하지 않는다.
+- **상태 파일을 덮어쓰지 않는다**: 임시 서버는 `~/.pi/web-chat/*` 상태 파일을
+  덮어쓰면 메인 daemon 이 orphan 이 된다. 반드시 격리된 HOME 으로 띄운다:
+  `HOME=/tmp/pwc-verify PORT=43150 node dist/index.js`
+  (상태 파일이 /tmp/pwc-verify/.pi/web-chat/ 에 생성됨)
+- 서버 동작 확인은 `/api/health` 와 같은 읽기 전용 엔드포인트로만 한다.
+
 ### 설정 메뉴 확장 가이드
 
 저빈도 액션은 `SettingsMenu` 항목으로:

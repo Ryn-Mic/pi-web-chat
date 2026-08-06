@@ -10,6 +10,24 @@ function ToolCallCard({ block }: { block: Extract<UIContentBlock, { type: "toolC
   const args = block.args ? JSON.stringify(block.args) : "";
   // edit tool: render args (path/edits or legacy file/oldText/newText) as a git diff
   const edit = block.name === "edit" ? buildEditDiffFromArgs(block.args) : null;
+  // bash tool: collapsed state shows the actual command + timeout, not raw JSON
+  const bash =
+    block.name === "bash" && block.args && typeof block.args === "object"
+      ? (block.args as { command?: unknown; timeout?: unknown })
+      : null;
+  // read tool: collapsed state shows which file is being read
+  const read =
+    block.name === "read" && block.args && typeof block.args === "object"
+      ? (block.args as { path?: unknown })
+      : null;
+  const command = bash && typeof bash.command === "string" ? bash.command : null;
+  const readPath = read && typeof read.path === "string" ? read.path : null;
+  const timeout =
+    bash && typeof bash.timeout === "number" && bash.timeout > 0 ? bash.timeout : null;
+  const summary = command != null ? `$ ${command}` : readPath != null ? `read ${readPath}` : null;
+  // Expanded body for bash/read: the meaningful arg, not the full JSON blob
+  const detailText =
+    command != null ? `$ ${command}` : readPath != null ? `read ${readPath}` : null;
   // If the edit result carries a real diff (details.diff), prefer showing it
   const resultDiff = block.result?.diff;
   const resultIsDiff = !!resultDiff || (!!block.result && isUnifiedDiff(block.result.text));
@@ -29,7 +47,26 @@ function ToolCallCard({ block }: { block: Extract<UIContentBlock, { type: "toolC
         />
         <span className="font-medium text-ink">{block.name}</span>
         {edit ? (
-          <span className="truncate font-mono text-xs text-faint">{edit.path}</span>
+          <span className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="min-w-0 flex-1 truncate font-mono text-xs text-faint">
+              {edit.path}
+            </span>
+            {edit.stats && (edit.stats.added > 0 || edit.stats.deleted > 0) && (
+              <span className="shrink-0 font-mono text-[10px] tabular-nums">
+                <span className="text-blue-600 dark:text-blue-400">+{edit.stats.added}</span>{" "}
+                <span className="text-red-500">−{edit.stats.deleted}</span>
+              </span>
+            )}
+          </span>
+        ) : summary ? (
+          <span className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="fade-x min-w-0 flex-1 truncate font-mono text-xs text-muted">
+              {summary}
+            </span>
+            {timeout != null && (
+              <span className="shrink-0 font-mono text-[10px] text-faint">⏱ {timeout}s</span>
+            )}
+          </span>
         ) : (
           <span className="truncate font-mono text-xs text-faint">{args.slice(0, 80)}</span>
         )}
@@ -37,6 +74,10 @@ function ToolCallCard({ block }: { block: Extract<UIContentBlock, { type: "toolC
       <div className="border-t border-line px-3 py-2">
         {edit ? (
           <DiffView text={edit.diff} maxHeight="max-h-64" />
+        ) : detailText ? (
+          <pre className="max-h-48 overflow-auto font-mono text-xs whitespace-pre-wrap text-ink">
+            {detailText}
+          </pre>
         ) : (
           <pre className="max-h-48 overflow-auto font-mono text-xs whitespace-pre-wrap text-muted">
             {args}

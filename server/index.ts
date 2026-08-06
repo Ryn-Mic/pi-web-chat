@@ -735,6 +735,11 @@ const httpServer = createServer(async (req, res) => {
 
     if (url.pathname === "/api/sessions") {
       const sessions = await SessionManager.listAll();
+      // Which loaded runtimes are currently streaming (for the sidebar running dot)
+      const streamingIds = new Set<string>();
+      for (const entry of entries.values()) {
+        if (entry.runtime.session.isStreaming) streamingIds.add(entry.id);
+      }
       const list: UISessionInfo[] = sessions
         .sort((a, b) => b.modified.getTime() - a.modified.getTime())
         .slice(0, 300)
@@ -746,6 +751,7 @@ const httpServer = createServer(async (req, res) => {
           firstMessage: s.firstMessage.slice(0, 200),
           modified: s.modified.toISOString(),
           messageCount: s.messageCount,
+          isStreaming: streamingIds.has(sessionIdOf(s.path)),
         }));
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(list));

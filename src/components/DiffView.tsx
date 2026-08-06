@@ -9,12 +9,14 @@ const KIND_CLASS: Record<DiffLineKind, string> = {
   del: "bg-red-500/10 text-red-600 dark:text-red-400",
   context: "text-muted",
   nonewline: "text-faint italic",
+  ellipsis: "text-faint select-none",
   plain: "text-ink",
 };
 
 /**
  * Render a unified diff with line numbers and a red(delete)/blue(add) scheme.
- * Old/new line-number gutters + content (code blocks use JetBrainsMono Nerd Font).
+ * Old/new line-number gutters + content (code blocks use JetBrainsMono Nerd
+ * Font). Gutter columns are narrow on mobile so the content gets the room.
  */
 export function DiffView({
   text,
@@ -30,10 +32,10 @@ export function DiffView({
     >
       {lines.map((l, i) => (
         <div key={i} className={`flex ${KIND_CLASS[l.kind]}`}>
-          <span className="w-10 shrink-0 pr-2 text-right tabular-nums opacity-40 select-none">
+          <span className="w-7 shrink-0 pr-1.5 text-right tabular-nums opacity-40 select-none sm:w-10 sm:pr-2">
             {l.oldNo ?? ""}
           </span>
-          <span className="w-10 shrink-0 pr-2 text-right tabular-nums opacity-40 select-none">
+          <span className="w-7 shrink-0 pr-1.5 text-right tabular-nums opacity-40 select-none sm:w-10 sm:pr-2">
             {l.newNo ?? ""}
           </span>
           <span className="min-w-0 flex-1 whitespace-pre">{l.text}</span>

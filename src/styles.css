@@ -147,6 +147,12 @@ body {
   scrollbar-width: thin;
   scrollbar-color: var(--c-faint) transparent;
 }
+
+/* Fade the right edge of truncated inline text (tool summaries etc.) */
+.fade-x {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 2.5rem), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 2.5rem), transparent);
+}
 .thin-scroll::-webkit-scrollbar {
   width: 8px;
 }
@@ -178,16 +184,10 @@ html.ua-keyboard .composer-bar {
 }
 
 /*
- * Composer panel background with user-adjustable opacity (Settings → Composer
- * opacity). color-mix blends --c-card with transparent at the chosen ratio.
+ * Composer panel background: opaque by default (bg-card utility); when the
+ * user lowers the opacity, Composer sets an inline color-mix that blends
+ * --c-card over --c-canvas with a literal percentage (browser-safe).
  */
-.composer-panel {
-  background-color: color-mix(
-    in srgb,
-    var(--c-card) var(--composer-bg-opacity, 100%),
-    transparent
-  );
-}
 
 /* Markdown body colors follow the tokens (light/dark automatic) */
 .prose {

@@ -177,6 +177,14 @@ function SessionRow({
         title={`${title}\n${meta}`}
         className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 pl-2.5 text-left"
       >
+        {/* Running sessions get the same dot color as the header connection
+            indicator (emerald = connected/streaming) */}
+        <span
+          className={`size-2 shrink-0 rounded-full ${
+            session.isStreaming ? "bg-emerald-500/80 animate-pulse" : "bg-transparent"
+          }`}
+          aria-hidden
+        />
         <ChatIcon />
         <span
           className={`truncate text-[13.5px] ${active ? "text-ink" : "text-muted group-hover:text-ink"}`}
@@ -269,15 +277,13 @@ function useSessionListSync(enabled: boolean) {
     void invalidate();
   }, [enabled, sessionFile, invalidate]);
 
-  // Reflect firstMessage/messageCount after a response finishes
+  // Refresh on streaming start/end so the running-state dot stays current
   useEffect(() => {
     if (!enabled) {
       prevStreaming.current = isStreaming;
       return;
     }
-    if (prevStreaming.current && !isStreaming) {
-      void invalidate();
-    }
+    if (prevStreaming.current !== isStreaming) void invalidate();
     prevStreaming.current = isStreaming;
   }, [enabled, isStreaming, invalidate]);
 }
