@@ -60,10 +60,11 @@ export function initViewportLock() {
 
     // Keyboard (or other overlay) shrank the visible viewport.
     const keyboardOpen = vvHeight < inner - 80 || offsetTop > 0;
-    // When the keyboard is closed, size to the full inner height — in iOS
-    // standalone (home-screen PWA) visualViewport.height can under-report,
-    // leaving dead space under the composer.
-    const height = keyboardOpen ? vvHeight : Math.round(inner);
+    // When the keyboard is closed, size to the full height. In iOS standalone
+    // (home-screen PWA) either innerHeight or visualViewport.height can
+    // under-report, so take the larger of the two — otherwise the composer
+    // floats above dead space at the bottom.
+    const height = keyboardOpen ? vvHeight : Math.max(Math.round(inner), vvHeight);
     root.style.setProperty("--app-height", `${height}px`);
     root.style.setProperty("--app-top", `${offsetTop}px`);
 
@@ -82,6 +83,19 @@ export function initViewportLock() {
 
   if (document.body) applyAll();
   else document.addEventListener("DOMContentLoaded", applyAll, { once: true });
+
+  // iOS standalone can report a wrong viewport height right at load (before the
+  // layout viewport settles), and no resize event follows. Re-measure a few
+  // times after load so the composer isn't left floating above dead space.
+  const stabilize = () => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(applyAll);
+      setTimeout(applyAll, 300);
+      setTimeout(applyAll, 800);
+    });
+  };
+  window.addEventListener("load", stabilize, { once: true });
+  setTimeout(stabilize, 1_200);
 
   window.visualViewport?.addEventListener("resize", applyHeight);
   window.visualViewport?.addEventListener("scroll", applyHeight);
