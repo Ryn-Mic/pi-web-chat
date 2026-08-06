@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { UIContentBlock, UIMessage } from "../../shared/protocol";
 import type { ActiveTool } from "../lib/chat";
 import { buildEditDiffFromArgs, isUnifiedDiff } from "../lib/diff";
@@ -230,9 +230,22 @@ function ToolCallCard({ block }: { block: Extract<UIContentBlock, { type: "toolC
   );
 }
 
-function Thinking({ text }: { text: string }) {
+function Thinking({ text, autoCollapse }: { text: string; autoCollapse?: boolean }) {
+  // Thinking blocks are expanded by default; finished ones (snapshot blocks)
+  // auto-collapse 2s after they appear. Streaming stays open while it runs.
+  const [open, setOpen] = useState(true);
+  useEffect(() => {
+    if (!autoCollapse) return;
+    const timer = setTimeout(() => setOpen(false), 2_000);
+    return () => clearTimeout(timer);
+  }, [autoCollapse]);
+
   return (
-    <details className="my-1.5 text-sm">
+    <details
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+      className="my-1.5 text-sm"
+    >
       <summary className="cursor-pointer text-xs text-faint select-none">thinking…</summary>
       <div className="mt-1 min-w-0 break-words border-l-2 border-line pl-3 text-muted italic">
         {/* Render markdown inside thinking (bold/code/emphasis) too; soften
@@ -277,7 +290,7 @@ function Blocks({ blocks, markdown }: { blocks: UIContentBlock[]; markdown: bool
               </div>
             );
           case "thinking":
-            return <Thinking key={i} text={b.text} />;
+            return <Thinking key={i} text={b.text} autoCollapse />;
           case "toolCall":
             return <ToolCallCard key={i} block={b} />;
           case "image":
