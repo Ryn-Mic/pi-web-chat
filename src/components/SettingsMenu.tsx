@@ -1,5 +1,5 @@
 import { Menu } from "@base-ui-components/react/menu";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { logout } from "../lib/auth";
 import { COMPOSER_OPACITY, setComposerOpacity, useComposerOpacity } from "../lib/composer";
 import { isLocale, LOCALES, setLocale, useLocale, useT } from "../lib/i18n";
@@ -15,6 +15,51 @@ import { ModelsDialog } from "./ModelsDialog";
 
 const itemClass =
   "flex cursor-pointer items-center gap-2 px-3 py-2 text-sm text-ink outline-none data-[highlighted]:bg-hover";
+
+/**
+ * Temporary iOS viewport diagnostics — helps debug the "composer not at the
+ * bottom" issue on home-screen PWAs where desktop can't reproduce safe-area
+ * / visualViewport behavior. Remove once resolved.
+ */
+function ViewportDiagnostics() {
+  const [d, setD] = useState<string[]>([]);
+  useEffect(() => {
+    const read = (): string[] => {
+      const vv = window.visualViewport;
+      const cs = getComputedStyle(document.documentElement);
+      const num = (v: string) => Number.parseFloat(v) || 0;
+      const el = document.createElement("div");
+      el.style.cssText =
+        "position:fixed;visibility:hidden;padding-bottom:env(safe-area-inset-bottom,0px)";
+      document.body.appendChild(el);
+      const envBottom = Number.parseFloat(getComputedStyle(el).paddingBottom) || 0;
+      el.remove();
+      const cls = document.documentElement.classList;
+      return [
+        `inner=${window.innerHeight}`,
+        `vv=${vv ? Math.round(vv.height) : "-"}`,
+        `offTop=${vv ? Math.round(vv.offsetTop) : "-"}`,
+        `screen=${window.screen.height}`,
+        `dpr=${window.devicePixelRatio}`,
+        `envBot=${envBottom}`,
+        `appH=${num(cs.getPropertyValue("--app-height"))}`,
+        `safeB=${num(cs.getPropertyValue("--safe-bottom"))}`,
+        `scrollY=${Math.round(window.scrollY)}`,
+        `standalone=${cls.contains("ua-standalone") ? 1 : 0}`,
+        `keyboard=${cls.contains("ua-keyboard") ? 1 : 0}`,
+        `UA=${navigator.userAgent.includes("Mobile") ? "iOS" : "desktop"}`,
+      ];
+    };
+    setD(read());
+    const timer = setInterval(() => setD(read()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <div className="mt-1 whitespace-pre-wrap break-words font-mono text-[10px] leading-snug text-faint">
+      {d.join("\n")}
+    </div>
+  );
+}
 
 export function SettingsMenu() {
   const t = useT();
@@ -202,6 +247,7 @@ export function SettingsMenu() {
               <div className="my-1 border-t border-line" />
               <div className="px-3 pt-1 pb-2 text-[11px] text-faint">
                 pi-web-chat v{__APP_VERSION__}
+                <ViewportDiagnostics />
               </div>
             </Menu.Popup>
           </Menu.Positioner>
