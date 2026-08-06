@@ -95,11 +95,15 @@ export function initViewportLock() {
       lastAppHeight = String(height);
     }
     root.classList.toggle("ua-keyboard", keyboardOpen);
-    // Note: no window.scrollTo() here. With body position:fixed the document
-    // can't scroll, and calling scrollTo on iOS (especially while the keyboard
-    // animation is fighting for the viewport) is what makes the whole page
-    // drift upward. The fixed body + overflow:hidden already keeps the layout
-    // in place.
+    if (keyboardOpen) {
+      // iOS scrolls the visual viewport when the keyboard opens, making the
+      // page appear to jump to the top. Reset it via visualViewport.scrollTo
+      // (iOS 15+; missing elsewhere → safely skipped). window.scrollTo must
+      // NOT be used: with body position:fixed it drifts the whole page.
+      (window.visualViewport as VisualViewport & {
+        scrollTo?: (x: number, y: number) => void;
+      })?.scrollTo?.(0, 0);
+    }
   };
 
   const applyAll = (forceSafeAreas = false) => {
