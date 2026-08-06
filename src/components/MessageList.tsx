@@ -4,9 +4,8 @@ import type { ActiveTool } from "../lib/chat";
 import { buildEditDiffFromArgs, isUnifiedDiff } from "../lib/diff";
 import { useT } from "../lib/i18n";
 import { DiffView } from "./DiffView";
-import { escapeUnclosedMarkdown, Markdown } from "./Markdown";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Markdown } from "./Markdown";
+import { Streamdown } from "streamdown";
 
 /** todo 工具: 状态 → 표시 색/심볼 */
 function TodoStatusIcon({ status }: { status: string }) {
@@ -241,29 +240,10 @@ function Thinking({ text, defaultOpen = true }: { text: string; defaultOpen?: bo
       className="my-1.5 text-sm"
     >
       <summary className="cursor-pointer text-xs text-faint select-none">thinking…</summary>
-      <div className="mt-1 min-w-0 break-words border-l-2 border-line pl-3 text-muted italic">
-        {/* Render markdown inside thinking (bold/code/emphasis) too; soften
-            unclosed markers while streaming. */}
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            p: ({ children }) => <p className="my-1">{children}</p>,
-            ul: ({ children }) => <ul className="my-1 list-disc pl-5">{children}</ul>,
-            ol: ({ children }) => <ol className="my-1 list-decimal pl-5">{children}</ol>,
-            pre: ({ children }) => (
-              <pre className="my-1 overflow-x-auto rounded-md bg-black/20 px-2 py-1 font-mono text-[13px] not-italic">
-                {children}
-              </pre>
-            ),
-            code: ({ children }) => (
-              <code className="rounded bg-black/15 px-1 py-0.5 font-mono text-[13px] not-italic">
-                {children}
-              </code>
-            ),
-          }}
-        >
-          {escapeUnclosedMarkdown(text)}
-        </ReactMarkdown>
+      <div className="mt-1 min-w-0 break-words border-l-2 border-line pl-3 text-muted italic [&_pre]:not-italic [&_code]:not-italic">
+        {/* Thinking renders markdown too (bold/code/emphasis); Streamdown
+            handles incomplete syntax while streaming. */}
+        <Streamdown mode="streaming">{text}</Streamdown>
       </div>
     </details>
   );

@@ -38,23 +38,3 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
     </div>
   );
 });
-
-/**
- * Escape unclosed `**` and backtick markers so partially-streamed text doesn't
- * show raw syntax residue. Only needed for the lightweight thinking renderer
- * (which stays on react-markdown); the main message renderer uses Streamdown.
- */
-export function escapeUnclosedMarkdown(text: string): string {
-  let out = text;
-  const stars = [...out.matchAll(/\*\*/g)];
-  if (stars.length % 2 === 1) {
-    const last = stars[stars.length - 1]!;
-    out = out.slice(0, last.index) + "\\*\\*" + out.slice(last.index + 2);
-  }
-  const ticks = [...out.matchAll(/`/g)];
-  if (ticks.length % 2 === 1) {
-    const last = ticks[ticks.length - 1]!;
-    out = out.slice(0, last.index) + "\\`" + out.slice(last.index + 1);
-  }
-  return out;
-}
