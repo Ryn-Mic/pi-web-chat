@@ -1,6 +1,6 @@
 import { Dialog } from "@base-ui-components/react/dialog";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { UISessionInfo } from "../../shared/protocol";
 import { useInvalidateSessions, useSessions } from "../lib/api";
 import { chatClient, useChat } from "../lib/chat";
@@ -150,6 +150,18 @@ function SessionsPanel({
     chatClient.requestComposerFocus();
   };
 
+  // 세션을 프로젝트별로 그룹핑 (서버 정렬: 최신순, 그룹 순서도 가장 최근 세션 기준으로 유지됨)
+  const groups = useMemo(() => {
+    const map = new Map<string, UISessionInfo[]>();
+    for (const s of sessions ?? []) {
+      const key = s.project || t("noProject");
+      const list = map.get(key);
+      if (list) list.push(s);
+      else map.set(key, [s]);
+    }
+    return Array.from(map.entries());
+  }, [sessions, t]);
+
   return (
     <>
       <div
@@ -189,21 +201,27 @@ function SessionsPanel({
         </button>
       </div>
 
-      <div className="px-4 pt-3 pb-1 text-[11px] font-medium tracking-wide text-faint uppercase">
-        {t("sessions")}
-      </div>
-
       <div className="thin-scroll flex-1 overflow-y-auto px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
-        {(sessions ?? []).map((s) => (
-          <SessionRow
-            key={s.path}
-            session={s}
-            active={s.path === currentSessionFile}
-            onSelect={() => {
-              void navigate({ to: "/s/$sessionId", params: { sessionId: s.id } });
-              onSelectSession?.();
-            }}
-          />
+        {groups.map(([project, list]) => (
+          <div key={project} className="mb-1">
+            <div
+              className="truncate px-2.5 pt-3 pb-1 text-[11px] font-medium tracking-wide text-faint uppercase"
+              title={project}
+            >
+              {project}
+            </div>
+            {list.map((s) => (
+              <SessionRow
+                key={s.path}
+                session={s}
+                active={s.path === currentSessionFile}
+                onSelect={() => {
+                  void navigate({ to: "/s/$sessionId", params: { sessionId: s.id } });
+                  onSelectSession?.();
+                }}
+              />
+            ))}
+          </div>
         ))}
         {sessions && sessions.length === 0 && (
           <div className="px-4 py-8 text-center text-sm text-faint">{t("noSavedSessions")}</div>

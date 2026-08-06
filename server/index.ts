@@ -115,8 +115,20 @@ function sessionIdOf(file?: string): string {
 }
 
 async function resolveSessionPath(id: string): Promise<string | undefined> {
-  const sessions = await SessionManager.list(AGENT_CWD);
+  const sessions = await SessionManager.listAll();
   return sessions.find((s) => sessionIdOf(s.path) === id)?.path;
+}
+
+/**
+ * 세션이 속한 프로젝트 디렉토리 (표시용): 세션 헤더의 cwd 우선,
+ * 없으면 sessions/ 아래 부모 디렉토리 이름으로 폴백.
+ */
+function projectOf(s: { cwd?: string; path: string }): string {
+  const cwd = s.cwd;
+  if (cwd) {
+    return cwd === HOME ? "~" : cwd.startsWith(HOME + "/") ? "~" + cwd.slice(HOME.length) : cwd;
+  }
+  return basename(dirname(s.path));
 }
 
 function broadcastTo(entry: SessionEntry, event: ServerEvent) {
@@ -453,13 +465,14 @@ const httpServer = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/sessions") {
-      const sessions = await SessionManager.list(AGENT_CWD);
+      const sessions = await SessionManager.listAll();
       const list: UISessionInfo[] = sessions
         .sort((a, b) => b.modified.getTime() - a.modified.getTime())
-        .slice(0, 100)
+        .slice(0, 300)
         .map((s) => ({
           id: sessionIdOf(s.path),
           path: s.path,
+          project: projectOf(s),
           name: s.name,
           firstMessage: s.firstMessage.slice(0, 200),
           modified: s.modified.toISOString(),

@@ -44,6 +44,8 @@ export interface UISessionInfo {
   /** URL(/s/:id)에 쓰는 세션 식별자 */
   id: string;
   path: string;
+  /** 세션이 속한 프로젝트 디렉토리 (표시용, ~ 축약) */
+  project: string;
   name?: string;
   firstMessage: string;
   modified: string;

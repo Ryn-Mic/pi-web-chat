@@ -18,6 +18,7 @@ export const ja: Messages = {
   emptySession: "(空のセッション)",
   messageCount: "メッセージ {count}",
   noSavedSessions: "保存されたセッションはありません",
+  noProject: "プロジェクトなし",
   sessionList: "セッション一覧",
   pinSidebar: "サイドバーを固定",
   unpinSidebar: "サイドバーの固定を解除",

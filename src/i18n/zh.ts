@@ -19,6 +19,7 @@ export const zh: Messages = {
   emptySession: "（空会话）",
   messageCount: "{count} 条消息",
   noSavedSessions: "没有已保存的会话",
+  noProject: "无项目",
   sessionList: "会话列表",
   pinSidebar: "固定侧边栏",
   unpinSidebar: "取消固定侧边栏",

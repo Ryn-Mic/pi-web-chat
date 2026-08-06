@@ -18,6 +18,7 @@ export const ko: Messages = {
   emptySession: "(빈 세션)",
   messageCount: "메시지 {count}",
   noSavedSessions: "저장된 세션 없음",
+  noProject: "프로젝트 없음",
   sessionList: "세션 목록",
   pinSidebar: "사이드바 고정",
   unpinSidebar: "사이드바 고정 해제",

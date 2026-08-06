@@ -18,6 +18,7 @@ export type Messages = {
   emptySession: string;
   messageCount: string;
   noSavedSessions: string;
+  noProject: string;
   sessionList: string;
   pinSidebar: string;
   unpinSidebar: string;
@@ -111,6 +112,7 @@ export const en: Messages = {
   emptySession: "(empty session)",
   messageCount: "{count} messages",
   noSavedSessions: "No saved sessions",
+  noProject: "No project",
   sessionList: "Session list",
   pinSidebar: "Pin sidebar",
   unpinSidebar: "Unpin sidebar",
