@@ -7,9 +7,11 @@
  * - When the keyboard opens, iOS scrolls the whole page up (composer flies
  *   to the top, header disappears) unless the body scroll is locked.
  *
- * Strategy: lock body scrolling and size #root to visualViewport.height so
- * the composer always sits just above the keyboard, with capped safe areas.
- * #root itself is NOT position:fixed (that can truncate on iOS 26+).
+ * Strategy: lock body scrolling and follow the visual viewport: body is
+ * positioned at top:var(--app-top) with height:var(--app-height) so it fills
+ * the visual viewport even when the keyboard scrolls it (Android offsetTop>0)
+ * or iOS auto-scrolls it. #root fills the body. #root itself is NOT
+ * position:fixed (that can truncate on iOS 26+).
  *
  * Performance notes (measured with Playwright; the original code janked on
  * iOS because every visualViewport scroll/resize fired DOM writes → reflows):
@@ -73,14 +75,16 @@ export function initViewportLock() {
   };
 
   let lastAppHeight = "";
+  let lastAppTop = "";
   const applyHeight = () => {
     const vv = window.visualViewport;
     const inner = window.innerHeight;
     const vvHeight = Math.round(vv?.height ?? inner);
     const offsetTop = Math.round(vv?.offsetTop ?? 0);
 
-    // Keyboard (or other overlay) shrank the visible viewport.
-    const keyboardOpen = vvHeight < inner - 80 || offsetTop > 0;
+    // Keyboard (or other overlay) shrank the visible viewport. The offsetTop
+    // threshold tolerates tiny scroll jitter.
+    const keyboardOpen = vvHeight < inner - 80 || offsetTop > 4;
 
     // When the keyboard is closed, size to innerHeight: in iOS standalone
     // visualViewport.height can under-report the bottom safe area (measured
@@ -93,6 +97,13 @@ export function initViewportLock() {
     if (height !== Number(lastAppHeight)) {
       root.style.setProperty("--app-height", `${height}px`);
       lastAppHeight = String(height);
+    }
+    // --app-top follows the visual viewport offset. On Android the keyboard
+    // scrolls the visual viewport (offsetTop>0); without this the app stays
+    // pinned to the layout viewport top and the composer ends up mid-screen.
+    if (offsetTop !== Number(lastAppTop)) {
+      root.style.setProperty("--app-top", `${offsetTop}px`);
+      lastAppTop = String(offsetTop);
     }
     root.classList.toggle("ua-keyboard", keyboardOpen);
     if (keyboardOpen) {
