@@ -3,11 +3,38 @@ import type { UIImageAttachment } from "../../shared/protocol";
 import { chatClient, useChat } from "../lib/chat";
 import { useComposerOpacity } from "../lib/composer";
 import { useT } from "../lib/i18n";
+import { useTheme } from "../lib/theme";
 import { ModelMenu } from "./ModelMenu";
 import { ThinkingMenu } from "./ThinkingMenu";
 
 interface PendingImage extends UIImageAttachment {
   previewUrl: string;
+}
+
+/**
+ * Blend the card color toward the canvas color by `alpha` (0..1) using JS.
+ * color-mix() with CSS variables is broken in Safari < 17.2, so this avoids it
+ * entirely — works in every browser.
+ */
+function blendCardOverCanvas(alpha: number): string | null {
+  try {
+    const cs = getComputedStyle(document.documentElement);
+    const card = cs.getPropertyValue("--c-card").trim();
+    const canvas = cs.getPropertyValue("--c-canvas").trim();
+    const parse = (c: string): [number, number, number] | null => {
+      const m = c.match(/^#([0-9a-f]{6})$/i);
+      if (!m) return null;
+      const n = parseInt(m[1]!, 16);
+      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    };
+    const a = parse(card);
+    const b = parse(canvas);
+    if (!a || !b) return null;
+    const mix = (i: number) => Math.round(a[i]! * alpha + b[i]! * (1 - alpha));
+    return `rgb(${mix(0)}, ${mix(1)}, ${mix(2)})`;
+  } catch {
+    return null;
+  }
 }
 
 /** 12345 → "12.3k", 1234567 → "1.2M" */
@@ -74,6 +101,17 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { injectText, focusToken, snapshot } = useChat();
   const composerOpacity = useComposerOpacity();
+  const theme = useTheme();
+  // Compute the blended background in JS (color-mix + CSS vars is unreliable
+  // in older Safari). Recompute on opacity or theme change.
+  const [composerBg, setComposerBg] = useState<string | null>(null);
+  useEffect(() => {
+    if (composerOpacity >= 1) {
+      setComposerBg(null);
+      return;
+    }
+    setComposerBg(blendCardOverCanvas(composerOpacity));
+  }, [composerOpacity, theme]);
 
   // Inject the forked message text into the composer
   useEffect(() => {
@@ -111,16 +149,7 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
     <div className="composer-bar shrink-0 bg-canvas md:rounded-b-2xl">
       <div
         className="composer-panel mx-auto max-w-3xl rounded-2xl border border-line bg-card px-2 pt-2 pb-2 shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-colors focus-within:border-faint"
-        style={
-          composerOpacity < 1
-            ? // Blend --c-card over --c-canvas with a literal percentage so it
-              // works even in browsers that don't support var() as a color-mix
-              // percentage (e.g. older iOS Safari).
-              ({
-                backgroundColor: `color-mix(in srgb, var(--c-card) ${Math.round(composerOpacity * 100)}%, var(--c-canvas))`,
-              } as React.CSSProperties)
-            : undefined
-        }
+        style={composerBg ? ({ backgroundColor: composerBg } as React.CSSProperties) : undefined}
       >
         {images.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2 px-1">
