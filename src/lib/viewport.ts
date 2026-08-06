@@ -89,10 +89,11 @@ export function initViewportLock() {
       lastAppHeight = String(height);
     }
     root.classList.toggle("ua-keyboard", keyboardOpen);
-    if (keyboardOpen && window.scrollY > 0) {
-      // Counteract iOS auto-scrolling the locked page.
-      window.scrollTo(0, 0);
-    }
+    // Note: no window.scrollTo() here. With body position:fixed the document
+    // can't scroll, and calling scrollTo on iOS (especially while the keyboard
+    // animation is fighting for the viewport) is what makes the whole page
+    // drift upward. The fixed body + overflow:hidden already keeps the layout
+    // in place.
   };
 
   const applyAll = (forceSafeAreas = false) => {
@@ -116,6 +117,19 @@ export function initViewportLock() {
 
   if (document.body) applyAll();
   else document.addEventListener("DOMContentLoaded", () => applyAll(), { once: true });
+
+  // iOS standalone can report a wrong viewport height right at load (before
+  // the layout viewport settles), with no resize event following. Re-measure
+  // once after load — with the change-detection guards this costs nothing when
+  // the value is already right.
+  window.addEventListener(
+    "load",
+    () => {
+      requestAnimationFrame(() => requestAnimationFrame(() => applyAll()));
+      setTimeout(applyAll, 300);
+    },
+    { once: true },
+  );
 
   // Only resize matters for height. visualViewport "scroll" fires every frame
   // while scrolling and only changes offsetTop (which nothing reads) — not
