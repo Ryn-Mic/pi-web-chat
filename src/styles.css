@@ -103,12 +103,9 @@ body {
 }
 
 #root {
-  /* No keyboard: 100% of the fixed body (layout viewport) — reliable in iOS
-     standalone. viewport.ts overrides --app-height only while the keyboard is
-     open. */
-  height: 100%;
-  height: var(--app-height, 100%);
-  max-height: var(--app-height, 100%);
+  height: 100dvh;
+  height: var(--app-height, 100dvh);
+  max-height: var(--app-height, 100dvh);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -170,15 +167,17 @@ body {
 }
 
 /*
- * Bottom bar: floor padding + capped home-indicator inset (--safe-bottom is
- * measured by viewport.ts with a 34px cap, avoiding iOS env() over-report).
- * When the keyboard is open there is no home indicator, so drop it entirely.
+ * Bottom bar: floor padding + capped home-indicator inset. When the keyboard
+ * is open there is no home indicator, so drop the safe-area entirely.
  */
 .composer-bar {
   padding-top: var(--composer-pad-top);
   padding-left: var(--composer-pad-x);
   padding-right: var(--composer-pad-x);
-  padding-bottom: max(0.5rem, var(--safe-bottom, 0px));
+  padding-bottom: max(
+    0.5rem,
+    min(var(--composer-safe-bottom-max), env(safe-area-inset-bottom, 0px))
+  );
 }
 html.ua-keyboard .composer-bar {
   padding-bottom: 0.5rem;
