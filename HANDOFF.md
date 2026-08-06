@@ -163,6 +163,19 @@ dist/public/**      # 프론트 + PWA sw/manifest
   (상태 파일이 /tmp/pwc-verify/.pi/web-chat/ 에 생성됨)
 - 서버 동작 확인은 `/api/health` 와 같은 읽기 전용 엔드포인트로만 한다.
 
+### 핫 리로드 규칙 (Hot-reload rules)
+
+- **dev 모드** (`npm run dev`): vite HMR 로 프론트 실시간 반영, tsx watch 가
+  서버 자동 재시작. 추가 작업 불필요.
+- **프로덕션 daemon** (`pi --web`):
+  - 프론트 변경 → `npm run build` 로 `dist/public` 재생성. 브라우저/PWA 는
+    이전 bundle 을 캐시하므로 새로고침(또는 "업데이트 사용 가능" 배너 Reload)
+    필요.
+  - 서버 변경 → `dist/index.js` 재빌드 후 **반드시 daemon 재시작**
+    (`pi --web restart`)해야 반영됨.
+- **작업 완료 후**: 최적화/수정이 끝나면 사용자에게 재시작 또는 핫 리로드가
+  필요한지 **먼저 물어보고**, 승인 전에는 메인 daemon 을 재시작하지 않는다.
+
 ### 설정 메뉴 확장 가이드
 
 저빈도 액션은 `SettingsMenu` 항목으로:
