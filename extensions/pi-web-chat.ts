@@ -98,6 +98,49 @@ function describeServer(port: string, host: string, pid: number): string {
   return `${urlFor(port, host)}${bindNote} (pid ${pid})`;
 }
 
+/**
+ * Find the PID listening on the given port (best effort; null when unavailable).
+ * Uses lsof (macOS/Linux). Falls back to null on other platforms or errors.
+ */
+function pidOnPort(port: string): number | null {
+  try {
+    const out = execFileSync("lsof", ["-tiTCP:" + port, "-sTCP:LISTEN"], {
+      encoding: "utf8",
+      timeout: 2_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const pid = Number(out.trim().split(/\s+/)[0]);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a PID's command line marks it as one of our server processes. */
+function isOurServerProcess(pid: number): boolean {
+  try {
+    const out = execFileSync("ps", ["-o", "command=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 2_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return /pi-web-chat|dist[\/\\]index\.js/.test(out);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * An orphaned server (its pid file was lost/stale) may still hold the port.
+ * Rebuild the state files so the daemon can be managed again (stop/restart).
+ */
+function adoptOrphanedServer(port: string, host: string, pid: number): void {
+  mkdirSync(STATE_DIR, { recursive: true });
+  writeFileSync(PID_FILE, `${pid}\n`, "utf8");
+  writeFileSync(PORT_FILE, `${port}\n`, "utf8");
+  writeFileSync(HOST_FILE, `${host}\n`, "utf8");
+}
+
 function startServer(port: string, host: string, token?: string): StartResult {
   if (!existsSync(SERVER)) {
     return {
@@ -118,12 +161,19 @@ function startServer(port: string, host: string, token?: string): StartResult {
     };
   }
 
-  // If the port is already open but there's no pid file, another server/
-  // process holds it. Spawning would just die with EADDRINUSE, so stop here.
+  // Port open but no (valid) pid file. If the listener is our own server — an
+  // orphan whose state files were lost — adopt it instead of failing.
   if (isPortListening(port, host)) {
+    const occupant = pidOnPort(port);
+    if (occupant !== null && isOurServerProcess(occupant)) {
+      adoptOrphanedServer(port, host, occupant);
+      return { ok: true, port, host, already: true, pid: occupant };
+    }
     return {
       ok: false,
-      error: `port ${port} is already in use by another process (not pi-web-chat)`,
+      error: `port ${port} is already in use by another process${
+        occupant !== null ? ` (pid ${occupant})` : ""
+      } — not pi-web-chat`,
     };
   }
 
@@ -211,7 +261,16 @@ function stopServer(opts: { waitMs?: number } = {}): {
   stopped: boolean;
   pid?: number;
 } {
-  const pid = readPid();
+  let pid = readPid();
+  // No pid file: our server may still hold the port as an orphan (lost state
+  // files). Find and stop it too.
+  if (pid === null) {
+    const occupant = pidOnPort(readPort());
+    if (occupant !== null && isOurServerProcess(occupant)) {
+      pid = occupant;
+    }
+  }
+
   if (pid === null) {
     clearStateFiles();
     return { stopped: false };
