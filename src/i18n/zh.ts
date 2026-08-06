@@ -16,6 +16,12 @@ export const zh: Messages = {
 
   sessions: "会话",
   newSession: "新建会话",
+  resumeSession: "恢复上次会话",
+  newSessionInProject: "在此项目中新建会话",
+  renameSession: "重命名会话",
+  deleteSession: "删除会话",
+  confirmDelete: "确认删除",
+  sessionNamePlaceholder: "会话名称…",
   emptySession: "（空会话）",
   messageCount: "{count} 条消息",
   noSavedSessions: "没有已保存的会话",
@@ -84,7 +90,20 @@ export const zh: Messages = {
   optional: "可选",
 
   emptyPrompt: "有什么可以帮您？",
+  messageAnchors: "跳转到消息",
+  updateAvailable: "有新版本可用",
+  reload: "刷新",
+  dismiss: "关闭",
   attachedImage: "附件图片",
   imagePlaceholder: "[图片]",
   toolRunning: "正在运行 {name}…",
+
+  login: "登录",
+  loginFailed: "令牌或 2FA 验证码不正确。",
+  loggingIn: "登录中…",
+  loginHint: "这是私有 pi 智能体，请输入访问令牌以继续。",
+  accessToken: "访问令牌",
+  accessTokenPlaceholder: "粘贴访问令牌",
+  twoFactorCode: "2FA 验证码（6 位）",
+  logout: "退出登录",
 };

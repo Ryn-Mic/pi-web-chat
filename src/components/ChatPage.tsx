@@ -3,14 +3,13 @@ import { useEffect } from "react";
 import { chatClient, useChat } from "../lib/chat";
 import { requestOpenSessionsDrawer } from "../lib/drawer";
 import { useT } from "../lib/i18n";
+import { consumeSuppressResume, getLastSessionId, useResumeEnabled } from "../lib/resume";
 import { useSidebarPinned } from "../lib/sidebar";
 import { useLeftEdgeSwipe } from "../lib/useEdgeSwipe";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
-import { ModelMenu } from "./ModelMenu";
 import { SessionsDrawer, SessionsSidebar } from "./SessionsDrawer";
 import { SettingsMenu } from "./SettingsMenu";
-import { ThinkingMenu } from "./ThinkingMenu";
 
 function connectionDotClass(connection: "connecting" | "connected" | "disconnected"): string {
   switch (connection) {
@@ -39,18 +38,34 @@ function connectionLabel(
 
 export function ChatPage() {
   const t = useT();
-  const { connection, sessionId, snapshot, streamText, streamThinking, activeTools } = useChat();
+  const { connection, sessionId, snapshot, streamText, streamThinking, activeTools, updateAvailable, lastError } =
+    useChat();
   const isStreaming = snapshot?.isStreaming ?? false;
   const sidebarPinned = useSidebarPinned();
   const showConnectingOverlay = connection !== "connected" && !snapshot;
   const params = useParams({ strict: false }) as { sessionId?: string };
   const routeSessionId = params.sessionId ?? null;
   const navigate = useNavigate();
+  const resumeEnabled = useResumeEnabled();
 
   // URL → 연결 ("/"는 아직 id 없는 초안, 첫 입력 때 서버가 session_bound)
+  // "마지막 세션 복원"이 켜져 있고 / (초안) 진입 시 이전 세션으로 이동.
+  // 단, "새 세션" 버튼으로 명시적으로 연 경우는 suppressResumeOnce()가
+  // 리다이렉트를 막아 진짜 새 초안으로 간다.
   useEffect(() => {
-    chatClient.connect(routeSessionId);
-  }, [routeSessionId]);
+    if (routeSessionId) {
+      chatClient.connect(routeSessionId);
+      return;
+    }
+    if (resumeEnabled && !consumeSuppressResume()) {
+      const last = getLastSessionId();
+      if (last) {
+        void navigate({ to: "/s/$sessionId", params: { sessionId: last }, replace: true });
+        return;
+      }
+    }
+    chatClient.connect(null);
+  }, [routeSessionId, resumeEnabled, navigate]);
 
   // 연결 → URL (첫 메시지 / 포크 등으로 세션이 공개되면 주소 교체).
   // 렌더 시점 값이 아닌 현재 상태를 읽어 "/"로 갔다가 즉시 되돌아오는 경합을 막는다.
@@ -88,11 +103,6 @@ export function ChatPage() {
             />
           </div>
           <div className="flex-1" />
-          <ThinkingMenu
-            current={snapshot?.thinkingLevel ?? "off"}
-            levels={snapshot?.thinkingLevels ?? ["off"]}
-          />
-          <ModelMenu current={snapshot?.model ?? null} />
           <SettingsMenu />
         </header>
 
@@ -115,6 +125,42 @@ export function ChatPage() {
               activeTools={activeTools}
               isStreaming={isStreaming}
             />
+            {updateAvailable && (
+              <div className="flex shrink-0 items-center justify-center gap-3 border-t border-line bg-card px-4 py-2">
+                <span className="text-xs text-muted">{t("updateAvailable")}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    // PWA 캐시를 비운 뒤 새로고침 → 최신 번들 보장
+                    const reload = () => window.location.reload();
+                    if ("caches" in window) {
+                      caches
+                        .keys()
+                        .then((keys) => Promise.all(keys.map((k) => caches.delete(k))))
+                        .catch(() => {})
+                        .finally(reload);
+                    } else {
+                      reload();
+                    }
+                  }}
+                  className="rounded-lg bg-accent px-3 py-1 text-xs font-medium text-accent-ink transition-opacity hover:opacity-90"
+                >
+                  {t("reload")}
+                </button>
+              </div>
+            )}
+            {lastError && (
+              <div className="flex shrink-0 items-center gap-3 border-t border-red-200 bg-red-50 px-4 py-2 text-sm text-red-600 dark:border-red-900 dark:bg-red-950/50 dark:text-red-400">
+                <span className="min-w-0 flex-1 break-words">{lastError}</span>
+                <button
+                  type="button"
+                  onClick={() => chatClient.clearError()}
+                  className="shrink-0 rounded-lg border border-current px-2 py-0.5 text-xs font-medium transition-opacity hover:opacity-80"
+                >
+                  {t("dismiss")}
+                </button>
+              </div>
+            )}
             <Composer isStreaming={isStreaming} />
           </>
         )}

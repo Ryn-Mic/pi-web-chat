@@ -7,9 +7,15 @@ import type {
   UIModel,
   UISessionInfo,
 } from "../../shared/protocol";
+import { authHeaders, setAuthStatus } from "./auth";
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetch(url);
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, { ...init, headers: { ...authHeaders(), ...init?.headers } });
+  if (res.status === 401) {
+    // 세션 만료/무효 → 로그인 화면으로
+    setAuthStatus("unauthenticated");
+    throw new Error(`${url}: 401 unauthorized`);
+  }
   if (!res.ok) throw new Error(`${url}: ${res.status}`);
   return res.json() as Promise<T>;
 }
@@ -30,6 +36,20 @@ export function useSessions(enabled = true) {
 export function useInvalidateSessions() {
   const qc = useQueryClient();
   return () => qc.invalidateQueries({ queryKey: SESSIONS_QUERY_KEY });
+}
+
+/** 세션 삭제 (파일 제거) */
+export async function deleteSession(id: string): Promise<void> {
+  await fetchJson<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+/** 세션 표시 이름 변경 (빈 문자열이면 해제) */
+export async function renameSession(id: string, name: string): Promise<void> {
+  await fetchJson<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(id)}/name`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
 }
 
 export function useForkPoints(sessionId: string | null, enabled = true) {
@@ -77,9 +97,10 @@ export async function saveCustomModels(
 ): Promise<UICustomModelsResponse> {
   const res = await fetch("/api/custom-models", {
     method: "PUT",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...authHeaders() },
     body: JSON.stringify({ providers }),
   });
+  if (res.status === 401) setAuthStatus("unauthenticated");
   const json = (await res.json()) as UICustomModelsResponse & { error?: string };
   if (!res.ok) throw new Error(json.error ?? `save failed: ${res.status}`);
   return json;

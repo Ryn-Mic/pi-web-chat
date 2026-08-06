@@ -2,6 +2,15 @@
 @plugin "@tailwindcss/typography";
 @import "highlight.js/styles/github-dark.css";
 
+/* JetBrainsMono Nerd Font (Medium, 로컬에서 woff2로 변환해 패키징) */
+@font-face {
+  font-family: "JetBrainsMono Nerd Font";
+  src: url("/fonts/JetBrainsMonoNerdFont-Medium.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* class 기반 다크모드 (html.dark) */
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -27,6 +36,9 @@
   --font-sans:
     ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
     "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", sans-serif;
+  --font-mono:
+    "JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
 }
 
 :root {
@@ -114,6 +126,22 @@ body {
   display: none;
 }
 
+/* 사용자 메시지 앵커 점프 하이라이트 (1.6s 후 페이드) */
+@keyframes anchor-flash {
+  0% {
+    outline-color: var(--c-accent);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+.anchor-flash {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+  border-radius: 0.75rem;
+  animation: anchor-flash 1.6s ease-out forwards;
+}
+
 /* 얇은 스크롤바 (데스크톱 앱 느낌) */
 .thin-scroll {
   scrollbar-width: thin;
@@ -165,13 +193,16 @@ html.ua-keyboard .composer-bar {
   --tw-prose-code: var(--c-ink);
   --tw-prose-th-borders: var(--c-line);
   --tw-prose-td-borders: var(--c-line);
+  /* 긴 URL/경로도 넘치지 않게 (pre는 아래에서 자체 스크롤) */
+  overflow-wrap: break-word;
+  min-width: 0;
 }
 
 .prose pre {
-  @apply rounded-xl border border-neutral-800 bg-[#0d1117] text-[13px];
+  @apply overflow-x-auto rounded-xl border border-neutral-800 bg-[#0d1117] font-mono text-[13px];
 }
 
 .prose :not(pre) > code {
   background-color: var(--c-bubble);
-  @apply rounded px-1.5 py-0.5 text-[13px] font-normal before:content-none after:content-none;
+  @apply rounded px-1.5 py-0.5 font-mono text-[13px] font-normal before:content-none after:content-none;
 }

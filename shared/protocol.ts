@@ -9,7 +9,12 @@ export type UIContentBlock =
       name: string;
       args: unknown;
       /** 페어링된 tool result (있으면) */
-      result?: { text: string; isError: boolean };
+      result?: {
+        text: string;
+        isError: boolean;
+        /** edit 등 일부 도구가 돌려주는 실제 diff (details.diff) */
+        diff?: string;
+      };
     }
   | { type: "image"; dataUrl?: string };
 
@@ -28,6 +33,14 @@ export interface UIModel {
 
 export type UIThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+/** 세션 컨텍스트 사용량 (SDK getContextUsage) */
+export interface UIContextUsage {
+  /** 컨텍스트에 있는 토큰 수 (컴팩션 직후 등 알 수 없으면 null) */
+  tokens: number | null;
+  contextWindow: number;
+  percent: number | null;
+}
+
 export interface UISnapshot {
   messages: UIMessage[];
   isStreaming: boolean;
@@ -38,6 +51,8 @@ export interface UISnapshot {
   sessionFile?: string;
   /** URL(/s/:id)에 쓰는 세션 식별자 */
   sessionId?: string;
+  /** 컨텍스트 사용량 (미지원 모델이면 null) */
+  context?: UIContextUsage | null;
 }
 
 export interface UISessionInfo {
@@ -126,6 +141,11 @@ export interface UIImageAttachment {
 
 export type ServerEvent =
   | { type: "snapshot"; snapshot: UISnapshot }
+  | {
+      type: "hello";
+      /** 서버 빌드 버전 — 클라이언트 __APP_VERSION__ 과 다르면 새로고침 유도 */
+      version: string;
+    }
   /**
    * 이 연결이 URL에 공개된 세션.
    * 기존 /s/:id 접속 시 즉시, `/` 초안은 첫 prompt 때 전송 → 클라이언트는 /s/:id 로 교체.

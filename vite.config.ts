@@ -46,6 +46,7 @@ export default defineConfig({
       workbox: {
         // API/WS는 캐시하지 않음 (빌드 에셋만 precache)
         navigateFallbackDenylist: [/^\/api\//, /^\/ws/],
+        globPatterns: ["**/*.{js,css,html,woff2,svg,png,webmanifest}"],
         // App shell: prefer network so iOS PWAs pick up new deploys
         runtimeCaching: [
           {

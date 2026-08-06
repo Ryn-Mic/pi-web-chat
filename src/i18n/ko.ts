@@ -15,6 +15,12 @@ export const ko: Messages = {
 
   sessions: "세션",
   newSession: "새 세션",
+  resumeSession: "마지막 세션 이어서 열기",
+  newSessionInProject: "이 프로젝트에 새 세션",
+  renameSession: "세션 이름 변경",
+  deleteSession: "세션 삭제",
+  confirmDelete: "삭제 확인",
+  sessionNamePlaceholder: "세션 이름…",
   emptySession: "(빈 세션)",
   messageCount: "메시지 {count}",
   noSavedSessions: "저장된 세션 없음",
@@ -84,7 +90,20 @@ export const ko: Messages = {
   optional: "선택",
 
   emptyPrompt: "무엇을 도와드릴까요?",
+  messageAnchors: "메시지로 이동",
+  updateAvailable: "새 버전이 있습니다",
+  reload: "새로고침",
+  dismiss: "닫기",
   attachedImage: "첨부 이미지",
   imagePlaceholder: "[이미지]",
   toolRunning: "{name} 실행 중…",
+
+  login: "로그인",
+  loginFailed: "토큰 또는 2FA 코드가 올바르지 않습니다.",
+  loggingIn: "로그인 중…",
+  loginHint: "개인 pi 에이전트입니다. 액세스 토큰을 입력해 주세요.",
+  accessToken: "액세스 토큰",
+  accessTokenPlaceholder: "액세스 토큰 붙여넣기",
+  twoFactorCode: "2FA 코드 (6자리)",
+  logout: "로그아웃",
 };

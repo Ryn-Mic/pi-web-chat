@@ -32,9 +32,13 @@ pi --web restart             # stop + start (기존 port/host 유지)
 pi --web 3200                # 포트 지정
 pi --web --lan               # bind 0.0.0.0 (LAN)
 pi --web --host 0.0.0.0      # bind 주소 명시
+pi --web --token <값>         # 액세스 토큰 지정 (기본: 자동 생성)
 ```
 
-- 인증: pi CLI와 동일한 `~/.pi/agent/auth.json`. **pi를 먼저 설정해 둘 것**
+- 인증: **토큰 + 2FA(TOTP)**. 첫 기동 시 `~/.pi/web-chat/token`(토큰, 재시작 유지)과
+  `~/.pi/web-chat/2fa.secret`(TOTP 시크릿) 자동 생성. `pi --web rftoken`으로 토큰 교체(즉시 적용).
+  2FA 코드는 서버 로그에 출력하지 않음 — 인증 앱으로 QR 등록 후 사용. `PI_WEB_2FA=off` 로 2FA 끔.
+  LLM API 인증은 pi CLI와 동일한 `~/.pi/agent/auth.json`. **pi를 먼저 설정해 둘 것**
 - `PI_WEB_CWD`: 에이전트 cwd (기본 `~/.pi/web-chat`, 없으면 자동 생성)
 - `PORT`: 서버 포트 (기본 3141)
 - `HOST`: bind 주소 (기본 `127.0.0.1`, LAN 공개 시만 `0.0.0.0`). CLI: `--lan` / `--host <addr>`
@@ -128,8 +132,14 @@ dist/public/**      # 프론트 + PWA sw/manifest
 - [x] 기본 chat cwd = `~/.pi/web-chat`
 
 **UI**
-- [x] 설정 메뉴(톱니): 테마 3단, fork, 확장 목록
+- [x] 설정 메뉴(톱니): 테마 3단, fork, 확장 목록, 로그아웃
 - [x] 세션 드로어 + 데스크톱 사이드바 pin
+- [x] 프로젝트 그룹: 마지막 디렉토리명 표시(대문자 제거), 접기/펼치기, 그룹별 + 새 세션
+- [x] 세션 삭제(확인 후) / 이름 변경(인라인 입력)
+- [x] 모델/thinking 선택 → 컴포저 하단 행으로 이동
+- [x] Markdown H1~H6 축소, `✻ Turn took` 메타 줄 흐리게 표시, ANSI 코드 서버에서 제거
+- [x] JetBrainsMono Nerd Font webfont 번들 (@font-face, 전체 UI)
+- [x] 인증: 액세스 토큰 + 2FA(TOTP, 기본 켜짐) — 로그인 페이지, API/WS 전부 검증
 - [x] 모델 검색
 - [x] Extensions 다이얼로그 (로드된 패키지/툴/커맨드/플래그)
 - [x] 마크다운·thinking·이미지·fork·PWA
@@ -155,7 +165,7 @@ dist/public/**      # 프론트 + PWA sw/manifest
 ### P1
 
 - [ ] **에러 토스트 UI**: 서버 `error` → 현재 `console.error` only (`chat.ts`)
-- [ ] **세션 이름 변경**: `session.setSessionName` — 드로어 인라인 또는 Settings
+- [x] ~~**세션 이름 변경**: `session.setSessionName`~~ — 완료 (드로어 인라인 입력)
 - [ ] **번들 사이즈**: JS ~821kB. `manualChunks` / dynamic import (markdown·hljs)
 - [ ] **컨텍스트/비용 표시**: `getContextUsage()` / `getSessionStats()` → 헤더
 - [ ] **npm/git 공개 배포**: 패키지명·repo 필드·README 설치 예 정리 후 publish
@@ -175,8 +185,9 @@ dist/public/**      # 프론트 + PWA sw/manifest
 - [x] ~~PWA~~ (a4ba58e) — 오프라인 셸/실기기 홈화면 추가는 더 다듬을 여지
 - [ ] 세션 HTML 내보내기 (`exportToHtml`) → Settings
 - [ ] compaction 상태 표시
-- [ ] 인증 레이어 — 기본 bind `127.0.0.1`, 앱 인증 없음 (FS 접근 가능, 외부 노출 금지)
-- [ ] 다중 프로젝트 cwd 전환 (`cwdOverride`)
+- [x] ~~인증 레이어~~ — 완료: 토큰 + 2FA(TOTP). `--token` / `PI_WEB_TOKEN` / `PI_WEB_2FA=off`
+      원격 접속 시 HTTPS는 역방향 프록시(Caddy/nginx) 또는 터널(Tailscale)에서 처리
+- [ ] 다중 프로젝트 cwd 전환 (`cwdOverride`) — 사이드바 그룹별 새 세션(`?cwd=`)으로 일부 구현됨
 
 ---
 

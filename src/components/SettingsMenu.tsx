@@ -1,6 +1,8 @@
 import { Menu } from "@base-ui-components/react/menu";
 import { useState } from "react";
+import { logout } from "../lib/auth";
 import { isLocale, LOCALES, setLocale, useLocale, useT } from "../lib/i18n";
+import { setResumeEnabled, useResumeEnabled } from "../lib/resume";
 import {
   setThemePreference,
   useThemePreference,
@@ -17,6 +19,7 @@ export function SettingsMenu() {
   const t = useT();
   const preference = useThemePreference();
   const locale = useLocale();
+  const resumeEnabled = useResumeEnabled();
   const [forkOpen, setForkOpen] = useState(false);
   const [extensionsOpen, setExtensionsOpen] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
@@ -109,6 +112,21 @@ export function SettingsMenu() {
 
               <div className="my-1 border-t border-line" />
 
+              <Menu.Item
+                className={itemClass}
+                onClick={() => setResumeEnabled(!resumeEnabled)}
+              >
+                <span className="flex size-4 shrink-0 items-center justify-center">
+                  {resumeEnabled && (
+                    <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2">
+                      <path d="m5 12 4 4L19 6" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  )}
+                </span>
+                {t("resumeSession")}
+              </Menu.Item>
+
+              <div className="my-1 border-t border-line" />
               <Menu.Item className={itemClass} onClick={() => setModelsOpen(true)}>
                 <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2">
                   <path
@@ -144,6 +162,17 @@ export function SettingsMenu() {
                 {t("activeExtensionsEllipsis")}
               </Menu.Item>
 
+              <div className="my-1 border-t border-line" />
+              <Menu.Item className={itemClass} onClick={() => void logout()}>
+                <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2">
+                  <path
+                    d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                {t("logout")}
+              </Menu.Item>
               <div className="my-1 border-t border-line" />
               <div className="px-3 pt-1 pb-2 text-[11px] text-faint">
                 pi-web-chat v{__APP_VERSION__}

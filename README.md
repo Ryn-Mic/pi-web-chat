@@ -28,12 +28,19 @@ pi --web 3200                # custom port
 pi --web --lan               # bind 0.0.0.0 (LAN)
 pi --web --host 0.0.0.0      # same, explicit bind address
 pi --web 3200 --host 0.0.0.0
+pi --web --token my-secret   # set the access token (default: auto-generated)
+pi --web rftoken             # rotate the access token (applies immediately)
 ```
 
 `pi --web` starts **only the web server daemon** and exits. It does not open the pi TUI.
 If the server is already running, it prints the URL again.
 
-> `--lan` / `--host 0.0.0.0` exposes the server on all interfaces. There is no app auth — use only on trusted networks.
+> **Auth (token + 2FA):** the server enforces access control on every API/WebSocket call.
+> On first start it auto-generates an access token (`~/.pi/web-chat/token`, persists across
+> restarts; rotate anytime with `pi --web rftoken`) and a local TOTP secret
+> (`~/.pi/web-chat/2fa.secret`, 2FA on by default; disable with `PI_WEB_2FA=off`).
+> Log in from the web page with token + a **current** 2FA code from your authenticator app
+> (enroll by scanning the QR under "First-time 2FA setup" on the login page).
 
 ### Other ways to run
 
@@ -113,11 +120,15 @@ Required secret:
 
 - `PORT` — server port (default `3141`)
 - `HOST` — bind address (default `127.0.0.1`). Use `0.0.0.0` only on trusted networks. Prefer `pi --web --lan` / `pi --web --host 0.0.0.0` when starting via the extension
+- `PI_WEB_TOKEN` — access token (default: auto-generated into `~/.pi/web-chat/token`)
+- `PI_WEB_2FA` — set to `off` to disable the TOTP second factor (default: on)
 - `PI_WEB_CWD` — agent working/session directory (default `~/.pi/web-chat`, created if missing)
 
-Auth uses the same `~/.pi/agent/auth.json` as the pi CLI. Configure pi (login / API keys) first.
+LLM API auth uses the same `~/.pi/agent/auth.json` as the pi CLI. Configure pi (login / API keys) first.
 
-> **Security:** There is no built-in app auth. The server binds to loopback by default. Do not expose it on a public network. For remote access, prefer Tailscale Serve or an SSH tunnel.
+> **Security:** the app enforces token + 2FA auth, but HTTPS is your responsibility.
+> For remote access, run behind a reverse proxy (Caddy/nginx) or a tunnel (Tailscale Serve)
+> that terminates TLS — never send the token over plain HTTP on a public network.
 
 ## Stack
 

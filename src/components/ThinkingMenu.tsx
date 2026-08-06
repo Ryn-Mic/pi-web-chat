@@ -15,11 +15,11 @@ export function ThinkingMenu({
   return (
     <Menu.Root>
       <Menu.Trigger
-        className="rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-hover hover:text-ink"
+        className="flex h-8 shrink-0 items-center rounded-full border border-line px-2.5 text-xs text-muted transition-colors hover:bg-hover hover:text-ink"
         title="Thinking level"
       >
-        <span className="mr-1">🧠</span>
-        {current}
+        <span className="mr-1 text-[11px]">🧠</span>
+        <span className="truncate">{current}</span>
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner sideOffset={6} align="end">

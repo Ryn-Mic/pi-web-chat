@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
@@ -13,6 +13,7 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { WebSocketServer, type WebSocket } from "ws";
+import QRCode from "qrcode";
 import type {
   ClientCommand,
   ServerEvent,
@@ -23,6 +24,7 @@ import type {
   UISnapshot,
   UIThinkingLevel,
 } from "../shared/protocol.ts";
+import { auth, authStartupInfo } from "./auth.ts";
 import { readCustomModels, validateProviders, writeCustomModels } from "./models-config.ts";
 import { serializeMessages } from "./serialize.ts";
 
@@ -35,6 +37,9 @@ const HOME = homedir();
 const DEFAULT_AGENT_CWD = join(HOME, ".pi", "web-chat");
 const AGENT_CWD = resolve(process.env.PI_WEB_CWD ?? DEFAULT_AGENT_CWD);
 mkdirSync(AGENT_CWD, { recursive: true });
+
+/** 데몬 상태 파일 디렉토리 (extensions/pi-web-chat.ts 의 STATE_DIR 과 동일) */
+const DAEMON_STATE_DIR = join(HOME, ".pi", "web-chat");
 
 // Resolve static assets for both layouts:
 //   production package: <pkg>/dist/index.js  + <pkg>/dist/public/
@@ -98,6 +103,8 @@ interface SessionEntry {
    * `/` 접속으로 만든 빈 초안은 첫 prompt 전까지 false — 주소에 sessionId를 붙이지 않는다.
    */
   published: boolean;
+  /** reload 중복 실행 방지 */
+  reloading?: boolean;
 }
 
 const entries = new Map<string, SessionEntry>();
@@ -157,12 +164,21 @@ function rekeyEntry(entry: SessionEntry) {
   broadcastTo(entry, { type: "session_bound", sessionId: next });
 }
 
-async function createEntry(id: string | null): Promise<SessionEntry> {
+/** ~ 또는 ~/... 를 HOME 기반 절대경로로 확장 */
+function expandHome(p: string): string {
+  if (p === "~") return HOME;
+  if (p.startsWith("~/")) return join(HOME, p.slice(2));
+  return p;
+}
+
+async function createEntry(id: string | null, cwd?: string): Promise<SessionEntry> {
   const path = id ? await resolveSessionPath(id) : undefined;
+  // 기존 세션 열기는 기존 동작 유지(AGENT_CWD), 새 세션만 cwd 파라미터 적용
+  const sessionCwd = path ? AGENT_CWD : cwd ? expandHome(cwd) : AGENT_CWD;
   const runtime = await createAgentSessionRuntime(createRuntime, {
-    cwd: AGENT_CWD,
+    cwd: sessionCwd,
     agentDir: getAgentDir(),
-    sessionManager: SessionManager.create(AGENT_CWD),
+    sessionManager: SessionManager.create(sessionCwd),
   });
   if (path) await runtime.switchSession(path);
   const entry: SessionEntry = {
@@ -179,8 +195,8 @@ async function createEntry(id: string | null): Promise<SessionEntry> {
 }
 
 /** id가 없으면 새 세션, 있으면 기존 런타임 재사용 (동시 접속 경합 방지) */
-async function acquireEntry(id: string | null): Promise<SessionEntry> {
-  if (!id) return createEntry(null);
+async function acquireEntry(id: string | null, cwd?: string): Promise<SessionEntry> {
+  if (!id) return createEntry(null, cwd);
   const hit = entries.get(id);
   if (hit) return hit;
   const inflight = pending.get(id);
@@ -201,6 +217,65 @@ setInterval(() => {
     void entry.runtime.dispose().catch(() => {});
   }
 }, 60_000).unref();
+
+/**
+ * 세션 파일이 외부(터미널의 pi 프로세스 등)에서 추가되면 런타임을 재로드해 뷰를 최신화.
+ * 스트리밍 중에는 건드리지 않는다 (자신의 prompt 응답을 보호).
+ */
+async function reloadEntry(entry: SessionEntry): Promise<void> {
+  if (entry.reloading) return;
+  entry.reloading = true;
+  try {
+    const file = entry.runtime.session.sessionFile;
+    if (!file) return;
+    entry.unsubscribe?.();
+    try {
+      await entry.runtime.dispose();
+    } catch {
+      /* ignore */
+    }
+    const runtime = await createAgentSessionRuntime(createRuntime, {
+      cwd: AGENT_CWD,
+      agentDir: getAgentDir(),
+      sessionManager: SessionManager.create(AGENT_CWD),
+    });
+    await runtime.switchSession(file);
+    entry.runtime = runtime;
+    bindSession(entry);
+    broadcastSnapshot(entry);
+  } finally {
+    entry.reloading = false;
+  }
+}
+
+/** 파일의 실제 entry 수 (빈 줄 제외) */
+function countFileEntries(file: string): number {
+  const content = readFileSync(file, "utf8");
+  let count = 0;
+  for (const line of content.split("\n")) {
+    if (line.trim().length > 0) count++;
+  }
+  return count;
+}
+
+setInterval(() => {
+  for (const entry of [...entries.values()]) {
+    if (entry.clients.size === 0) continue;
+    const file = entry.runtime.session.sessionFile;
+    if (!file || entry.reloading || entry.runtime.session.isStreaming) continue;
+    let fileEntries = 0;
+    try {
+      fileEntries = countFileEntries(file);
+    } catch {
+      continue; // 파일이 아직 생성 안 됨 (빈 초안)
+    }
+    // 헤더(1) + 런타임 메모리 엔트리 수 보다 파일이 더 많으면 외부 추가 → 재로드
+    const memoryEntries = entry.runtime.session.sessionManager.getEntries().length + 1;
+    if (fileEntries > memoryEntries) {
+      void reloadEntry(entry).catch(() => {});
+    }
+  }
+}, 1500).unref();
 
 const ALL_THINKING_LEVELS: UIThinkingLevel[] = [
   "off",
@@ -243,6 +318,7 @@ function buildSnapshot(entry: SessionEntry): UISnapshot {
       : null,
     thinkingLevel: session.thinkingLevel as UIThinkingLevel,
     thinkingLevels: supportedThinkingLevels(model),
+    context: session.getContextUsage() ?? null,
     sessionFile: session.sessionFile,
     sessionId: entry.id,
   };
@@ -364,6 +440,65 @@ function sendTo(ws: WebSocket, event: ServerEvent) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));
 }
 
+/**
+ * 세션 파일 삭제. 로드된 런타임이 있으면 정리하고, 접속 중인 클라이언트를 닫는다.
+ * 세션은 append-only JSONL 파일이므로 SDK 삭제 API 대신 파일 제거로 처리한다.
+ */
+async function deleteSession(id: string): Promise<{ ok: boolean; error?: string }> {
+  const path = await resolveSessionPath(id);
+  if (!path) return { ok: false, error: "session not found" };
+
+  const entry = entries.get(id);
+  if (entry) {
+    entry.unsubscribe?.();
+    for (const ws of [...entry.clients]) {
+      try {
+        ws.close(1000, "session deleted");
+      } catch {
+        /* ignore */
+      }
+    }
+    entry.clients.clear();
+    entries.delete(id);
+    try {
+      await entry.runtime.dispose();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  try {
+    unlinkSync(path);
+  } catch (err) {
+    return { ok: false, error: `failed to delete file: ${String(err)}` };
+  }
+  return { ok: true };
+}
+
+/** 세션 표시 이름 변경 (비어 있으면 이름 해제). */
+async function renameSession(
+  id: string,
+  name: string,
+): Promise<{ ok: boolean; error?: string; name?: string }> {
+  const path = await resolveSessionPath(id);
+  if (!path) return { ok: false, error: "session not found" };
+
+  const entry = entries.get(id);
+  if (entry) {
+    // 로드된 런타임: setSessionName → appendSessionInfo(파일에 즉시 영속화) + 이벤트 방출
+    entry.runtime.session.setSessionName(name);
+    broadcastSnapshot(entry);
+  } else {
+    try {
+      const sm = SessionManager.open(path);
+      sm.appendSessionInfo(name);
+    } catch (err) {
+      return { ok: false, error: `failed to rename: ${String(err)}` };
+    }
+  }
+  return { ok: true, name };
+}
+
 // ---------------------------------------------------------------------------
 // 커스텀 모델 (models.json) 반영
 // ---------------------------------------------------------------------------
@@ -450,6 +585,89 @@ const MIME: Record<string, string> = {
   ".webmanifest": "application/manifest+json",
 };
 
+/** Authorization: Bearer <t> 또는 ?token=<t> 에서 세션 토큰 추출 */
+function sessionTokenFromRequest(req: IncomingMessage): string {
+  const header = req.headers.authorization;
+  if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length).trim();
+  try {
+    return new URL(req.url ?? "/", "http://localhost").searchParams.get("token") ?? "";
+  } catch {
+    return "";
+  }
+}
+
+async function handleAuthRequest(req: IncomingMessage, res: import("node:http").ServerResponse, url: URL) {
+  const sendJson = (status: number, body: unknown) => {
+    res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify(body));
+  };
+
+  // 로그인 상태 확인
+  if (url.pathname === "/api/auth/status") {
+    if (!auth.validSession(sessionTokenFromRequest(req))) {
+      sendJson(401, { ok: false, twoFactor: auth.twoFactorEnabled });
+      return;
+    }
+    sendJson(200, { ok: true, twoFactor: auth.twoFactorEnabled });
+    return;
+  }
+
+  // 로그인 (토큰 + 2FA 코드)
+  if (url.pathname === "/api/auth/login" && req.method === "POST") {
+    let body: { token?: unknown; totp?: unknown };
+    try {
+      body = JSON.parse(await readBody(req, 10_000)) as { token?: unknown; totp?: unknown };
+    } catch {
+      sendJson(400, { error: "invalid JSON body" });
+      return;
+    }
+    const token = typeof body.token === "string" ? body.token : "";
+    const totp = typeof body.totp === "string" ? body.totp : undefined;
+    const result = auth.login(token, totp);
+    if (!result.sessionToken) {
+      sendJson(401, {
+        error: result.reason === "2fa" ? "invalid 2FA code" : "invalid access token",
+      });
+      return;
+    }
+    sendJson(200, { sessionToken: result.sessionToken });
+    return;
+  }
+
+  // 로그아웃
+  if (url.pathname === "/api/auth/logout" && req.method === "POST") {
+    auth.logout(sessionTokenFromRequest(req));
+    sendJson(200, { ok: true });
+    return;
+  }
+
+  // 2FA 시크릿/QR 재조회 — 원시 토큰 필요 (로컬에서 인증 앱 등록용)
+  if (url.pathname === "/api/auth/setup" && req.method === "GET") {
+    const rawToken = url.searchParams.get("token") ?? "";
+    if (!auth.verifyRawToken(rawToken)) {
+      sendJson(401, { error: "invalid token" });
+      return;
+    }
+    const otpauth = auth.otpauthUrl();
+    let qr = "";
+    try {
+      qr = await QRCode.toDataURL(otpauth, { width: 220, margin: 1 });
+    } catch {
+      /* QR 생성 실패해도 otpauth URL은 반환 */
+    }
+    sendJson(200, {
+      twoFactorEnabled: auth.twoFactorEnabled,
+      secret: auth.totpSecret,
+      otpauthUrl: otpauth,
+      qr,
+    });
+    return;
+  }
+
+  sendJson(404, { error: "not found" });
+}
+
+
 const httpServer = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
 
@@ -461,6 +679,22 @@ const httpServer = createServer(async (req, res) => {
         "cache-control": "no-store",
       });
       res.end(JSON.stringify({ ok: true, version: PACKAGE_VERSION }));
+      return;
+    }
+
+    // 인증 API (세션 없이 접근 가능)
+    if (url.pathname.startsWith("/api/auth/")) {
+      await handleAuthRequest(req, res, url);
+      return;
+    }
+
+    // 그 외 모든 API는 세션 토큰 필수 (정적 파일/폰트는 로그인 화면 로딩을 위해 열어둠)
+    if (url.pathname.startsWith("/api/") && !auth.validSession(sessionTokenFromRequest(req))) {
+      res.writeHead(401, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      res.end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
 
@@ -480,6 +714,51 @@ const httpServer = createServer(async (req, res) => {
         }));
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(list));
+      return;
+    }
+
+    // 세션 삭제 / 이름 변경
+    if (url.pathname.startsWith("/api/sessions/")) {
+      const id = decodeURIComponent(url.pathname.slice("/api/sessions/".length));
+      if (!id) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "missing session id" }));
+        return;
+      }
+
+      if (req.method === "DELETE") {
+        const result = await deleteSession(id);
+        res.writeHead(result.ok ? 200 : 404, { "content-type": "application/json" });
+        res.end(JSON.stringify(result.ok ? { ok: true } : { error: result.error }));
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname.endsWith("/name")) {
+        const sessionId = decodeURIComponent(
+          url.pathname.slice("/api/sessions/".length, -"/name".length),
+        );
+        if (!sessionId) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "missing session id" }));
+          return;
+        }
+        const body = await readBody(req, 10_000);
+        let name = "";
+        try {
+          name = String((JSON.parse(body) as { name?: unknown }).name ?? "").trim();
+        } catch {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "invalid JSON body" }));
+          return;
+        }
+        const result = await renameSession(sessionId, name);
+        res.writeHead(result.ok ? 200 : 404, { "content-type": "application/json" });
+        res.end(JSON.stringify(result.ok ? { ok: true, name: result.name } : { error: result.error }));
+        return;
+      }
+
+      res.writeHead(405, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "method not allowed" }));
       return;
     }
 
@@ -635,10 +914,28 @@ const httpServer = createServer(async (req, res) => {
   }
 });
 
-const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+const wss = new WebSocketServer({ noServer: true });
+
+// WS 핸드셰이크에서 세션 토큰 검증 (?token=)
+httpServer.on("upgrade", (req, socket, head) => {
+  const url = new URL(req.url ?? "/", "http://localhost");
+  if (url.pathname !== "/ws") {
+    socket.destroy();
+    return;
+  }
+  const token = url.searchParams.get("token") ?? "";
+  if (!auth.validSession(token)) {
+    socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+});
 
 wss.on("connection", (ws, req) => {
-  const requested = new URL(req.url ?? "/ws", "http://localhost").searchParams.get("session");
+  const query = new URL(req.url ?? "/ws", "http://localhost").searchParams;
+  const requested = query.get("session");
+  const cwd = query.get("cwd") ?? undefined;
   const queue: ClientCommand[] = [];
   let ready = false;
 
@@ -659,7 +956,7 @@ wss.on("connection", (ws, req) => {
     });
   });
 
-  acquireEntry(requested)
+  acquireEntry(requested, cwd)
     .then((entry) => {
       if (ws.readyState !== ws.OPEN) return;
       entry.clients.add(ws);
@@ -670,6 +967,7 @@ wss.on("connection", (ws, req) => {
       if (entry.published || requested) {
         publishEntry(entry, ws);
       }
+      sendTo(ws, { type: "hello", version: PACKAGE_VERSION });
       sendTo(ws, { type: "snapshot", snapshot: buildSnapshot(entry) });
       ready = true;
       for (const cmd of queue.splice(0)) {
@@ -693,9 +991,53 @@ wss.on("connection", (ws, req) => {
   });
 });
 
+// 바인딩 실패(포트 점유 등)를 크래시 스택 대신 명확한 메시지로 처리.
+// 확장(startServer)이 스폰 직후에 pid 파일을 썼다면 이 서버는 죽기 때문에
+// readPid() 의 프로세스 살아있음 검사가 걸러낸다. 여기서는 사용자에게 안내만 한다.
+httpServer.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `pi-web-chat: port ${PORT} is already in use — another pi-web-chat server or process is listening.`,
+    );
+    console.error(
+      `pi-web-chat: run \`pi --web status\` / \`pi --web stop\`, or remove stale ~/.pi/web-chat/pi-web-chat.pid, then retry.`,
+    );
+    process.exit(1);
+  }
+  throw err;
+});
+
 httpServer.listen(PORT, HOST, () => {
   const displayHost = HOST === "0.0.0.0" || HOST === "::" ? "localhost" : HOST;
   console.log(
     `pi-web-chat server: http://${displayHost}:${PORT}  (bind ${HOST}, chat cwd: ${AGENT_CWD})`,
   );
+
+  // 확장이 스폰 직후 쓰는 pid/port/host 를 여기서(바인딩 성공 후) 덮어쓴다.
+  // → 포트 점유로 죽은 프로세스의 pid 가 남는 경쟁 상태를 없앤다.
+  try {
+    mkdirSync(DAEMON_STATE_DIR, { recursive: true });
+    writeFileSync(join(DAEMON_STATE_DIR, "pi-web-chat.pid"), `${process.pid}\n`, "utf8");
+    writeFileSync(join(DAEMON_STATE_DIR, "pi-web-chat.port"), `${PORT}\n`, "utf8");
+    writeFileSync(join(DAEMON_STATE_DIR, "pi-web-chat.host"), `${HOST}\n`, "utf8");
+  } catch {
+    /* 상태 파일은 부가 정보 — 실패해도 서버는 동작 */
+  }
+  if (auth.twoFactorEnabled) {
+    console.log(`pi-web-chat auth: access token = ${auth.token}  (file: ${authStartupInfo().tokenFile})`);
+    console.log(`pi-web-chat auth: 2FA(TOTP) enabled — secret: ${authStartupInfo().secretFile}`);
+    console.log(
+      `pi-web-chat auth: login needs the token + a 2FA code from your authenticator app`,
+    );
+  } else {
+    console.log(`pi-web-chat auth: 2FA disabled (PI_WEB_2FA=off), access token = ${auth.token}`);
+  }
+});
+
+// 재시작 시 세션(로그인 상태)을 디스크로 플러시
+process.on("SIGTERM", () => {
+  auth.flushSessions();
+});
+process.on("SIGINT", () => {
+  auth.flushSessions();
 });

@@ -15,6 +15,12 @@ export type Messages = {
   // sessions
   sessions: string;
   newSession: string;
+  resumeSession: string;
+  newSessionInProject: string;
+  renameSession: string;
+  deleteSession: string;
+  confirmDelete: string;
+  sessionNamePlaceholder: string;
   emptySession: string;
   messageCount: string;
   noSavedSessions: string;
@@ -90,8 +96,22 @@ export type Messages = {
   // messages
   emptyPrompt: string;
   attachedImage: string;
+  messageAnchors: string;
+  updateAvailable: string;
+  dismiss: string;
+  reload: string;
   imagePlaceholder: string;
   toolRunning: string;
+
+  // auth
+  login: string;
+  loginFailed: string;
+  loggingIn: string;
+  loginHint: string;
+  accessToken: string;
+  accessTokenPlaceholder: string;
+  twoFactorCode: string;
+  logout: string;
 };
 
 export const en: Messages = {
@@ -109,6 +129,12 @@ export const en: Messages = {
 
   sessions: "Sessions",
   newSession: "New session",
+  resumeSession: "Resume last session",
+  newSessionInProject: "New session in this project",
+  renameSession: "Rename session",
+  deleteSession: "Delete session",
+  confirmDelete: "Confirm delete",
+  sessionNamePlaceholder: "Session name…",
   emptySession: "(empty session)",
   messageCount: "{count} messages",
   noSavedSessions: "No saved sessions",
@@ -178,7 +204,20 @@ export const en: Messages = {
   optional: "optional",
 
   emptyPrompt: "How can I help?",
+  messageAnchors: "Jump to message",
+  updateAvailable: "A new version is available",
+  reload: "Reload",
+  dismiss: "Dismiss",
   attachedImage: "Attached image",
   imagePlaceholder: "[image]",
   toolRunning: "Running {name}…",
+
+  login: "Sign in",
+  loginFailed: "Invalid token or 2FA code.",
+  loggingIn: "Signing in…",
+  loginHint: "This is a private pi agent — enter your access token to continue.",
+  accessToken: "Access token",
+  accessTokenPlaceholder: "Paste your access token",
+  twoFactorCode: "2FA code (6 digits)",
+  logout: "Sign out",
 };

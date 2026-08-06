@@ -15,6 +15,12 @@ export const ja: Messages = {
 
   sessions: "セッション",
   newSession: "新しいセッション",
+  resumeSession: "最後のセッションを復元",
+  newSessionInProject: "このプロジェクトに新しいセッション",
+  renameSession: "セッション名を変更",
+  deleteSession: "セッションを削除",
+  confirmDelete: "削除の確認",
+  sessionNamePlaceholder: "セッション名…",
   emptySession: "(空のセッション)",
   messageCount: "メッセージ {count}",
   noSavedSessions: "保存されたセッションはありません",
@@ -84,7 +90,20 @@ export const ja: Messages = {
   optional: "任意",
 
   emptyPrompt: "何をお手伝いしましょうか？",
+  messageAnchors: "メッセージへ移動",
+  updateAvailable: "新しいバージョンがあります",
+  reload: "再読み込み",
+  dismiss: "閉じる",
   attachedImage: "添付画像",
   imagePlaceholder: "[画像]",
   toolRunning: "{name} を実行中…",
+
+  login: "ログイン",
+  loginFailed: "トークンまたは2FAコードが正しくありません。",
+  loggingIn: "ログイン中…",
+  loginHint: "個人用 pi エージェントです。アクセストークンを入力してください。",
+  accessToken: "アクセストークン",
+  accessTokenPlaceholder: "アクセストークンを貼り付け",
+  twoFactorCode: "2FAコード (6桁)",
+  logout: "ログアウト",
 };

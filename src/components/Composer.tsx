@@ -2,9 +2,55 @@ import { useEffect, useRef, useState } from "react";
 import type { UIImageAttachment } from "../../shared/protocol";
 import { chatClient, useChat } from "../lib/chat";
 import { useT } from "../lib/i18n";
+import { ModelMenu } from "./ModelMenu";
+import { ThinkingMenu } from "./ThinkingMenu";
 
 interface PendingImage extends UIImageAttachment {
   previewUrl: string;
+}
+
+/** 12345 → "12.3k", 1234567 → "1.2M" */
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+/**
+ * 컨텍스트 사용률 프로그레스 링 (font color, 꽉 차면 더 진해짐)
+ */
+function ContextRing({ percent }: { percent: number }) {
+  const pct = Math.min(100, Math.max(0, percent));
+  // 낮음 → 흐림, 높음 → 진함 (빨강은 사용하지 않음)
+  const tier =
+    pct >= 90 ? "text-ink" : pct >= 65 ? "text-muted" : "text-faint";
+  const r = 7;
+  const c = 2 * Math.PI * r;
+  const dash = (pct / 100) * c;
+  return (
+    <svg viewBox="0 0 18 18" className={`size-4 shrink-0 ${tier}`} aria-hidden>
+      <circle
+        cx="9"
+        cy="9"
+        r={r}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        opacity="0.18"
+      />
+      <circle
+        cx="9"
+        cy="9"
+        r={r}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeDasharray={`${dash} ${c - dash}`}
+        transform="rotate(-90 9 9)"
+      />
+    </svg>
+  );
 }
 
 async function fileToImage(file: File): Promise<PendingImage | null> {
@@ -25,7 +71,7 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
   const [images, setImages] = useState<PendingImage[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { injectText, focusToken } = useChat();
+  const { injectText, focusToken, snapshot } = useChat();
 
   // fork 후 선택된 메시지 텍스트를 composer에 주입
   useEffect(() => {
@@ -132,12 +178,30 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
               onClick={() => fileInputRef.current?.click()}
               className="flex size-8 shrink-0 items-center justify-center rounded-full border border-line text-muted transition-colors hover:bg-hover hover:text-ink"
               aria-label={t("attachImage")}
+              title={t("attachImage")}
             >
               <svg viewBox="0 0 24 24" className="size-[18px] fill-none stroke-current stroke-[1.8]">
                 <path d="M12 5v14M5 12h14" strokeLinecap="round" />
               </svg>
             </button>
+            <ModelMenu current={snapshot?.model ?? null} />
+            <ThinkingMenu
+              current={snapshot?.thinkingLevel ?? "off"}
+              levels={snapshot?.thinkingLevels ?? ["off"]}
+            />
             <div className="flex-1" />
+            {snapshot?.context?.percent != null && (
+              <span
+                className="flex size-8 items-center justify-center"
+                title={
+                  snapshot.context.tokens != null
+                    ? `${formatTokens(snapshot.context.tokens)} / ${formatTokens(snapshot.context.contextWindow)} tokens (${Math.round(snapshot.context.percent)}%)`
+                    : undefined
+                }
+              >
+                <ContextRing percent={snapshot.context.percent} />
+              </span>
+            )}
             {isStreaming ? (
               <button
                 onClick={() => chatClient.send({ type: "abort" })}

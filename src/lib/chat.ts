@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { ClientCommand, ServerEvent, UISnapshot } from "../../shared/protocol";
+import { authHeaders, checkAuth } from "./auth";
+import { rememberSessionId } from "./resume";
 
 export interface ActiveTool {
   toolCallId: string;
@@ -22,6 +24,10 @@ export interface ChatState {
   injectText: string | null;
   /** 증가할 때마다 composer textarea 포커스 */
   focusToken: number;
+  /** 서버 버전이 클라이언트 빌드와 다름 → 새로고침 유도 */
+  updateAvailable: boolean;
+  /** 서버가 보낸 error 이벤트 (prompt 실패 등) — 배너로 표시 */
+  lastError: string | null;
 }
 
 const initialState: ChatState = {
@@ -33,6 +39,8 @@ const initialState: ChatState = {
   activeTools: [],
   injectText: null,
   focusToken: 0,
+  updateAvailable: false,
+  lastError: null,
 };
 
 class ChatClient {
@@ -51,8 +59,9 @@ class ChatClient {
    * 세션에 연결. 이미 같은 세션에 붙어 있으면 무시하고,
    * 다른 세션이면 기존 연결을 끊고 새로 연다.
    * `force: true` — 이미 `/`(새 초안)에 있어도 새 초안 연결을 다시 연다.
+   * `cwd` — 새 세션을 열 작업 디렉토리 (프로젝트별 새 세션).
    */
-  connect(sessionId: string | null = null, opts?: { force?: boolean }) {
+  connect(sessionId: string | null = null, opts?: { force?: boolean; cwd?: string }) {
     if (this.ws) {
       const current = this.state.sessionId ?? this.target;
       if (!opts?.force && (sessionId === null ? this.target === null : sessionId === current)) {
@@ -74,8 +83,12 @@ class ChatClient {
     }
 
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const query = sessionId ? `?session=${encodeURIComponent(sessionId)}` : "";
-    const ws = new WebSocket(`${proto}://${location.host}/ws${query}`);
+    const query = new URLSearchParams();
+    const token = authHeaders().authorization?.replace("Bearer ", "");
+    if (token) query.set("token", token);
+    if (sessionId) query.set("session", sessionId);
+    if (opts?.cwd) query.set("cwd", opts.cwd);
+    const ws = new WebSocket(`${proto}://${location.host}/ws?${query}`);
     this.ws = ws;
 
     ws.onopen = () => {
@@ -102,11 +115,18 @@ class ChatClient {
       this.scheduleDisconnected();
       // 재연결은 현재 바인딩된 세션으로 (새 세션이 또 생기지 않게)
       const retryTarget = this.state.sessionId ?? this.target;
-      setTimeout(() => {
-        this.target = retryTarget;
-        this.connect(retryTarget);
-      }, this.reconnectDelay);
+      const delay = this.reconnectDelay;
       this.reconnectDelay = Math.min(Math.round(this.reconnectDelay * 1.6), 8_000);
+      // 401(세션 만료)만 로그인 화면으로 넘기고, 서버가 잠깐 죽었던 경우(checking)는 계속 재연결
+      setTimeout(() => {
+        if (this.intentionalClose || this.ws) return;
+        void checkAuth().then((s) => {
+          if (this.intentionalClose || this.ws) return;
+          if (s === "unauthenticated") return; // AuthGate가 로그인 화면 표시
+          this.target = retryTarget;
+          this.connect(retryTarget);
+        });
+      }, delay);
     };
     ws.onerror = () => ws.close();
   }
@@ -128,6 +148,7 @@ class ChatClient {
   }
 
   send(cmd: ClientCommand) {
+    if (cmd.type === "prompt") this.update({ lastError: null });
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(cmd));
     }
@@ -152,10 +173,17 @@ class ChatClient {
 
   private handle(event: ServerEvent) {
     switch (event.type) {
+      case "hello":
+        // 서버 버전과 클라이언트 빌드가 다르면 업데이트 배너 표시
+        if (typeof event.version === "string" && event.version !== __APP_VERSION__) {
+          this.update({ updateAvailable: true });
+        }
+        break;
       case "session_bound":
         // 첫 메시지(또는 기존 세션 접속) 후 서버가 id를 알려 주면 URL 동기화 대상이 된다
         this.target = event.sessionId;
         this.update({ sessionId: event.sessionId });
+        rememberSessionId(event.sessionId);
         break;
       case "snapshot":
         // 완결된 메시지가 snapshot에 반영되므로 스트림 버퍼는 비운다
@@ -202,12 +230,17 @@ class ChatClient {
         break;
       case "error":
         console.error("[pi-web-chat]", event.message);
+        this.update({ lastError: event.message });
         break;
     }
   }
 
   consumeInjectText() {
     if (this.state.injectText !== null) this.update({ injectText: null });
+  }
+
+  clearError() {
+    if (this.state.lastError !== null) this.update({ lastError: null });
   }
 
   /** 드로어 닫힘 등과 겹치지 않도록 약간 늦춰 composer에 포커스 */

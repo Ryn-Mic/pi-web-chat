@@ -1,6 +1,8 @@
 import { useSyncExternalStore } from "react";
 
 const STORAGE_KEY = "pi-web-chat:sidebar-pinned";
+/** 펼친(expanded) 프로젝트 목록만 저장 — 기본값은 전부 접힘 */
+const EXPANDED_KEY = "pi-web-chat:sidebar-expanded-projects";
 const listeners = new Set<() => void>();
 
 function readPinned(): boolean {
@@ -11,7 +13,18 @@ function readPinned(): boolean {
   }
 }
 
+function readExpanded(): Set<string> {
+  try {
+    const raw = localStorage.getItem(EXPANDED_KEY);
+    if (!raw) return new Set();
+    return new Set(JSON.parse(raw) as string[]);
+  } catch {
+    return new Set();
+  }
+}
+
 let cache = typeof window !== "undefined" ? readPinned() : false;
+let expanded = typeof window !== "undefined" ? readExpanded() : new Set<string>();
 
 function emit() {
   for (const l of listeners) l();
@@ -42,4 +55,24 @@ export function toggleSidebarPinned() {
 
 export function useSidebarPinned(): boolean {
   return useSyncExternalStore(subscribe, () => cache, () => false);
+}
+
+/** 프로젝트 그룹 접기/펼치기 (기본: 접힘 — localStorage엔 펼친 목록만 저장) */
+export function isProjectCollapsed(project: string): boolean {
+  return !expanded.has(project);
+}
+
+export function toggleProjectCollapsed(project: string) {
+  if (expanded.has(project)) expanded.delete(project);
+  else expanded.add(project);
+  try {
+    localStorage.setItem(EXPANDED_KEY, JSON.stringify([...expanded]));
+  } catch {
+    /* ignore */
+  }
+  emit();
+}
+
+export function useProjectCollapsed(project: string): boolean {
+  return useSyncExternalStore(subscribe, () => isProjectCollapsed(project), () => false);
 }
