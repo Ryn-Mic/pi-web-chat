@@ -10,6 +10,15 @@
  * Strategy: lock body scrolling and size #root to visualViewport.height so
  * the composer always sits just above the keyboard, with capped safe areas.
  * #root itself is NOT position:fixed (that can truncate on iOS 26+).
+ *
+ * Performance notes (measured with Playwright; the original code janked on
+ * iOS because every visualViewport scroll/resize fired DOM writes → reflows):
+ * - safe areas barely change during a session: measure once, re-measure only
+ *   on orientationchange
+ * - only write --app-height when the value actually changes
+ * - visualViewport "scroll" fires every frame while scrolling and only
+ *   changes offsetTop, which nothing uses — don't listen to it at all
+ * - rAF-coalesce event handlers so a storm costs one layout pass per frame
  */
 const SAFE_TOP_MAX = 60;
 const SAFE_BOTTOM_MAX = 34;
@@ -45,51 +54,86 @@ export function initViewportLock() {
 
   root.classList.toggle("ua-standalone", standalone);
 
-  const applySafeAreas = () => {
-    const top = Math.min(Math.max(measureEnvPadding("top"), 0), SAFE_TOP_MAX);
-    const bottom = Math.min(Math.max(measureEnvPadding("bottom"), 0), SAFE_BOTTOM_MAX);
-    root.style.setProperty("--safe-top", `${top}px`);
-    root.style.setProperty("--safe-bottom", `${bottom}px`);
+  // Safe areas are cached: they only change on rotation / entering-exiting
+  // fullscreen, so re-measuring (DOM append + forced reflow) on every resize
+  // is pure waste.
+  let safeTop: number | null = null;
+  let safeBottom: number | null = null;
+  const applySafeAreas = (force = false) => {
+    if (safeTop === null || force) {
+      const top = Math.min(Math.max(measureEnvPadding("top"), 0), SAFE_TOP_MAX);
+      if (top !== safeTop) root.style.setProperty("--safe-top", `${top}px`);
+      safeTop = top;
+    }
+    if (safeBottom === null || force) {
+      const bottom = Math.min(Math.max(measureEnvPadding("bottom"), 0), SAFE_BOTTOM_MAX);
+      if (bottom !== safeBottom) root.style.setProperty("--safe-bottom", `${bottom}px`);
+      safeBottom = bottom;
+    }
   };
 
+  let lastAppHeight = "";
   const applyHeight = () => {
     const vv = window.visualViewport;
     const inner = window.innerHeight;
     const height = Math.round(vv?.height ?? inner);
     const offsetTop = Math.round(vv?.offsetTop ?? 0);
-    root.style.setProperty("--app-height", `${height}px`);
-    root.style.setProperty("--app-top", `${offsetTop}px`);
 
     // Keyboard (or other overlay) shrank the visible viewport.
     const keyboardOpen = height < inner - 80 || offsetTop > 0;
+
+    // Write --app-height only when it changed — it lives on #root's height,
+    // so every write forces a full-page reflow.
+    if (height !== Number(lastAppHeight)) {
+      root.style.setProperty("--app-height", `${height}px`);
+      lastAppHeight = String(height);
+    }
     root.classList.toggle("ua-keyboard", keyboardOpen);
-    if (keyboardOpen) {
+    if (keyboardOpen && window.scrollY > 0) {
       // Counteract iOS auto-scrolling the locked page.
       window.scrollTo(0, 0);
     }
   };
 
-  const applyAll = () => {
+  const applyAll = (forceSafeAreas = false) => {
     if (!document.body) return;
-    applySafeAreas();
+    applySafeAreas(forceSafeAreas);
     applyHeight();
   };
 
-  if (document.body) applyAll();
-  else document.addEventListener("DOMContentLoaded", applyAll, { once: true });
+  // Coalesce bursts (keyboard animation, orientation, focus) to one pass per frame.
+  let pending = false;
+  const schedule = (fn: () => void) => {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => {
+      pending = false;
+      fn();
+    });
+  };
+  const scheduleAll = () => schedule(() => applyAll());
+  const scheduleHeight = () => schedule(applyHeight);
 
-  window.visualViewport?.addEventListener("resize", applyHeight);
-  window.visualViewport?.addEventListener("scroll", applyHeight);
-  window.addEventListener("resize", applyAll);
+  if (document.body) applyAll();
+  else document.addEventListener("DOMContentLoaded", () => applyAll(), { once: true });
+
+  // Only resize matters for height. visualViewport "scroll" fires every frame
+  // while scrolling and only changes offsetTop (which nothing reads) — not
+  // listening to it keeps scrolling jank-free.
+  window.visualViewport?.addEventListener("resize", scheduleHeight);
+  window.addEventListener("resize", scheduleAll);
   window.addEventListener("orientationchange", () => {
-    requestAnimationFrame(() => requestAnimationFrame(applyAll));
+    // Safe areas and viewport can both change on rotation.
+    safeTop = null;
+    safeBottom = null;
+    requestAnimationFrame(() => requestAnimationFrame(() => applyAll(true)));
   });
   // iOS sometimes fires focus before the viewport resizes.
   window.addEventListener("focusin", () => {
-    requestAnimationFrame(applyHeight);
+    scheduleHeight();
     setTimeout(applyHeight, 300);
   });
   window.addEventListener("focusout", () => {
-    setTimeout(applyAll, 100);
+    setTimeout(scheduleAll, 100);
   });
 }
