@@ -76,11 +76,17 @@ export function initViewportLock() {
   const applyHeight = () => {
     const vv = window.visualViewport;
     const inner = window.innerHeight;
-    const height = Math.round(vv?.height ?? inner);
+    const vvHeight = Math.round(vv?.height ?? inner);
     const offsetTop = Math.round(vv?.offsetTop ?? 0);
 
     // Keyboard (or other overlay) shrank the visible viewport.
-    const keyboardOpen = height < inner - 80 || offsetTop > 0;
+    const keyboardOpen = vvHeight < inner - 80 || offsetTop > 0;
+
+    // When the keyboard is closed, size to innerHeight: in iOS standalone
+    // visualViewport.height can under-report the bottom safe area (measured
+    // with Playwright: vv=630 vs inner=664 → composer floats 34px off the
+    // bottom). Only the keyboard case should use the (smaller) visualViewport.
+    const height = keyboardOpen ? vvHeight : Math.round(inner);
 
     // Write --app-height only when it changed — it lives on #root's height,
     // so every write forces a full-page reflow.
