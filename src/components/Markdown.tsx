@@ -48,3 +48,23 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
     </div>
   );
 });
+
+/**
+ * Escape unclosed `**` and backtick markers so partially-streamed text doesn't
+ * show raw syntax residue (e.g. a lone `**`). Complete markers stay intact and
+ * render normally; only the trailing unclosed one is escaped.
+ */
+export function escapeUnclosedMarkdown(text: string): string {
+  let out = text;
+  const stars = [...out.matchAll(/\*\*/g)];
+  if (stars.length % 2 === 1) {
+    const last = stars[stars.length - 1]!;
+    out = out.slice(0, last.index) + "\\*\\*" + out.slice(last.index + 2);
+  }
+  const ticks = [...out.matchAll(/`/g)];
+  if (ticks.length % 2 === 1) {
+    const last = ticks[ticks.length - 1]!;
+    out = out.slice(0, last.index) + "\\`" + out.slice(last.index + 1);
+  }
+  return out;
+}
