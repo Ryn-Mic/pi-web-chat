@@ -55,13 +55,18 @@ export function initViewportLock() {
   const applyHeight = () => {
     const vv = window.visualViewport;
     const inner = window.innerHeight;
-    const height = Math.round(vv?.height ?? inner);
+    const vvHeight = Math.round(vv?.height ?? inner);
     const offsetTop = Math.round(vv?.offsetTop ?? 0);
+
+    // Keyboard (or other overlay) shrank the visible viewport.
+    const keyboardOpen = vvHeight < inner - 80 || offsetTop > 0;
+    // When the keyboard is closed, size to the full inner height — in iOS
+    // standalone (home-screen PWA) visualViewport.height can under-report,
+    // leaving dead space under the composer.
+    const height = keyboardOpen ? vvHeight : Math.round(inner);
     root.style.setProperty("--app-height", `${height}px`);
     root.style.setProperty("--app-top", `${offsetTop}px`);
 
-    // Keyboard (or other overlay) shrank the visible viewport.
-    const keyboardOpen = height < inner - 80 || offsetTop > 0;
     root.classList.toggle("ua-keyboard", keyboardOpen);
     if (keyboardOpen) {
       // Counteract iOS auto-scrolling the locked page.
