@@ -230,16 +230,10 @@ function ToolCallCard({ block }: { block: Extract<UIContentBlock, { type: "toolC
   );
 }
 
-function Thinking({ text, autoCollapse }: { text: string; autoCollapse?: boolean }) {
-  // Thinking blocks are expanded by default; finished ones (snapshot blocks)
-  // auto-collapse 2s after they appear. Streaming stays open while it runs.
-  const [open, setOpen] = useState(true);
-  useEffect(() => {
-    if (!autoCollapse) return;
-    const timer = setTimeout(() => setOpen(false), 2_000);
-    return () => clearTimeout(timer);
-  }, [autoCollapse]);
-
+function Thinking({ text, defaultOpen = true }: { text: string; defaultOpen?: boolean }) {
+  // Streaming thinking is expanded by default; snapshot thinking blocks are
+  // collapsed by default (defaultOpen=false). Users can toggle manually.
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <details
       open={open}
@@ -275,7 +269,17 @@ function Thinking({ text, autoCollapse }: { text: string; autoCollapse?: boolean
   );
 }
 
-function Blocks({ blocks, markdown }: { blocks: UIContentBlock[]; markdown: boolean }) {
+function Blocks({
+  blocks,
+  markdown,
+  hiddenThinking = null,
+}: {
+  blocks: UIContentBlock[];
+  markdown: boolean;
+  /** A snapshot thinking block with this exact text is skipped while the
+      just-finished streamed copy is still fading out (avoids double display). */
+  hiddenThinking?: string | null;
+}) {
   const t = useT();
   return (
     <>
@@ -290,7 +294,11 @@ function Blocks({ blocks, markdown }: { blocks: UIContentBlock[]; markdown: bool
               </div>
             );
           case "thinking":
-            return <Thinking key={i} text={b.text} autoCollapse />;
+            // Snapshot thinking blocks are collapsed by default; while the
+            // streamed copy of the just-finished thinking is fading out, hide
+            // the matching snapshot block so it isn't shown twice.
+            if (hiddenThinking && b.text === hiddenThinking) return null;
+            return <Thinking key={i} text={b.text} defaultOpen={false} />;
           case "toolCall":
             return <ToolCallCard key={i} block={b} />;
           case "image":
@@ -312,7 +320,15 @@ function Blocks({ blocks, markdown }: { blocks: UIContentBlock[]; markdown: bool
   );
 }
 
-function Message({ message, index }: { message: UIMessage; index?: number }) {
+function Message({
+  message,
+  index,
+  hiddenThinking,
+}: {
+  message: UIMessage;
+  index?: number;
+  hiddenThinking?: string | null;
+}) {
   if (message.role === "user") {
     return (
       <div
@@ -327,7 +343,7 @@ function Message({ message, index }: { message: UIMessage; index?: number }) {
   }
   return (
     <div className="min-w-0 text-[15px]">
-      <Blocks blocks={message.content} markdown />
+      <Blocks blocks={message.content} markdown hiddenThinking={hiddenThinking} />
       {message.errorMessage && (
         <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600 dark:border-red-900 dark:bg-red-950/50 dark:text-red-400">
           {message.errorMessage}
@@ -355,6 +371,23 @@ export function MessageList({
   const t = useT();
   const bottomRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
+  // Streaming thinking that just finished: keep it visible for 2s, then let
+  // the collapsed snapshot block take over (no double display).
+  const lastStreamThinking = useRef("");
+  const [fadingThinking, setFadingThinking] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (streamThinking) {
+      lastStreamThinking.current = streamThinking;
+      setFadingThinking(null);
+      return;
+    }
+    if (lastStreamThinking.current) {
+      setFadingThinking(lastStreamThinking.current);
+      const timer = setTimeout(() => setFadingThinking(null), 2_000);
+      return () => clearTimeout(timer);
+    }
+  }, [streamThinking]);
 
   useEffect(() => {
     if (stickToBottom.current) {
@@ -391,9 +424,19 @@ export function MessageList({
             </div>
           )}
           {messages.map((m, i) => (
-            <Message key={i} message={m} index={m.role === "user" ? i : undefined} />
+            <Message
+              key={i}
+              message={m}
+              index={m.role === "user" ? i : undefined}
+              hiddenThinking={fadingThinking}
+            />
           ))}
-          {streamThinking && <Thinking text={streamThinking} />}
+          {/* Streaming thinking stays open; after it ends it keeps showing for
+              2s (fadingThinking), then the collapsed snapshot block takes over. */}
+          {(() => {
+            const activeThinking = streamThinking || fadingThinking;
+            return activeThinking ? <Thinking text={activeThinking} /> : null;
+          })()}
           {streamText && (
             <div className="min-w-0 text-[15px]">
               <Markdown text={escapeUnclosedMarkdown(streamText)} />
