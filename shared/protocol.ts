@@ -1,5 +1,13 @@
 /** Shared server <-> client protocol types */
 
+/** Todo 工具의 작업 하나 (toolResult details.tasks 의 부분 집합) */
+export interface UITodoTask {
+  id: number;
+  subject: string;
+  status: string;
+  activeForm?: string;
+}
+
 export type UIContentBlock =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
@@ -14,6 +22,8 @@ export type UIContentBlock =
         isError: boolean;
         /** Actual diff returned by some tools (e.g. edit, details.diff) */
         diff?: string;
+        /** Full task list snapshot from the todo tool (details.tasks) */
+        tasks?: UITodoTask[];
       };
     }
   | { type: "image"; dataUrl?: string };

@@ -103,6 +103,7 @@ export type Messages = {
   reload: string;
   imagePlaceholder: string;
   toolRunning: string;
+  askAnswerInTerminal: string;
 
   // auth
   login: string;
@@ -213,6 +214,7 @@ export const en: Messages = {
   attachedImage: "Attached image",
   imagePlaceholder: "[image]",
   toolRunning: "Running {name}…",
+  askAnswerInTerminal: "This needs input in the pi terminal — the web UI can't answer it.",
 
   login: "Sign in",
   loginFailed: "Invalid token or 2FA code.",

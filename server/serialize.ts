@@ -1,4 +1,4 @@
-import type { UIContentBlock, UIMessage } from "../shared/protocol.ts";
+import type { UIContentBlock, UIMessage, UITodoTask } from "../shared/protocol.ts";
 
 type AnyMessage = {
   role: string;
@@ -37,7 +37,7 @@ export function serializeMessages(messages: unknown[]): UIMessage[] {
   const msgs = messages as AnyMessage[];
 
   // toolCallId -> result mapping
-  const results = new Map<string, { text: string; isError: boolean; diff?: string }>();
+  const results = new Map<string, { text: string; isError: boolean; diff?: string; tasks?: UITodoTask[] }>();
   for (const m of msgs) {
     if (m.role === "toolResult" && typeof m.toolCallId === "string") {
       const details =
@@ -45,10 +45,20 @@ export function serializeMessages(messages: unknown[]): UIMessage[] {
           ? (m.details as Record<string, unknown>)
           : null;
       const diff = details && typeof details.diff === "string" ? details.diff : undefined;
+      // todo tool carries the full task list on every result (details.tasks)
+      const tasks = Array.isArray(details?.tasks)
+        ? (details.tasks as unknown[]).filter(
+            (t): t is UITodoTask =>
+              !!t &&
+              typeof (t as UITodoTask).id === "number" &&
+              typeof (t as UITodoTask).subject === "string",
+          )
+        : undefined;
       results.set(m.toolCallId, {
         text: textFromContent(m.content),
         isError: m.isError === true,
         ...(diff ? { diff } : {}),
+        ...(tasks && tasks.length > 0 ? { tasks } : {}),
       });
     }
   }

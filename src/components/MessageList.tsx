@@ -6,7 +6,128 @@ import { useT } from "../lib/i18n";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 
+/** todo 工具: 状态 → 표시 색/심볼 */
+function TodoStatusIcon({ status }: { status: string }) {
+  if (status === "completed") {
+    return <span className="text-emerald-500">✓</span>;
+  }
+  if (status === "in_progress") {
+    return <span className="text-amber-500">▶</span>;
+  }
+  return <span className="text-faint">○</span>;
+}
+
+/** todo 工具 카드: 진행률 바 + 작업 목록 */
+function TodoCard({ block }: { block: Extract<UIContentBlock, { type: "toolCall" }> }) {
+  const t = useT();
+  const tasks = block.result?.tasks ?? [];
+  const done = tasks.filter((x) => x.status === "completed").length;
+  const pct = tasks.length > 0 ? Math.round((done / tasks.length) * 100) : 0;
+  const current = tasks.find((x) => x.status === "in_progress");
+  const summary = tasks.length > 0
+    ? `${done}/${tasks.length}${current?.activeForm ? ` · ${current.activeForm}` : ""}`
+    : t("toolRunning", { name: "todo" });
+  return (
+    <details className="my-2 rounded-xl border border-line bg-card/60 text-sm">
+      <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 select-none">
+        <span
+          className={`size-1.5 shrink-0 rounded-full ${
+            block.result?.isError ? "bg-red-500" : "bg-emerald-500/80"
+          }`}
+        />
+        <span className="font-medium text-ink">todo</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted">{summary}</span>
+        {tasks.length > 0 && (
+          <span className="shrink-0 font-mono text-[10px] text-faint tabular-nums">{pct}%</span>
+        )}
+      </summary>
+      {tasks.length > 0 && (
+        <div className="border-t border-line px-3 py-2">
+          <div className="mb-2 h-1 overflow-hidden rounded-full bg-line">
+            <div
+              className="h-full rounded-full bg-emerald-500 transition-all"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <ul className="space-y-1">
+            {tasks.map((task) => (
+              <li key={task.id} className="flex min-w-0 items-center gap-2 text-[13px]">
+                <span className="w-4 shrink-0 text-center">
+                  <TodoStatusIcon status={task.status} />
+                </span>
+                <span
+                  className={`min-w-0 truncate ${
+                    task.status === "completed"
+                      ? "text-faint line-through"
+                      : task.status === "in_progress"
+                        ? "text-ink"
+                        : "text-muted"
+                  }`}
+                >
+                  {task.subject}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </details>
+  );
+}
+
+/** ask_user_question 확장 카드: 질문 + 옵션을 읽기 전용으로 표시 */
+function AskCard({ block }: { block: Extract<UIContentBlock, { type: "toolCall" }> }) {
+  const t = useT();
+  const args =
+    block.args && typeof block.args === "object"
+      ? (block.args as { questions?: Array<{ question?: string; multiSelect?: boolean; options?: Array<{ label?: string; description?: string }> }> })
+      : null;
+  const questions = args?.questions ?? [];
+  return (
+    <details className="my-2 rounded-xl border border-line bg-card/60 text-sm">
+      <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 select-none">
+        <span className="size-1.5 shrink-0 rounded-full bg-purple-500/80" />
+        <span className="font-medium text-ink">ask_user_question</span>
+        <span className="truncate font-mono text-xs text-muted">
+          {questions.length > 0 ? `${questions.length} question(s)` : block.result?.text ?? ""}
+        </span>
+      </summary>
+      {questions.length > 0 && (
+        <div className="space-y-3 border-t border-line px-3 py-2">
+          {questions.map((q, qi) => (
+            <div key={qi}>
+              <p className="font-medium text-ink">
+                {q.multiSelect ? "[multi] " : ""}
+                {q.question ?? ""}
+              </p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {(q.options ?? []).map((opt, oi) => (
+                  <span
+                    key={oi}
+                    className="rounded-lg border border-line bg-bubble px-2 py-1 text-xs text-muted"
+                    title={opt.description}
+                  >
+                    {opt.label}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+          <p className="text-[11px] text-faint">
+            {t("askAnswerInTerminal")}
+          </p>
+        </div>
+      )}
+    </details>
+  );
+}
+
 function ToolCallCard({ block }: { block: Extract<UIContentBlock, { type: "toolCall" }> }) {
+  // todo tool: dedicated progress card (full task list via result.tasks)
+  if (block.name === "todo") return <TodoCard block={block} />;
+  // ask_user_question extension: read-only questionnaire card
+  if (block.name === "ask_user_question") return <AskCard block={block} />;
+
   const args = block.args ? JSON.stringify(block.args) : "";
   // edit tool: render args (path/edits or legacy file/oldText/newText) as a git diff
   const edit = block.name === "edit" ? buildEditDiffFromArgs(block.args) : null;

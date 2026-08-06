@@ -98,6 +98,7 @@ export const ja: Messages = {
   attachedImage: "添付画像",
   imagePlaceholder: "[画像]",
   toolRunning: "{name} を実行中…",
+  askAnswerInTerminal: "これは pi ターミナルでの回答が必要です — Web UI では回答できません。",
 
   login: "ログイン",
   loginFailed: "トークンまたは2FAコードが正しくありません。",

@@ -98,6 +98,7 @@ export const zh: Messages = {
   attachedImage: "附件图片",
   imagePlaceholder: "[图片]",
   toolRunning: "正在运行 {name}…",
+  askAnswerInTerminal: "这需要在 pi 终端中回答 — Web 界面无法回答。",
 
   login: "登录",
   loginFailed: "令牌或 2FA 验证码不正确。",

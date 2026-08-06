@@ -98,6 +98,7 @@ export const ko: Messages = {
   attachedImage: "첨부 이미지",
   imagePlaceholder: "[이미지]",
   toolRunning: "{name} 실행 중…",
+  askAnswerInTerminal: "pi 터미널에서 답변이 필요합니다 — 웹 UI 에서는 답할 수 없습니다.",
 
   login: "로그인",
   loginFailed: "토큰 또는 2FA 코드가 올바르지 않습니다.",
