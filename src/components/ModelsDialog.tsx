@@ -227,7 +227,7 @@ function ProviderCard({
   );
 }
 
-/** ~/.pi/agent/models.json 커스텀 프로바이더/모델 관리 */
+/** Manage custom providers/models in ~/.pi/agent/models.json */
 export function ModelsDialog({
   open,
   onOpenChange,
@@ -242,7 +242,7 @@ export function ModelsDialog({
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
 
-  // 서버 데이터 → 편집 초안 (다이얼로그 열릴 때 1회)
+  // Server data → edit draft (once when the dialog opens)
   useEffect(() => {
     if (open && data && draft === null) setDraft(structuredClone(data.providers));
   }, [open, data, draft]);

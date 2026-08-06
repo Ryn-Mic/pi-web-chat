@@ -12,7 +12,7 @@ import { authHeaders, setAuthStatus } from "./auth";
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { ...init, headers: { ...authHeaders(), ...init?.headers } });
   if (res.status === 401) {
-    // 세션 만료/무효 → 로그인 화면으로
+    // Expired/invalid session → login screen
     setAuthStatus("unauthenticated");
     throw new Error(`${url}: 401 unauthorized`);
   }
@@ -32,18 +32,18 @@ export function useSessions(enabled = true) {
   });
 }
 
-/** 세션 생성/전환/메시지 완료 후 사이드바 목록 갱신 */
+/** Refresh the sidebar list after session create/switch/message completion */
 export function useInvalidateSessions() {
   const qc = useQueryClient();
   return () => qc.invalidateQueries({ queryKey: SESSIONS_QUERY_KEY });
 }
 
-/** 세션 삭제 (파일 제거) */
+/** Delete a session (removes the file) */
 export async function deleteSession(id: string): Promise<void> {
   await fetchJson<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
-/** 세션 표시 이름 변경 (빈 문자열이면 해제) */
+/** Set a session display name (empty string clears it) */
 export async function renameSession(id: string, name: string): Promise<void> {
   await fetchJson<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(id)}/name`, {
     method: "POST",
@@ -81,7 +81,7 @@ export function useModels() {
 
 export const CUSTOM_MODELS_QUERY_KEY = ["custom-models"] as const;
 
-/** ~/.pi/agent/models.json 의 커스텀 프로바이더/모델 */
+/** Custom providers/models from ~/.pi/agent/models.json */
 export function useCustomModels(enabled = true) {
   return useQuery({
     queryKey: CUSTOM_MODELS_QUERY_KEY,
@@ -106,7 +106,7 @@ export async function saveCustomModels(
   return json;
 }
 
-/** 모델 목록 재조회 (커스텀 모델 저장 후) */
+/** Re-fetch the model list (after saving custom models) */
 export function useInvalidateModels() {
   const qc = useQueryClient();
   return () => qc.invalidateQueries({ queryKey: ["models"] });

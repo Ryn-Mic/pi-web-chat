@@ -1,7 +1,8 @@
 /**
- * ~/.pi/agent/models.json (커스텀 프로바이더/모델) 읽기·쓰기.
+ * Read/write ~/.pi/agent/models.json (custom providers/models).
  *
- * 편집 UI가 다루지 않는 필드(cost, compat, headers 등)는 병합으로 보존한다.
+ * Fields the edit UI doesn't touch (cost, compat, headers, etc.) are preserved
+ * via merge.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -78,7 +79,7 @@ export function readCustomModels(): UICustomModelsResponse {
   return { path: shorten(modelsPath()), providers, parseError };
 }
 
-/** 사용자 입력 검증. 문제가 있으면 메시지를 반환한다. */
+/** Validate user input. Returns a message when there's a problem. */
 export function validateProviders(providers: unknown): string | null {
   if (!Array.isArray(providers)) return "providers must be an array";
   const seen = new Set<string>();
@@ -128,7 +129,7 @@ function mergeModel(existing: Json | undefined, next: UICustomModel): Json {
   return out;
 }
 
-/** models.json 을 병합 저장 (알 수 없는 필드 보존, 원자적 쓰기) */
+/** Merge-save models.json (preserves unknown fields, atomic write) */
 export function writeCustomModels(providers: UICustomProvider[]): void {
   const { json } = readRaw();
   const prevProviders = (json.providers ?? {}) as Record<string, Json>;

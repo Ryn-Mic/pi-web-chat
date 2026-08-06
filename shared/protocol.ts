@@ -1,4 +1,4 @@
-/** 서버 <-> 클라이언트 공용 프로토콜 타입 */
+/** Shared server <-> client protocol types */
 
 export type UIContentBlock =
   | { type: "text"; text: string }
@@ -8,11 +8,11 @@ export type UIContentBlock =
       id: string;
       name: string;
       args: unknown;
-      /** 페어링된 tool result (있으면) */
+      /** Paired tool result (when present) */
       result?: {
         text: string;
         isError: boolean;
-        /** edit 등 일부 도구가 돌려주는 실제 diff (details.diff) */
+        /** Actual diff returned by some tools (e.g. edit, details.diff) */
         diff?: string;
       };
     }
@@ -33,9 +33,9 @@ export interface UIModel {
 
 export type UIThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
-/** 세션 컨텍스트 사용량 (SDK getContextUsage) */
+/** Session context usage (SDK getContextUsage) */
 export interface UIContextUsage {
-  /** 컨텍스트에 있는 토큰 수 (컴팩션 직후 등 알 수 없으면 null) */
+  /** Tokens in context (null when unknown, e.g. right after compaction) */
   tokens: number | null;
   contextWindow: number;
   percent: number | null;
@@ -46,20 +46,24 @@ export interface UISnapshot {
   isStreaming: boolean;
   model: UIModel | null;
   thinkingLevel: UIThinkingLevel;
-  /** 현재 모델이 지원하는 thinking level 목록 */
+  /** Thinking levels the current model supports */
   thinkingLevels: UIThinkingLevel[];
   sessionFile?: string;
-  /** URL(/s/:id)에 쓰는 세션 식별자 */
+  /** Session identifier used in URL (/s/:id) */
   sessionId?: string;
-  /** 컨텍스트 사용량 (미지원 모델이면 null) */
+  /** Context usage (null for unsupported models) */
   context?: UIContextUsage | null;
+  /** Session working directory (project display in the header) */
+  cwd?: string;
+  /** Current branch when the cwd is a git repo, otherwise null */
+  gitBranch?: string | null;
 }
 
 export interface UISessionInfo {
-  /** URL(/s/:id)에 쓰는 세션 식별자 */
+  /** Session identifier used in URL (/s/:id) */
   id: string;
   path: string;
-  /** 세션이 속한 프로젝트 디렉토리 (표시용, ~ 축약) */
+  /** Project directory the session belongs to (for display, ~-shortened) */
   project: string;
   name?: string;
   firstMessage: string;
@@ -73,37 +77,37 @@ export interface UIForkPoint {
 }
 
 export interface UIExtensionInfo {
-  /** 표시용 이름 (파일명 또는 패키지 내 경로) */
+  /** Display name (filename or in-package path) */
   name: string;
-  /** 패키지 확장이면 패키지명 (예: "pi-subagents") */
+  /** Package name for package extensions (e.g. "pi-subagents") */
   packageName?: string;
-  /** 홈디렉토리를 ~ 로 축약한 경로 */
+  /** Home-relative path with ~ abbreviation */
   path: string;
   scope: "user" | "project" | "temporary";
-  /** 등록된 커스텀 툴 이름 */
+  /** Registered custom tool names */
   tools: string[];
-  /** 등록된 슬래시 커맨드 */
+  /** Registered slash commands */
   commands: string[];
-  /** 등록된 플래그 */
+  /** Registered flags */
   flags: string[];
-  /** 핸들러가 등록된 이벤트 이름 */
+  /** Event names with registered handlers */
   events: string[];
 }
 
 export interface UIExtensionsResponse {
   extensions: UIExtensionInfo[];
-  /** 로드에 실패한 확장 */
+  /** Extensions that failed to load */
   errors: { path: string; error: string }[];
 }
 
-/** ~/.pi/agent/models.json 의 커스텀 모델 (편집 가능한 필드만 노출) */
+/** Custom models from ~/.pi/agent/models.json (only editable fields are exposed) */
 export interface UICustomModel {
   id: string;
   name?: string;
   reasoning?: boolean;
   contextWindow?: number;
   maxTokens?: number;
-  /** 입력 모달리티 (기본 ["text"]) */
+  /** Input modalities (default ["text"]) */
   input?: ("text" | "image")[];
 }
 
@@ -114,27 +118,27 @@ export type UICustomApi =
   | "google-generative-ai";
 
 export interface UICustomProvider {
-  /** models.json 의 providers 키 (예: "ollama") */
+  /** providers key in models.json (e.g. "ollama") */
   key: string;
   baseUrl: string;
   api: UICustomApi;
-  /** 값 또는 "$ENV_VAR" 형식 */
+  /** A value or "$ENV_VAR" */
   apiKey?: string;
   models: UICustomModel[];
 }
 
 export interface UICustomModelsResponse {
-  /** ~ 로 축약한 models.json 경로 */
+  /** models.json path, ~-shortened */
   path: string;
   providers: UICustomProvider[];
-  /** 파싱 실패 시 메시지 (이 경우 편집 저장은 위험하므로 UI에서 경고) */
+  /** Message when parsing failed (saving is then risky, so the UI warns) */
   parseError?: string;
-  /** 저장 후 재시작 없이 반영되지 않은 경우의 안내 */
+  /** Notice when the change is not reflected without a restart */
   warning?: string;
 }
 
 export interface UIImageAttachment {
-  /** base64 (data URL 아님) */
+  /** base64 (not a data URL) */
   data: string;
   mimeType: string;
 }
@@ -143,13 +147,14 @@ export type ServerEvent =
   | { type: "snapshot"; snapshot: UISnapshot }
   | {
       type: "hello";
-      /** 서버 빌드 버전 — 클라이언트 __APP_VERSION__ 과 다르면 새로고침 유도 */
+      /** Server build version — prompts a reload when different from the client __APP_VERSION__ */
       version: string;
     }
   /**
-   * 이 연결이 URL에 공개된 세션.
-   * 기존 /s/:id 접속 시 즉시, `/` 초안은 첫 prompt 때 전송 → 클라이언트는 /s/:id 로 교체.
-   * 포크 등으로 id가 바뀌면 다시 전송.
+   * Session this connection is bound to in the URL.
+   * Sent immediately on an existing /s/:id connect; for a `/` draft it is sent
+   * on the first prompt → the client switches to /s/:id. Re-sent when the id
+   * changes (e.g. fork).
    */
   | { type: "session_bound"; sessionId: string }
   | { type: "delta"; kind: "text" | "thinking"; delta: string }

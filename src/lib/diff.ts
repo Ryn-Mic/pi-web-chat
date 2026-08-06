@@ -1,11 +1,11 @@
-/** 행 단위 LCS diff — edit 도구 인자(oldText/newText) → unified diff 로 변환용 */
+/** Line-level LCS diff — for converting edit tool args (oldText/newText) to a unified diff */
 
 export interface DiffOp {
   type: "add" | "del" | "keep";
   text: string;
 }
 
-/** 두 행 배열의 차이를 ops 로 반환 (첫 문자열을 기준으로 del/add 순서 보장) */
+/** Diff two line arrays into ops (del/add order guaranteed, first string as base) */
 export function lineDiff(a: string[], b: string[]): DiffOp[] {
   const n = a.length;
   const m = b.length;
@@ -53,11 +53,11 @@ export interface EditArgs {
 }
 
 /**
- * pi SDK edit 도구 인자에서 파일 경로 + 교체 목록을 추출.
- * - 정식: { path, edits: [{oldText, newText}] }
- * - legacy: { file_path | file, oldText, newText } (최상위 단일 교체)
+ * Extract the file path + replacements from pi SDK edit tool args.
+ * - Canonical: { path, edits: [{oldText, newText}] }
+ * - legacy: { file_path | file, oldText, newText } (single top-level replacement)
  *
- * 파라미터 형태가 전혀 맞지 않으면 null (일반 args 렌더로 폴백).
+ * Returns null when the arg shape doesn't match at all (falls back to plain args).
  */
 export function parseEditArgs(args: unknown): EditArgs | null {
   if (!args || typeof args !== "object") return null;
@@ -88,7 +88,7 @@ export function parseEditArgs(args: unknown): EditArgs | null {
       }
     }
   }
-  // legacy 단일 교체 형태
+  // legacy single-replacement shape
   if (edits.length === 0 && typeof a.oldText === "string" && typeof a.newText === "string") {
     edits.push({ oldText: a.oldText, newText: a.newText });
   }
@@ -97,8 +97,8 @@ export function parseEditArgs(args: unknown): EditArgs | null {
 }
 
 /**
- * edit 도구 인자 → git diff 스타일 문자열.
- * 파일당 한 번 헤더(---/+++), 교체별 한 hunk(@@)를 만든다.
+ * Edit tool args → git-diff-style string.
+ * One header (---/+++) per file, one hunk (@@) per replacement.
  */
 export function buildEditDiffFromArgs(args: unknown): { path: string; diff: string } | null {
   const parsed = parseEditArgs(args);
@@ -111,7 +111,7 @@ export function buildEditDiffFromArgs(args: unknown): { path: string; diff: stri
   for (const e of edits) {
     const a = e.oldText.split("\n");
     const b = e.newText.split("\n");
-    // 실제 변경 위치를 알 수 없으므로 hunk 범위는 전체 파일 기준
+    // The real change location is unknown, so the hunk range covers the whole file
     lines.push(`@@ -1,${a.length} +1,${b.length} @@`);
     for (const op of lineDiff(a, b)) {
       if (op.type === "keep") lines.push(" " + op.text);
@@ -131,7 +131,7 @@ export type DiffLineKind =
   | "nonewline"
   | "plain";
 
-/** diff 한 줄: 종류 + 구/신 행 번호 (행 번호 없으면 null) */
+/** One diff line: kind + old/new line numbers (null when absent) */
 export interface DiffLine {
   kind: DiffLineKind;
   text: string;
@@ -186,7 +186,7 @@ export function parseDiff(text: string): DiffLine[] {
   return out;
 }
 
-/** 텍스트가 unified diff 처럼 보이는지 (diff 헤더 또는 +- 줄이 충분히 많으면) */
+/** Whether the text looks like a unified diff (diff headers or enough +/- lines) */
 export function isUnifiedDiff(text: string): boolean {
   if (!text.includes("\n")) return false;
   if (/^(diff --git |@@ -|--- [ab]\/|\+\+\+ [ab]\/)/m.test(text)) return true;

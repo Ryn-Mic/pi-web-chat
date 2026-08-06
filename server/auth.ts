@@ -1,14 +1,14 @@
 /**
- * pi-web-chat 인증 모듈
+ * pi-web-chat auth module
  *
- * - 액세스 토큰: PI_WEB_TOKEN env 또는 자동 생성 (~/.pi/web-chat/token, 32바이트 hex)
- * - 2FA: TOTP (RFC 6238, SHA-1, 30s, 6자리) — PI_WEB_2FA=off 로 끌 수 있음 (기본 켜짐)
- *   시크릿은 ~/.pi/web-chat/2fa.secret (base32) 에 로컬 저장.
- * - 로그인 성공 시 메모리 세션 토큰 발급 (30일 슬라이딩 만료).
- *   모든 API/WS 요청은 세션 토큰으로 검증한다.
+ * - Access token: PI_WEB_TOKEN env or auto-generated (~/.pi/web-chat/token, 32-byte hex)
+ * - 2FA: TOTP (RFC 6238, SHA-1, 30s, 6 digits) — can be disabled with PI_WEB_2FA=off (on by default)
+ *   Secret is stored locally at ~/.pi/web-chat/2fa.secret (base32).
+ * - A successful login issues an in-memory session token (30-day sliding expiry).
+ *   Every API/WS request is verified against the session token.
  *
- * 외부 의존성 없음 (node:crypto). QR 코드 생성을 위해선 qrcode 패키지를 사용하지만
- * 이 모듈은 코드 생성/검증만 담당한다.
+ * No external dependencies (node:crypto). The qrcode package is used for QR
+ * generation, but this module only creates/verifies codes.
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -21,7 +21,7 @@ const SECRET_FILE = join(STATE_DIR, "2fa.secret");
 const SESSIONS_FILE = join(STATE_DIR, "sessions.json");
 
 const TWO_FACTOR_ENABLED = process.env.PI_WEB_2FA !== "off";
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30일
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const SESSION_CLEANUP_MS = 10 * 60 * 1000;
 const SESSIONS_SAVE_DEBOUNCE_MS = 500;
 
@@ -74,12 +74,12 @@ function readOrCreate(file: string, generate: () => string): string {
   try {
     writeFileSync(file, value + "\n", { mode: 0o600 });
   } catch {
-    /* ignore — 로그로만 안내 */
+    /* ignore — log-only */
   }
   return value;
 }
 
-/** SHA-256 해시 후 상수시간 비교 (길이 불일치 회피) */
+/** SHA-256 hash then constant-time compare (avoids length mismatch) */
 function safeEqual(a: string, b: string): boolean {
   const ha = createHash("sha256").update(a).digest();
   const hb = createHash("sha256").update(b).digest();
@@ -94,7 +94,7 @@ function generateSecret(): string {
   return base32Encode(randomBytes(20)); // 160-bit
 }
 
-/** 현재 시간 기준 TOTP 코드 (period=30s, digits=6) */
+/** TOTP code for the current time (period=30s, digits=6) */
 function totpAt(secret: string, atSeconds: number, period = 30, digits = 6): string {
   const key = base32Decode(secret);
   const counter = Math.floor(atSeconds / period);
@@ -118,7 +118,7 @@ function verifyTotp(secret: string, code: string): boolean {
   const clean = code.trim().replace(/\s/g, "");
   if (!/^\d{6}$/.test(clean)) return false;
   const now = Math.floor(Date.now() / 1000);
-  // ±1 윈도우 허용 (시계 오차)
+  // Allow ±1 window (clock drift)
   for (const offset of [0, -1, 1]) {
     if (safeEqual(totpAt(secret, now + offset * 30), clean)) return true;
   }
@@ -126,7 +126,7 @@ function verifyTotp(secret: string, code: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// 세션 토큰 저장소 (메모리)
+// Session token store (in memory)
 // ---------------------------------------------------------------------------
 
 interface Session {
@@ -149,7 +149,7 @@ class Auth {
     setInterval(() => this.cleanupSessions(), SESSION_CLEANUP_MS).unref();
   }
 
-  /** 재시작 후에도 로그인 유지: 세션 토큰을 디스크에 영속 */
+  /** Keep logins after restart: persist session tokens to disk */
   private loadSessions(): void {
     try {
       if (!existsSync(SESSIONS_FILE)) return;
@@ -166,7 +166,7 @@ class Auth {
         });
       }
     } catch {
-      /* ignore — 저장된 세션 없음 */
+      /* ignore — no saved sessions */
     }
   }
 
@@ -179,7 +179,7 @@ class Auth {
     this.saveTimer.unref?.();
   }
 
-  /** 동기 저장 (로그인/로그아웃/종료 시) */
+  /** Synchronous save (on login/logout/shutdown) */
   private saveNow(): void {
     try {
       writeFileSync(SESSIONS_FILE, JSON.stringify(Object.fromEntries(this.sessions)), {
@@ -190,14 +190,15 @@ class Auth {
     }
   }
 
-  /** SIGTERM 등 종료 시 남은 변경분을 즉시 기록 */
+  /** Write remaining changes immediately on SIGTERM etc. */
   flushSessions(): void {
     this.saveNow();
   }
 
   /**
-   * 현재 유효한 액세스 토큰: 파일이 우선(첫 시작 시 env 또는 자동 생성으로 파일에 기록).
-   * 로그인마다 파일을 다시 읽어 `rftoken` 으로 교체한 토큰이 재시작 없이 바로 적용된다.
+   * Current valid access token: the file wins (written from env or auto-generated
+   * on first start). The file is re-read on every login so a token rotated via
+   * `rftoken` applies without restarting.
    */
   private readToken(): string {
     try {
@@ -224,7 +225,7 @@ class Auth {
     return generated;
   }
 
-  /** 로그인: 토큰 + (2FA 켜짐이면) TOTP 코드 검증 → 세션 토큰 발급 */
+  /** Login: verify token + (TOTP code when 2FA is on) → issue session token */
   login(
     rawToken: string,
     totpCode?: string,
@@ -239,7 +240,7 @@ class Auth {
     return { sessionToken };
   }
 
-  /** 원시 액세스 토큰 검증 (예: /api/auth/setup QR 재조회용) */
+  /** Verify a raw access token (e.g. for /api/auth/setup QR re-fetch) */
   verifyRawToken(rawToken: string): boolean {
     return safeEqual(this.readToken(), rawToken.trim());
   }
@@ -270,7 +271,7 @@ class Auth {
     if (changed) this.scheduleSave();
   }
 
-  /** 최근 2FA 코드 (지역/콘솔 안내용). 인증 앱 대신 여기서 읽어 로그인할 수 있다. */
+  /** Recent 2FA code (for local/console hints). Lets you log in without an authenticator app. */
   currentTotp(): string {
     return totpAt(this.totpSecret, Math.floor(Date.now() / 1000));
   }
@@ -282,7 +283,7 @@ class Auth {
 
 export const auth = new Auth();
 
-/** 스타트업 로그에 출력할 인증 정보 (token 미리보기 제외) */
+/** Auth info for the startup log (excludes the token itself) */
 export function authStartupInfo(): { twoFactorEnabled: boolean; hasToken: boolean; tokenFile: string; secretFile: string } {
   return {
     twoFactorEnabled: auth.twoFactorEnabled,

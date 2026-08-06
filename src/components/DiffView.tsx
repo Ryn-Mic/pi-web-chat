@@ -4,7 +4,7 @@ import { parseDiff, type DiffLineKind } from "../lib/diff";
 const KIND_CLASS: Record<DiffLineKind, string> = {
   header: "text-faint",
   hunk: "bg-faint/10 text-muted font-semibold",
-  // 新增 = 파랑, 삭제 = 빨강 (빨파 스킴)
+  // added = blue, deleted = red (blue/red scheme)
   add: "bg-blue-500/10 text-blue-700 dark:text-blue-400",
   del: "bg-red-500/10 text-red-600 dark:text-red-400",
   context: "text-muted",
@@ -13,8 +13,8 @@ const KIND_CLASS: Record<DiffLineKind, string> = {
 };
 
 /**
- * unified diff 를 행 번호 + 빨강(삭제)/파랑(추가) 스킴으로 렌더.
- * 구/신 두 행 번호 거터 + 내용 (코드 블록은 JetBrainsMono Nerd Font).
+ * Render a unified diff with line numbers and a red(delete)/blue(add) scheme.
+ * Old/new line-number gutters + content (code blocks use JetBrainsMono Nerd Font).
  */
 export function DiffView({
   text,

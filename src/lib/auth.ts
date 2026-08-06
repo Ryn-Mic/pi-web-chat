@@ -61,7 +61,7 @@ export function authHeaders(): Record<string, string> {
   return t ? { authorization: `Bearer ${t}` } : {};
 }
 
-/** 부팅 시 세션 토큰 유효성 확인 */
+/** Check the session token at boot */
 export async function checkAuth(): Promise<AuthStatus> {
   try {
     const res = await fetch("/api/auth/status", { headers: authHeaders() });
@@ -69,12 +69,12 @@ export async function checkAuth(): Promise<AuthStatus> {
     setAuthStatus(next);
     return next;
   } catch {
-    // 서버 연결 실패 — 일단 checking 유지 (재시도는 AuthGate가 담당)
+    // Server unreachable — stay on checking (AuthGate handles retries)
     return "checking";
   }
 }
 
-/** 로그인: 토큰 + (2FA 켜짐이면) TOTP 코드 */
+/** Login: token + (TOTP code when 2FA is on) */
 export async function login(token: string, totp?: string): Promise<{ ok: boolean; error?: string }> {
   try {
     const res = await fetch("/api/auth/login", {

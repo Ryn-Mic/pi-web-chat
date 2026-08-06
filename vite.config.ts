@@ -44,7 +44,7 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // API/WS는 캐시하지 않음 (빌드 에셋만 precache)
+        // API/WS are not cached (only build assets are precached)
         navigateFallbackDenylist: [/^\/api\//, /^\/ws/],
         globPatterns: ["**/*.{js,css,html,woff2,svg,png,webmanifest}"],
         // App shell: prefer network so iOS PWAs pick up new deploys
@@ -63,9 +63,9 @@ export default defineConfig({
   ],
   server: {
     port: 5173,
-    host: true, // 모바일 기기에서 같은 네트워크로 접속 가능
+    host: true, // reachable from mobile devices on the same network
     proxy: {
-      // dev 서버 포트를 바꾸려면 PI_WEB_DEV_PORT (기본 3141)
+      // Change the dev server port with PI_WEB_DEV_PORT (default 3141)
       "/api": `http://localhost:${DEV_SERVER_PORT}`,
       "/ws": { target: `ws://localhost:${DEV_SERVER_PORT}`, ws: true },
     },

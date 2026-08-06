@@ -37,6 +37,7 @@ export type Messages = {
   removeImage: string;
   send: string;
   abort: string;
+  composerOpacity: string;
 
   // model
   selectModel: string;
@@ -204,6 +205,7 @@ export const en: Messages = {
   optional: "optional",
 
   emptyPrompt: "How can I help?",
+  composerOpacity: "Composer opacity",
   messageAnchors: "Jump to message",
   updateAvailable: "A new version is available",
   reload: "Reload",

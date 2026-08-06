@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { UIImageAttachment } from "../../shared/protocol";
 import { chatClient, useChat } from "../lib/chat";
+import { useComposerOpacity } from "../lib/composer";
 import { useT } from "../lib/i18n";
 import { ModelMenu } from "./ModelMenu";
 import { ThinkingMenu } from "./ThinkingMenu";
@@ -17,11 +18,11 @@ function formatTokens(n: number): string {
 }
 
 /**
- * 컨텍스트 사용률 프로그레스 링 (font color, 꽉 차면 더 진해짐)
+ * Context usage progress ring (font color; deeper when almost full)
  */
 function ContextRing({ percent }: { percent: number }) {
   const pct = Math.min(100, Math.max(0, percent));
-  // 낮음 → 흐림, 높음 → 진함 (빨강은 사용하지 않음)
+  // Low → faint, high → strong (red is not used)
   const tier =
     pct >= 90 ? "text-ink" : pct >= 65 ? "text-muted" : "text-faint";
   const r = 7;
@@ -72,8 +73,9 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { injectText, focusToken, snapshot } = useChat();
+  const composerOpacity = useComposerOpacity();
 
-  // fork 후 선택된 메시지 텍스트를 composer에 주입
+  // Inject the forked message text into the composer
   useEffect(() => {
     if (injectText !== null) {
       setText(injectText);
@@ -82,7 +84,7 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
     }
   }, [injectText]);
 
-  // 새 세션 등에서 입력창 포커스 요청
+  // Focus the input on new session etc.
   useEffect(() => {
     if (focusToken > 0) textareaRef.current?.focus();
   }, [focusToken]);
@@ -107,7 +109,10 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
 
   return (
     <div className="composer-bar shrink-0 bg-canvas md:rounded-b-2xl">
-      <div className="mx-auto max-w-3xl rounded-2xl border border-line bg-card px-2 pt-2 pb-2 shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-colors focus-within:border-faint">
+      <div
+        className="composer-panel mx-auto max-w-3xl rounded-2xl border border-line px-2 pt-2 pb-2 shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-colors focus-within:border-faint"
+        style={{ "--composer-bg-opacity": `${Math.round(composerOpacity * 100)}%` } as CSSProperties}
+      >
         {images.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2 px-1">
             {images.map((img, i) => (
@@ -162,7 +167,7 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
               }
             }}
             onKeyDown={(e) => {
-              // 데스크탑: Enter로 전송, 모바일(터치)은 버튼 사용
+              // Desktop: Enter sends; mobile (touch) uses the button
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 const isTouch = window.matchMedia("(pointer: coarse)").matches;
                 if (!isTouch) {
@@ -172,7 +177,7 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
               }
             }}
           />
-          {/* 하단 컨트롤 행 (Claude/ChatGPT desktop 레이아웃) */}
+          {/* Bottom control row (Claude/ChatGPT desktop layout) */}
           <div className="mt-1 flex items-center gap-1 px-1">
             <button
               onClick={() => fileInputRef.current?.click()}

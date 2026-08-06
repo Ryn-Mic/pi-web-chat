@@ -13,20 +13,20 @@ export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 export interface ChatState {
   connection: ConnectionStatus;
-  /** 서버가 이 연결에 바인딩한 세션 id (URL 동기화용) */
+  /** Session id the server bound to this connection (for URL sync) */
   sessionId: string | null;
   snapshot: UISnapshot | null;
-  /** 현재 스트리밍 중인 assistant 텍스트 (아직 snapshot에 없음) */
+  /** Assistant text streaming right now (not yet in the snapshot) */
   streamText: string;
   streamThinking: string;
   activeTools: ActiveTool[];
-  /** fork 직후 composer에 주입할 텍스트 (소비 후 clear) */
+  /** Text to inject into the composer right after a fork (cleared after consumption) */
   injectText: string | null;
-  /** 증가할 때마다 composer textarea 포커스 */
+  /** Incremented to focus the composer textarea */
   focusToken: number;
-  /** 서버 버전이 클라이언트 빌드와 다름 → 새로고침 유도 */
+  /** Server version differs from the client build → prompt a reload */
   updateAvailable: boolean;
-  /** 서버가 보낸 error 이벤트 (prompt 실패 등) — 배너로 표시 */
+  /** Error event from the server (failed prompt etc.) — shown as a banner */
   lastError: string | null;
 }
 
@@ -51,15 +51,15 @@ class ChatClient {
   /** After a drop, stay on "connecting" briefly before showing disconnected. */
   private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private everConnected = false;
-  /** 접속하려는 세션 id (null = 새 세션) */
+  /** Session id to connect to (null = new session) */
   private target: string | null = null;
   state: ChatState = initialState;
 
   /**
-   * 세션에 연결. 이미 같은 세션에 붙어 있으면 무시하고,
-   * 다른 세션이면 기존 연결을 끊고 새로 연다.
-   * `force: true` — 이미 `/`(새 초안)에 있어도 새 초안 연결을 다시 연다.
-   * `cwd` — 새 세션을 열 작업 디렉토리 (프로젝트별 새 세션).
+   * Connect to a session. Ignores the call when already attached to the same
+   * session; otherwise closes the existing connection and opens a new one.
+   * `force: true` — reopen a fresh draft connection even when already on `/`.
+   * `cwd` — working directory for a new session (per-project new session).
    */
   connect(sessionId: string | null = null, opts?: { force?: boolean; cwd?: string }) {
     if (this.ws) {
@@ -67,7 +67,7 @@ class ChatClient {
       if (!opts?.force && (sessionId === null ? this.target === null : sessionId === current)) {
         return;
       }
-      // 세션 전환: 이전 연결 종료 + 화면 초기화
+      // Session switch: close the previous connection and reset the view
       this.closeSocket();
       this.update({
         snapshot: null,
@@ -113,16 +113,17 @@ class ChatClient {
         this.update({ connection: "connecting" });
       }
       this.scheduleDisconnected();
-      // 재연결은 현재 바인딩된 세션으로 (새 세션이 또 생기지 않게)
+      // Reconnect to the currently bound session (don't spawn another new one)
       const retryTarget = this.state.sessionId ?? this.target;
       const delay = this.reconnectDelay;
       this.reconnectDelay = Math.min(Math.round(this.reconnectDelay * 1.6), 8_000);
-      // 401(세션 만료)만 로그인 화면으로 넘기고, 서버가 잠깐 죽었던 경우(checking)는 계속 재연결
+      // Only 401 (expired session) goes to the login screen; if the server was
+      // briefly down (checking) keep reconnecting
       setTimeout(() => {
         if (this.intentionalClose || this.ws) return;
         void checkAuth().then((s) => {
           if (this.intentionalClose || this.ws) return;
-          if (s === "unauthenticated") return; // AuthGate가 로그인 화면 표시
+          if (s === "unauthenticated") return; // AuthGate shows the login screen
           this.target = retryTarget;
           this.connect(retryTarget);
         });
@@ -131,7 +132,7 @@ class ChatClient {
     ws.onerror = () => ws.close();
   }
 
-  /** 재연결 핸들러까지 떼고 소켓을 닫는다 (유령 연결/재연결 루프 방지) */
+  /** Detach reconnect handlers and close the socket (prevents ghost/reconnect loops) */
   private closeSocket() {
     const ws = this.ws;
     this.ws = null;
@@ -174,19 +175,20 @@ class ChatClient {
   private handle(event: ServerEvent) {
     switch (event.type) {
       case "hello":
-        // 서버 버전과 클라이언트 빌드가 다르면 업데이트 배너 표시
+        // Show an update banner when the server version differs from the client build
         if (typeof event.version === "string" && event.version !== __APP_VERSION__) {
           this.update({ updateAvailable: true });
         }
         break;
       case "session_bound":
-        // 첫 메시지(또는 기존 세션 접속) 후 서버가 id를 알려 주면 URL 동기화 대상이 된다
+        // Once the server hands out the id (first message or existing-session
+        // connect), it becomes the URL sync target
         this.target = event.sessionId;
         this.update({ sessionId: event.sessionId });
         rememberSessionId(event.sessionId);
         break;
       case "snapshot":
-        // 완결된 메시지가 snapshot에 반영되므로 스트림 버퍼는 비운다
+        // Completed messages are reflected in the snapshot, so clear the stream buffers
         this.update({ snapshot: event.snapshot, streamText: "", streamThinking: "" });
         break;
       case "delta":
@@ -215,7 +217,7 @@ class ChatClient {
         });
         break;
       case "agent_end":
-        // snapshot 도착 전에도 isStreaming을 즉시 내려 로딩 점이 남지 않게 한다
+        // Drop isStreaming before the snapshot arrives so no loading dots linger
         this.update({
           activeTools: [],
           streamText: "",
@@ -243,7 +245,7 @@ class ChatClient {
     if (this.state.lastError !== null) this.update({ lastError: null });
   }
 
-  /** 드로어 닫힘 등과 겹치지 않도록 약간 늦춰 composer에 포커스 */
+  /** Delay slightly so it doesn't collide with drawer close etc., then focus the composer */
   requestComposerFocus() {
     window.setTimeout(() => {
       this.update({ focusToken: this.state.focusToken + 1 });

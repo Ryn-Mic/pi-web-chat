@@ -4,7 +4,7 @@ import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import type { Components } from "react-markdown";
 
-/** p 의 children 을 평문으로 펼쳐 검사할 수 있게 한다 */
+/** Flatten p's children into plain text so they can be inspected */
 function flattenText(node: ReactNode): string {
   if (node == null) return "";
   if (typeof node === "string" || typeof node === "number") return String(node);
@@ -13,8 +13,8 @@ function flattenText(node: ReactNode): string {
 }
 
 /**
- * pi-claude-code-ui 확장이 붙이는 "✻ Turn took …" 메타 줄을 흐리게 표시.
- * ANSI 코드는 서버(serialize)에서 제거된 뒤 도착한다.
+ * Dim the "✻ Turn took …" meta line added by the pi-claude-code-ui extension.
+ * ANSI codes are already stripped server-side (serialize).
  */
 const components: Components = {
   p: ({ children }) => {
@@ -24,10 +24,11 @@ const components: Components = {
     }
     return <p>{children}</p>;
   },
-  // 페이지 전체(메시지 리스트)는 overflow-x-hidden 인데, 테이블만 자체 컨테이너에서
-  // 가로 스크롤할 수 있게 한다. → 모바일에서도 모든 열을 볼 수 있다.
+  // The message list container is overflow-x-hidden; give tables their own
+  // horizontal scroll container so all columns are reachable on mobile
+  // without moving the page.
   table: ({ children }) => (
-    // margin 은 typography 테이블 기본값에 맡기고 컨테이너는 스크롤만 담당
+    // Defer margins to the typography table defaults; the container only scrolls
     <div className="overflow-x-auto thin-scroll">
       <table className="w-full text-left text-[0.875em] leading-relaxed">{children}</table>
     </div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { UIContentBlock, UIMessage } from "../../shared/protocol";
 import type { ActiveTool } from "../lib/chat";
 import { buildEditDiffFromArgs, isUnifiedDiff } from "../lib/diff";
@@ -8,9 +8,9 @@ import { Markdown } from "./Markdown";
 
 function ToolCallCard({ block }: { block: Extract<UIContentBlock, { type: "toolCall" }> }) {
   const args = block.args ? JSON.stringify(block.args) : "";
-  // edit 도구: 인자(path/edits 또는 legacy file/oldText/newText)를 git diff 스타일로 렌더
+  // edit tool: render args (path/edits or legacy file/oldText/newText) as a git diff
   const edit = block.name === "edit" ? buildEditDiffFromArgs(block.args) : null;
-  // edit 실행 결과에 실제 diff(details.diff)가 있으면 그것을 우선 표시
+  // If the edit result carries a real diff (details.diff), prefer showing it
   const resultDiff = block.result?.diff;
   const resultIsDiff = !!resultDiff || (!!block.result && isUnifiedDiff(block.result.text));
   const resultText = block.result?.text ?? "";
@@ -138,134 +138,24 @@ function Message({ message, index }: { message: UIMessage; index?: number }) {
     </div>
   );
 }
-
-/**
- * 사용자 메시지 앵커 내비게이션 (모바일 우선):
- * 오른쪽 중앙 부동 버튼 → 하단 시트에서 사용자 메시지 목록 → 탭하면 해당 위치로 스크롤 + 하이라이트.
- */
-function MessageAnchors({
-  messages,
-  containerRef,
-}: {
-  messages: UIMessage[];
-  containerRef: React.RefObject<HTMLDivElement | null>;
-}) {
-  const t = useT();
-  const [open, setOpen] = useState(false);
-  const userIndices = useMemo(() => {
-    const idx: number[] = [];
-    messages.forEach((m, i) => {
-      if (m.role === "user") idx.push(i);
-    });
-    return idx;
-  }, [messages]);
-
-  if (userIndices.length < 2) return null;
-
-  const jump = (i: number) => {
-    const el = containerRef.current?.querySelector<HTMLElement>(`[data-msg-index="${i}"]`);
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "start" });
-      const bubble = el.querySelector<HTMLElement>(".user-bubble");
-      const target = bubble ?? el;
-      target.classList.remove("anchor-flash");
-      void target.offsetWidth; // 리플로우 → 애니메이션 재시작
-      target.classList.add("anchor-flash");
-    }
-    setOpen(false);
-  };
-
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        aria-label={t("messageAnchors")}
-        title={t("messageAnchors")}
-        className="absolute top-1/2 right-2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full border border-line bg-card/90 text-muted shadow-sm backdrop-blur transition-colors hover:bg-hover hover:text-ink"
-      >
-        <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2">
-          <path
-            d="M4 6h16M4 12h16M4 18h10"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </button>
-
-      {open && (
-        <div
-          className="fixed inset-0 z-40 flex items-end justify-center md:items-center"
-          onClick={() => setOpen(false)}
-        >
-          <div className="absolute inset-0 bg-black/40" />
-          <div
-            className="relative z-10 flex max-h-[65vh] w-full flex-col rounded-t-2xl bg-card shadow-2xl outline-none md:max-w-sm md:rounded-2xl"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-label={t("messageAnchors")}
-          >
-            <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-3">
-              <span className="text-sm font-medium text-ink">{t("messageAnchors")}</span>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                aria-label={t("cancel")}
-                className="flex size-7 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink"
-              >
-                <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2">
-                  <path d="M18 6 6 18M6 6l12 12" strokeLinecap="round" />
-                </svg>
-              </button>
-            </div>
-            <div className="thin-scroll overflow-y-auto py-1">
-              {userIndices.map((i, n) => {
-                const m = messages[i]!;
-                const text =
-                  m.content
-                    .filter((b): b is { type: "text"; text: string } => b.type === "text")
-                    .map((b) => b.text)
-                    .join(" ")
-                    .replace(/\s+/g, " ")
-                    .trim() || t("emptyMessage");
-                return (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => jump(i)}
-                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-hover"
-                  >
-                    <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-selected text-[11px] text-muted tabular-nums">
-                      {n + 1}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink">{text}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
-
 export function MessageList({
   messages,
   streamText,
   streamThinking,
   activeTools,
   isStreaming,
+  containerRef,
 }: {
   messages: UIMessage[];
   streamText: string;
   streamThinking: string;
   activeTools: ActiveTool[];
   isStreaming: boolean;
+  /** Scroll container (owned externally for message-anchor jumps) */
+  containerRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const t = useT();
   const bottomRef = useRef<HTMLDivElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
 
   useEffect(() => {
@@ -274,7 +164,8 @@ export function MessageList({
     }
   });
 
-  // 응답 대기 중일 때만 ... 표시 (최종 assistant 텍스트가 있으면 숨김 → 종료 후 잔상 방지)
+  // Only show ... while waiting for a response (hidden when final assistant
+  // text exists → no ghost dots after the stream ends)
   const last = messages[messages.length - 1];
   const waitingForAssistant =
     !last ||
@@ -326,7 +217,6 @@ export function MessageList({
           <div ref={bottomRef} />
         </div>
       </div>
-      <MessageAnchors messages={messages} containerRef={containerRef} />
     </div>
   );
 }

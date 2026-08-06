@@ -23,7 +23,7 @@ function formatDate(iso: string, locale: string) {
   );
 }
 
-/** 사이드바 토글 아이콘 (Claude/ChatGPT desktop 스타일 패널 아이콘) */
+/** Sidebar toggle icon (Claude/ChatGPT desktop-style panel icon) */
 function SidebarPanelIcon() {
   return (
     <svg viewBox="0 0 24 24" className="size-[18px] fill-none stroke-current stroke-[1.8]">
@@ -52,14 +52,14 @@ function ChatIcon() {
   );
 }
 
-/** 프로젝트 경로 → 표시용 마지막 디렉토리 이름 ("~/foo/bar" → "bar", "~" → "~") */
+/** Project path → display name (last directory segment; "~/foo/bar" → "bar", "~" → "~") */
 function projectDisplay(project: string): string {
   if (!project || project === "~") return project;
   const parts = project.split("/").filter(Boolean);
   return parts[parts.length - 1] ?? project;
 }
 
-/** 프로젝트 그룹 헤더: 접기/펼치기 + 새 세션 버튼 */
+/** Project group header: collapse/expand + new-session button */
 function ProjectHeader({
   project,
   sessionCount,
@@ -71,7 +71,8 @@ function ProjectHeader({
 }) {
   const t = useT();
   const collapsed = useProjectCollapsed(project);
-  // "~" 또는 "/" 로 시작하는 실제 경로 그룹에만 새 세션 버튼 (인코딩된 폴백 이름 제외)
+  // Only real-path groups (starting with ~ or /) get a new-session button
+  // (excludes encoded fallback names)
   const canCreate = project.startsWith("~") || project.startsWith("/");
   return (
     <div className="group flex items-center gap-0.5 py-1">
@@ -254,7 +255,7 @@ function SessionRow({
   );
 }
 
-/** sessionFile 변경·스트리밍 종료 시 목록 갱신 */
+/** Refresh the list on sessionFile change and stream end */
 function useSessionListSync(enabled: boolean) {
   const invalidate = useInvalidateSessions();
   const { snapshot } = useChat();
@@ -262,13 +263,13 @@ function useSessionListSync(enabled: boolean) {
   const isStreaming = snapshot?.isStreaming ?? false;
   const prevStreaming = useRef(isStreaming);
 
-  // 세션 파일 바뀜 (new/switch/fork)
+  // Session file changed (new/switch/fork)
   useEffect(() => {
     if (!enabled || !sessionFile) return;
     void invalidate();
   }, [enabled, sessionFile, invalidate]);
 
-  // 응답 끝나면 firstMessage/messageCount 반영
+  // Reflect firstMessage/messageCount after a response finishes
   useEffect(() => {
     if (!enabled) {
       prevStreaming.current = isStreaming;
@@ -281,7 +282,7 @@ function useSessionListSync(enabled: boolean) {
   }, [enabled, isStreaming, invalidate]);
 }
 
-/** 프로젝트 그룹: 헤더(접기/+/카운트) + 펼쳐졌을 때 세션 목록 */
+/** Project group: header (collapse/+/count) + session list when expanded */
 function ProjectGroup({
   project,
   list,
@@ -328,11 +329,11 @@ function SessionsPanel({
 }: {
   currentSessionFile?: string;
   docked?: boolean;
-  /** false면 fetch 중지 (닫힌 드로어) */
+  /** Stop fetching when false (closed drawer) */
   active?: boolean;
   onSelectSession?: () => void;
   onClose?: () => void;
-  /** 드로어 → 고정 전환 (닫힘 애니메이션 없이) */
+  /** Drawer → docked transition (no close animation) */
   onDock?: () => void;
 }) {
   const t = useT();
@@ -341,7 +342,7 @@ function SessionsPanel({
   const { data: sessions, refetch } = useSessions(active);
   useSessionListSync(active);
 
-  // 패널이 활성화될 때마다 최신화 (드로어 오픈 / 독 마운트)
+  // Refresh whenever the panel becomes active (drawer open / dock mount)
   useEffect(() => {
     if (active) void refetch();
   }, [active, refetch]);
@@ -351,15 +352,16 @@ function SessionsPanel({
       setSidebarPinned(false);
       return;
     }
-    // 드로어에서 고정: 부모에서 애니메이션 없이 전환
+    // Dock from the drawer: switch in the parent without an animation
     if (onDock) onDock();
     else setSidebarPinned(true);
   };
 
   const startNewSession = () => {
-    // "/" 초안 화면. 이미 / 에 있어도 force 로 새 초안 WS를 연다.
-    // 세션 id는 첫 메시지 때 서버가 내려주고 /s/:id 로 교체된다.
-    suppressResumeOnce(); // resume 리다이렉트 방지 (마지막 세션으로 튀지 않게)
+    // "/" is the draft screen. Even when already on /, force a fresh draft WS.
+    // The session id is handed out by the server on the first message, then
+    // the URL switches to /s/:id.
+    suppressResumeOnce(); // don't resume-redirect back to the last session
     void navigate({ to: "/" });
     chatClient.connect(null, { force: true });
     window.setTimeout(() => void refetch(), 150);
@@ -367,10 +369,10 @@ function SessionsPanel({
     chatClient.requestComposerFocus();
   };
 
-  /** 특정 프로젝트 디렉토리에 새 세션 (서버가 ~ 확장) */
+  /** New session in a specific project directory (the server expands ~) */
   const startNewSessionInProject = (project: string) => {
     if (!project || !(project.startsWith("~") || project.startsWith("/"))) return;
-    suppressResumeOnce(); // resume 리다이렉트 방지 (마지막 세션으로 튀지 않게)
+    suppressResumeOnce(); // don't resume-redirect back to the last session
     void navigate({ to: "/" });
     chatClient.connect(null, { force: true, cwd: project });
     window.setTimeout(() => void refetch(), 150);
@@ -385,9 +387,9 @@ function SessionsPanel({
       return;
     }
     void refetch();
-    // 현재 보고 있는 세션을 지웠으면 새 초안으로 이동
+    // If we deleted the session we're viewing, go back to a fresh draft
     if (session.path === currentSessionFile) {
-      suppressResumeOnce(); // 지운 세션으로 resume 리다이렉트되지 않게
+      suppressResumeOnce(); // don't resume-redirect to the deleted session
       void navigate({ to: "/" });
       chatClient.connect(null, { force: true });
     }
@@ -403,7 +405,8 @@ function SessionsPanel({
     void refetch();
   };
 
-  // 세션을 프로젝트별로 그룹핑 (서버 정렬: 최신순, 그룹 순서도 가장 최근 세션 기준으로 유지됨)
+  // Group sessions by project (server sorts newest-first; group order follows
+  // the most recent session too)
   const groups = useMemo(() => {
     const map = new Map<string, UISessionInfo[]>();
     for (const s of sessions ?? []) {
@@ -430,7 +433,7 @@ function SessionsPanel({
           </Dialog.Title>
         )}
         <div className="flex items-center gap-1">
-          {/* 데스크톱에서만 사이드바 고정 토글 */}
+          {/* Desktop-only sidebar dock toggle */}
           <button
             type="button"
             onClick={toggleDock}
@@ -479,7 +482,7 @@ function SessionsPanel({
   );
 }
 
-/** 데스크톱 고정 사이드바 */
+/** Desktop docked sidebar */
 export function SessionsSidebar({ currentSessionFile }: { currentSessionFile?: string }) {
   return (
     <aside className="hidden h-full min-h-0 w-64 shrink-0 flex-col overflow-hidden bg-sidebar md:flex">
@@ -488,11 +491,11 @@ export function SessionsSidebar({ currentSessionFile }: { currentSessionFile?: s
   );
 }
 
-/** 오버레이 드로어 (모바일 / 고정 해제 상태) */
+/** Overlay drawer (mobile / unpinned state) */
 export function SessionsDrawer({ currentSessionFile }: { currentSessionFile?: string }) {
   const t = useT();
   const [open, setOpen] = useState(false);
-  /** 핀 고정 전환 시 true → Portal을 즉시 제거해 닫힘 애니 스킵 */
+  /** true during a pin switch → portal is removed immediately to skip the close animation */
   const [instantHide, setInstantHide] = useState(false);
   const sidebarPinned = useSidebarPinned();
 
@@ -502,10 +505,10 @@ export function SessionsDrawer({ currentSessionFile }: { currentSessionFile?: st
     setOpen(false);
   };
 
-  // 엣지 스와이프 등 외부 요청으로 드로어 열기
+  // Open the drawer from external requests (edge swipe etc.)
   useEffect(() => {
     return onRequestOpenSessionsDrawer(() => {
-      if (sidebarPinned) return; // 고정 사이드바 상태면 무시
+      if (sidebarPinned) return; // ignore when the sidebar is docked
       setInstantHide(false);
       setOpen(true);
     });

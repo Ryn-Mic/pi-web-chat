@@ -15,7 +15,7 @@ function DetailRow({ label, items }: { label: string; items: string[] }) {
   );
 }
 
-/** 현재 세션에 로드된 확장 목록 */
+/** Extensions loaded in the current session */
 export function ExtensionsDialog({
   open,
   onOpenChange,

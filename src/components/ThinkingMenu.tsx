@@ -9,7 +9,7 @@ export function ThinkingMenu({
   current: UIThinkingLevel;
   levels: UIThinkingLevel[];
 }) {
-  // 모델이 thinking 미지원이면 숨김
+  // Hide when the model doesn't support thinking
   if (levels.length <= 1) return null;
 
   return (

@@ -90,6 +90,7 @@ export const ja: Messages = {
   optional: "任意",
 
   emptyPrompt: "何をお手伝いしましょうか？",
+  composerOpacity: "入力欄の透明度",
   messageAnchors: "メッセージへ移動",
   updateAvailable: "新しいバージョンがあります",
   reload: "再読み込み",

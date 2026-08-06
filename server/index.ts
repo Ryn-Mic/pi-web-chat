@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { createServer, type IncomingMessage } from "node:http";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
@@ -33,12 +34,12 @@ const PORT = Number(process.env.PORT ?? 3141);
 // Override with HOST=0.0.0.0 only on trusted networks.
 const HOST = process.env.HOST ?? "127.0.0.1";
 const HOME = homedir();
-// 개인 채팅 워크스페이스 (프로젝트 cwd와 분리). PI_WEB_CWD로 오버라이드 가능
+// Personal chat workspace (separate from the project cwd). Override with PI_WEB_CWD.
 const DEFAULT_AGENT_CWD = join(HOME, ".pi", "web-chat");
 const AGENT_CWD = resolve(process.env.PI_WEB_CWD ?? DEFAULT_AGENT_CWD);
 mkdirSync(AGENT_CWD, { recursive: true });
 
-/** 데몬 상태 파일 디렉토리 (extensions/pi-web-chat.ts 의 STATE_DIR 과 동일) */
+/** Daemon state file dir (same STATE_DIR as extensions/pi-web-chat.ts) */
 const DAEMON_STATE_DIR = join(HOME, ".pi", "web-chat");
 
 // Resolve static assets for both layouts:
@@ -73,7 +74,7 @@ const DIST_DIR = (() => {
 })();
 
 // ---------------------------------------------------------------------------
-// pi 세션 런타임
+// pi session runtime
 // ---------------------------------------------------------------------------
 
 let modelRuntime = await ModelRuntime.create();
@@ -88,8 +89,8 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionMan
 };
 
 // ---------------------------------------------------------------------------
-// 세션 허브: 세션별로 독립된 런타임을 들고, 같은 세션을 보는 클라이언트끼리만
-// 브로드캐스트한다. URL /s/:sessionId 와 1:1 대응.
+// Session hub: holds one runtime per session and broadcasts only among
+// clients viewing the same session. Maps 1:1 to URL /s/:sessionId.
 // ---------------------------------------------------------------------------
 
 interface SessionEntry {
@@ -99,21 +100,22 @@ interface SessionEntry {
   unsubscribe?: () => void;
   lastActive: number;
   /**
-   * URL(/s/:id)에 공개했는지.
-   * `/` 접속으로 만든 빈 초안은 첫 prompt 전까지 false — 주소에 sessionId를 붙이지 않는다.
+   * Whether this session is exposed in the URL.
+   * A blank draft created from `/` stays false until the first prompt — the
+   * address does not get a sessionId attached.
    */
   published: boolean;
-  /** reload 중복 실행 방지 */
+  /** Guards against duplicate reloads */
   reloading?: boolean;
 }
 
 const entries = new Map<string, SessionEntry>();
 const pending = new Map<string, Promise<SessionEntry>>();
 const wsEntry = new Map<WebSocket, SessionEntry>();
-/** 비어 있는 세션 런타임을 정리하기 전 유예 시간 */
+/** Grace period before idle session runtimes are cleaned up */
 const IDLE_TTL_MS = 15 * 60_000;
 
-/** 세션 파일명(<timestamp>_<uuid>.jsonl) → URL 식별자 */
+/** Session filename (<timestamp>_<uuid>.jsonl) → URL identifier */
 function sessionIdOf(file?: string): string {
   if (!file) return "";
   const base = basename(file).replace(/\.jsonl$/, "");
@@ -127,8 +129,8 @@ async function resolveSessionPath(id: string): Promise<string | undefined> {
 }
 
 /**
- * 세션이 속한 프로젝트 디렉토리 (표시용): 세션 헤더의 cwd 우선,
- * 없으면 sessions/ 아래 부모 디렉토리 이름으로 폴백.
+ * Project directory a session belongs to (for display): session header cwd
+ * wins; otherwise fall back to the parent dir name under sessions/.
  */
 function projectOf(s: { cwd?: string; path: string }): string {
   const cwd = s.cwd;
@@ -145,7 +147,8 @@ function broadcastTo(entry: SessionEntry, event: ServerEvent) {
   }
 }
 
-/** 세션을 URL에 공개 (idempotent). 첫 메시지·기존 세션 접속·포크 시 호출 */
+/** Expose a session in the URL (idempotent). Called on first message, on
+ * existing-session connect, and on fork. */
 function publishEntry(entry: SessionEntry, ws?: WebSocket) {
   entry.published = true;
   const event: ServerEvent = { type: "session_bound", sessionId: entry.id };
@@ -153,7 +156,7 @@ function publishEntry(entry: SessionEntry, ws?: WebSocket) {
   else broadcastTo(entry, event);
 }
 
-/** 세션이 교체되면(포크 등) 키를 다시 맞추고 클라이언트에 알린다 */
+/** Re-key the entry when the session is replaced (fork etc.) and notify clients */
 function rekeyEntry(entry: SessionEntry) {
   const next = sessionIdOf(entry.runtime.session.sessionFile);
   if (!next || next === entry.id) return;
@@ -164,7 +167,7 @@ function rekeyEntry(entry: SessionEntry) {
   broadcastTo(entry, { type: "session_bound", sessionId: next });
 }
 
-/** ~ 또는 ~/... 를 HOME 기반 절대경로로 확장 */
+/** Expand ~ or ~/... to a HOME-based absolute path */
 function expandHome(p: string): string {
   if (p === "~") return HOME;
   if (p.startsWith("~/")) return join(HOME, p.slice(2));
@@ -173,7 +176,8 @@ function expandHome(p: string): string {
 
 async function createEntry(id: string | null, cwd?: string): Promise<SessionEntry> {
   const path = id ? await resolveSessionPath(id) : undefined;
-  // 기존 세션 열기는 기존 동작 유지(AGENT_CWD), 새 세션만 cwd 파라미터 적용
+  // Opening an existing session keeps the old behavior (AGENT_CWD); only
+  // brand-new sessions honor the cwd parameter.
   const sessionCwd = path ? AGENT_CWD : cwd ? expandHome(cwd) : AGENT_CWD;
   const runtime = await createAgentSessionRuntime(createRuntime, {
     cwd: sessionCwd,
@@ -186,7 +190,8 @@ async function createEntry(id: string | null, cwd?: string): Promise<SessionEntr
     runtime,
     clients: new Set(),
     lastActive: Date.now(),
-    // 명시적 세션 id로 연 경우만 즉시 공개. null 접속은 빈 초안.
+    // Only sessions opened with an explicit id are published immediately.
+    // A null connect is a blank draft.
     published: id !== null,
   };
   entries.set(entry.id, entry);
@@ -194,7 +199,8 @@ async function createEntry(id: string | null, cwd?: string): Promise<SessionEntr
   return entry;
 }
 
-/** id가 없으면 새 세션, 있으면 기존 런타임 재사용 (동시 접속 경합 방지) */
+/** New session when id is null, otherwise reuse the existing runtime (avoids
+ * concurrent-connect races) */
 async function acquireEntry(id: string | null, cwd?: string): Promise<SessionEntry> {
   if (!id) return createEntry(null, cwd);
   const hit = entries.get(id);
@@ -206,7 +212,7 @@ async function acquireEntry(id: string | null, cwd?: string): Promise<SessionEnt
   return p;
 }
 
-/** 비어 있고 오래된 런타임 정리 */
+/** Clean up empty, stale runtimes */
 setInterval(() => {
   const now = Date.now();
   for (const entry of [...entries.values()]) {
@@ -219,8 +225,9 @@ setInterval(() => {
 }, 60_000).unref();
 
 /**
- * 세션 파일이 외부(터미널의 pi 프로세스 등)에서 추가되면 런타임을 재로드해 뷰를 최신화.
- * 스트리밍 중에는 건드리지 않는다 (자신의 prompt 응답을 보호).
+ * If the session file gains entries externally (a pi process in the terminal
+ * etc.), reload the runtime so the view stays current. Streaming sessions are
+ * left alone to protect an in-flight prompt response.
  */
 async function reloadEntry(entry: SessionEntry): Promise<void> {
   if (entry.reloading) return;
@@ -248,7 +255,7 @@ async function reloadEntry(entry: SessionEntry): Promise<void> {
   }
 }
 
-/** 파일의 실제 entry 수 (빈 줄 제외) */
+/** Actual entry count in the file (excluding blank lines) */
 function countFileEntries(file: string): number {
   const content = readFileSync(file, "utf8");
   let count = 0;
@@ -267,9 +274,9 @@ setInterval(() => {
     try {
       fileEntries = countFileEntries(file);
     } catch {
-      continue; // 파일이 아직 생성 안 됨 (빈 초안)
+      continue; // file not created yet (blank draft)
     }
-    // 헤더(1) + 런타임 메모리 엔트리 수 보다 파일이 더 많으면 외부 추가 → 재로드
+    // More file entries than header(1) + in-memory entries → external append → reload
     const memoryEntries = entry.runtime.session.sessionManager.getEntries().length + 1;
     if (fileEntries > memoryEntries) {
       void reloadEntry(entry).catch(() => {});
@@ -287,6 +294,29 @@ const ALL_THINKING_LEVELS: UIThinkingLevel[] = [
   "max",
 ];
 
+// Cache git branch lookups with a short TTL so we don't spawn git on every snapshot.
+const gitBranchCache = new Map<string, { branch: string | null; at: number }>();
+const GIT_BRANCH_TTL_MS = 3_000;
+
+/** Git branch at the given cwd (null when not a git repo) */
+function gitBranchAt(cwd: string): string | null {
+  const hit = gitBranchCache.get(cwd);
+  if (hit && Date.now() - hit.at < GIT_BRANCH_TTL_MS) return hit.branch;
+  let branch: string | null = null;
+  try {
+    const out = execFileSync("git", ["-C", cwd, "branch", "--show-current"], {
+      encoding: "utf8",
+      timeout: 2_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    branch = out.trim() || null;
+  } catch {
+    branch = null;
+  }
+  gitBranchCache.set(cwd, { branch, at: Date.now() });
+  return branch;
+}
+
 function supportedThinkingLevels(model: unknown): UIThinkingLevel[] {
   const m = model as
     | { reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> }
@@ -296,7 +326,7 @@ function supportedThinkingLevels(model: unknown): UIThinkingLevel[] {
   const map = m.thinkingLevelMap;
   return ALL_THINKING_LEVELS.filter((level) => {
     if (map && map[level] === null) return false;
-    // xhigh/max는 명시적으로 매핑된 모델 패밀리만 지원
+    // xhigh/max are only supported by model families that map them explicitly
     if ((level === "xhigh" || level === "max") && map?.[level] == null) return false;
     return true;
   });
@@ -305,6 +335,7 @@ function supportedThinkingLevels(model: unknown): UIThinkingLevel[] {
 function buildSnapshot(entry: SessionEntry): UISnapshot {
   const session = entry.runtime.session;
   const model = session.model;
+  const cwd = entry.runtime.cwd;
   return {
     messages: serializeMessages(session.messages),
     isStreaming: session.isStreaming,
@@ -321,6 +352,8 @@ function buildSnapshot(entry: SessionEntry): UISnapshot {
     context: session.getContextUsage() ?? null,
     sessionFile: session.sessionFile,
     sessionId: entry.id,
+    cwd,
+    gitBranch: gitBranchAt(cwd),
   };
 }
 
@@ -328,7 +361,7 @@ function broadcastSnapshot(entry: SessionEntry) {
   broadcastTo(entry, { type: "snapshot", snapshot: buildSnapshot(entry) });
 }
 
-/** 세션 이벤트 구독 (세션 교체 시 재구독 필요) */
+/** Subscribe to session events (re-subscribe after the session is replaced) */
 function bindSession(entry: SessionEntry) {
   entry.unsubscribe?.();
   entry.unsubscribe = entry.runtime.session.subscribe((event) => {
@@ -364,7 +397,7 @@ function bindSession(entry: SessionEntry) {
         break;
       case "agent_end": {
         broadcast({ type: "agent_end" });
-        // agent_end 직후 session.isStreaming 이 아직 true일 수 있어 명시적으로 false
+        // session.isStreaming can still be true right after agent_end — set it false explicitly
         const snap = buildSnapshot(entry);
         snap.isStreaming = false;
         broadcast({ type: "snapshot", snapshot: snap });
@@ -375,7 +408,7 @@ function bindSession(entry: SessionEntry) {
 }
 
 // ---------------------------------------------------------------------------
-// 클라이언트 커맨드 처리
+// Client command handling
 // ---------------------------------------------------------------------------
 
 async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
@@ -393,9 +426,9 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
         mimeType: img.mimeType,
       }));
       if (!text && images.length === 0) return;
-      // 첫 입력 시점에 세션을 URL에 공개 → 클라이언트가 /s/:id 로 교체
+      // Publish the session to the URL at first input → client switches to /s/:id
       if (!entry.published) publishEntry(entry, ws);
-      // prompt()는 전체 런이 끝날 때까지 resolve되지 않으므로 await하지 않는다
+      // prompt() doesn't resolve until the whole run ends, so don't await it
       session
         .prompt(text, {
           images: images.length > 0 ? images : undefined,
@@ -441,8 +474,9 @@ function sendTo(ws: WebSocket, event: ServerEvent) {
 }
 
 /**
- * 세션 파일 삭제. 로드된 런타임이 있으면 정리하고, 접속 중인 클라이언트를 닫는다.
- * 세션은 append-only JSONL 파일이므로 SDK 삭제 API 대신 파일 제거로 처리한다.
+ * Delete a session file. Cleans up the loaded runtime if any and closes
+ * connected clients. Sessions are append-only JSONL files, so this removes
+ * the file directly instead of using an SDK delete API.
  */
 async function deleteSession(id: string): Promise<{ ok: boolean; error?: string }> {
   const path = await resolveSessionPath(id);
@@ -475,7 +509,7 @@ async function deleteSession(id: string): Promise<{ ok: boolean; error?: string 
   return { ok: true };
 }
 
-/** 세션 표시 이름 변경 (비어 있으면 이름 해제). */
+/** Set a session display name (empty clears the name). */
 async function renameSession(
   id: string,
   name: string,
@@ -485,7 +519,8 @@ async function renameSession(
 
   const entry = entries.get(id);
   if (entry) {
-    // 로드된 런타임: setSessionName → appendSessionInfo(파일에 즉시 영속화) + 이벤트 방출
+    // Loaded runtime: setSessionName → appendSessionInfo (persisted to the file
+    // immediately) + emits an event
     entry.runtime.session.setSessionName(name);
     broadcastSnapshot(entry);
   } else {
@@ -500,7 +535,7 @@ async function renameSession(
 }
 
 // ---------------------------------------------------------------------------
-// 커스텀 모델 (models.json) 반영
+// Custom models (models.json) reflection
 // ---------------------------------------------------------------------------
 
 function readBody(req: IncomingMessage, limit = 1_000_000): Promise<string> {
@@ -522,10 +557,10 @@ function readBody(req: IncomingMessage, limit = 1_000_000): Promise<string> {
 }
 
 /**
- * 저장된 providers 를 실행 중인 런타임에 반영한다.
- * - 목록용 modelRuntime 은 재생성 (models.json 을 다시 읽음)
- * - 대화 중인 세션 런타임에는 registerProvider 로 라이브 등록
- * 실패하면 재시작이 필요하다는 경고 문자열을 돌려준다.
+ * Reflect saved providers into running runtimes.
+ * - The list modelRuntime is recreated (re-reads models.json)
+ * - Live-session runtimes get registerProvider for live registration
+ * Returns a warning string when a restart is required on failure.
  */
 async function reloadModelProviders(providers: UICustomProvider[]): Promise<string | undefined> {
   const previousKeys = new Set(knownCustomProviderKeys);
@@ -571,7 +606,7 @@ async function reloadModelProviders(providers: UICustomProvider[]): Promise<stri
 let knownCustomProviderKeys = new Set(readCustomModels().providers.map((p) => p.key));
 
 // ---------------------------------------------------------------------------
-// HTTP 서버 (API + 정적 파일)
+// HTTP server (API + static files)
 // ---------------------------------------------------------------------------
 
 const MIME: Record<string, string> = {
@@ -585,7 +620,7 @@ const MIME: Record<string, string> = {
   ".webmanifest": "application/manifest+json",
 };
 
-/** Authorization: Bearer <t> 또는 ?token=<t> 에서 세션 토큰 추출 */
+/** Extract the session token from Authorization: Bearer <t> or ?token=<t> */
 function sessionTokenFromRequest(req: IncomingMessage): string {
   const header = req.headers.authorization;
   if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length).trim();
@@ -602,7 +637,7 @@ async function handleAuthRequest(req: IncomingMessage, res: import("node:http").
     res.end(JSON.stringify(body));
   };
 
-  // 로그인 상태 확인
+  // Login status check
   if (url.pathname === "/api/auth/status") {
     if (!auth.validSession(sessionTokenFromRequest(req))) {
       sendJson(401, { ok: false, twoFactor: auth.twoFactorEnabled });
@@ -612,7 +647,7 @@ async function handleAuthRequest(req: IncomingMessage, res: import("node:http").
     return;
   }
 
-  // 로그인 (토큰 + 2FA 코드)
+  // Login (token + 2FA code)
   if (url.pathname === "/api/auth/login" && req.method === "POST") {
     let body: { token?: unknown; totp?: unknown };
     try {
@@ -634,14 +669,14 @@ async function handleAuthRequest(req: IncomingMessage, res: import("node:http").
     return;
   }
 
-  // 로그아웃
+  // Logout
   if (url.pathname === "/api/auth/logout" && req.method === "POST") {
     auth.logout(sessionTokenFromRequest(req));
     sendJson(200, { ok: true });
     return;
   }
 
-  // 2FA 시크릿/QR 재조회 — 원시 토큰 필요 (로컬에서 인증 앱 등록용)
+  // 2FA secret/QR re-fetch — needs the raw token (enrolling an authenticator app locally)
   if (url.pathname === "/api/auth/setup" && req.method === "GET") {
     const rawToken = url.searchParams.get("token") ?? "";
     if (!auth.verifyRawToken(rawToken)) {
@@ -653,7 +688,7 @@ async function handleAuthRequest(req: IncomingMessage, res: import("node:http").
     try {
       qr = await QRCode.toDataURL(otpauth, { width: 220, margin: 1 });
     } catch {
-      /* QR 생성 실패해도 otpauth URL은 반환 */
+      /* return the otpauth URL even if QR generation fails */
     }
     sendJson(200, {
       twoFactorEnabled: auth.twoFactorEnabled,
@@ -682,13 +717,13 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
-    // 인증 API (세션 없이 접근 가능)
+    // Auth API (reachable without a session)
     if (url.pathname.startsWith("/api/auth/")) {
       await handleAuthRequest(req, res, url);
       return;
     }
 
-    // 그 외 모든 API는 세션 토큰 필수 (정적 파일/폰트는 로그인 화면 로딩을 위해 열어둠)
+    // All other APIs require a session token (static files/fonts stay open so the login screen can load)
     if (url.pathname.startsWith("/api/") && !auth.validSession(sessionTokenFromRequest(req))) {
       res.writeHead(401, {
         "content-type": "application/json",
@@ -717,7 +752,7 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
-    // 세션 삭제 / 이름 변경
+    // Session delete / rename
     if (url.pathname.startsWith("/api/sessions/")) {
       const id = decodeURIComponent(url.pathname.slice("/api/sessions/".length));
       if (!id) {
@@ -778,7 +813,7 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
-    // 커스텀 모델 관리 (~/.pi/agent/models.json)
+    // Custom model management (~/.pi/agent/models.json)
     if (url.pathname === "/api/custom-models") {
       if (req.method === "GET") {
         res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
@@ -843,7 +878,7 @@ const httpServer = createServer(async (req, res) => {
         let packageName: string | undefined;
         if (sourceInfo.origin === "package") {
           packageName = sourceInfo.source.replace(/^npm:/, "");
-          // 패키지 루트 기준 상대경로에서 표시명 유도 (extensions/foo/index.ts -> foo)
+          // Derive the display name from the path relative to the package root (extensions/foo/index.ts -> foo)
           const rel = relative(sourceInfo.baseDir ?? dirname(ext.path), ext.path)
             .replace(/\.(ts|js|mjs|cjs)$/, "")
             .replace(/\/index$/, "")
@@ -894,7 +929,7 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
-    // 정적 파일 (프로덕션 빌드)
+    // Static files (production build)
     if (existsSync(DIST_DIR)) {
       let filePath = join(DIST_DIR, url.pathname === "/" ? "index.html" : url.pathname);
       if (!filePath.startsWith(DIST_DIR) || !existsSync(filePath)) {
@@ -916,7 +951,7 @@ const httpServer = createServer(async (req, res) => {
 
 const wss = new WebSocketServer({ noServer: true });
 
-// WS 핸드셰이크에서 세션 토큰 검증 (?token=)
+// WS handshake validates the session token (?token=)
 httpServer.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url ?? "/", "http://localhost");
   if (url.pathname !== "/ws") {
@@ -946,7 +981,7 @@ wss.on("connection", (ws, req) => {
     } catch {
       return;
     }
-    // 세션 바인딩 완료 전에 도착한 커맨드는 잠시 보관
+    // Commands arriving before the session bind is complete are queued briefly
     if (!ready) {
       queue.push(cmd);
       return;
@@ -962,8 +997,8 @@ wss.on("connection", (ws, req) => {
       entry.clients.add(ws);
       entry.lastActive = Date.now();
       wsEntry.set(ws, entry);
-      // 기존 세션(/s/:id) 또는 이미 공개된 세션만 즉시 바인딩.
-      // `/` 빈 초안은 첫 prompt 때 session_bound → URL 정리.
+      // Only existing (/s/:id) or already-published sessions bind immediately.
+      // A `/` blank draft gets session_bound → URL rewrite on the first prompt.
       if (entry.published || requested) {
         publishEntry(entry, ws);
       }
@@ -991,9 +1026,10 @@ wss.on("connection", (ws, req) => {
   });
 });
 
-// 바인딩 실패(포트 점유 등)를 크래시 스택 대신 명확한 메시지로 처리.
-// 확장(startServer)이 스폰 직후에 pid 파일을 썼다면 이 서버는 죽기 때문에
-// readPid() 의 프로세스 살아있음 검사가 걸러낸다. 여기서는 사용자에게 안내만 한다.
+// Handle bind failures (port in use etc.) with a clear message instead of a
+// crash stack. If the extension (startServer) wrote the pid file right after
+// spawning, this server would die anyway — readPid()'s liveness check filters
+// that out. Here we only inform the user.
 httpServer.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {
     console.error(
@@ -1013,15 +1049,16 @@ httpServer.listen(PORT, HOST, () => {
     `pi-web-chat server: http://${displayHost}:${PORT}  (bind ${HOST}, chat cwd: ${AGENT_CWD})`,
   );
 
-  // 확장이 스폰 직후 쓰는 pid/port/host 를 여기서(바인딩 성공 후) 덮어쓴다.
-  // → 포트 점유로 죽은 프로세스의 pid 가 남는 경쟁 상태를 없앤다.
+  // The extension writes pid/port/host right after spawning; overwrite them
+  // here (after a successful bind) to avoid a stale pid from a port-conflict
+  // crash lingering and looping the next start.
   try {
     mkdirSync(DAEMON_STATE_DIR, { recursive: true });
     writeFileSync(join(DAEMON_STATE_DIR, "pi-web-chat.pid"), `${process.pid}\n`, "utf8");
     writeFileSync(join(DAEMON_STATE_DIR, "pi-web-chat.port"), `${PORT}\n`, "utf8");
     writeFileSync(join(DAEMON_STATE_DIR, "pi-web-chat.host"), `${HOST}\n`, "utf8");
   } catch {
-    /* 상태 파일은 부가 정보 — 실패해도 서버는 동작 */
+    /* state files are auxiliary — the server still works without them */
   }
   if (auth.twoFactorEnabled) {
     console.log(`pi-web-chat auth: access token = ${auth.token}  (file: ${authStartupInfo().tokenFile})`);
@@ -1034,7 +1071,7 @@ httpServer.listen(PORT, HOST, () => {
   }
 });
 
-// 재시작 시 세션(로그인 상태)을 디스크로 플러시
+// Flush sessions (login state) to disk on restart
 process.on("SIGTERM", () => {
   auth.flushSessions();
 });

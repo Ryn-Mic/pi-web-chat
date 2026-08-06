@@ -9,11 +9,11 @@ type AnyMessage = {
   [key: string]: unknown;
 };
 
-/** ANSI 이스케이프 시퀀스 제거 (pi-claude-code-ui 등 확장이 남긴 색상/스타일 코드) */
+/** Strip ANSI escape sequences (color/style codes left by extensions like pi-claude-code-ui) */
 function stripAnsi(text: string): string {
-  // SGR/커서 제어: ESC [ ...  (종료 문자 a-zA-Z 또는 @~)
+  // SGR/cursor control: ESC [ ... (terminator a-zA-Z or @~)
   let out = text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
-  // OSC (예: ESC ] ... BEL)
+  // OSC (e.g. ESC ] ... BEL)
   out = out.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "");
   return out;
 }
@@ -30,13 +30,13 @@ function textFromContent(content: unknown): string {
 }
 
 /**
- * pi의 AgentMessage[] 를 UI용 메시지로 변환.
- * toolResult 메시지는 해당 toolCall 블록에 페어링해서 합친다.
+ * Convert pi's AgentMessage[] to UI messages.
+ * toolResult messages are paired and merged into their toolCall block.
  */
 export function serializeMessages(messages: unknown[]): UIMessage[] {
   const msgs = messages as AnyMessage[];
 
-  // toolCallId -> result 매핑
+  // toolCallId -> result mapping
   const results = new Map<string, { text: string; isError: boolean; diff?: string }>();
   for (const m of msgs) {
     if (m.role === "toolResult" && typeof m.toolCallId === "string") {
@@ -55,7 +55,7 @@ export function serializeMessages(messages: unknown[]): UIMessage[] {
 
   const out: UIMessage[] = [];
   for (const m of msgs) {
-    if (m.role === "toolResult") continue; // toolCall에 합쳐짐
+    if (m.role === "toolResult") continue; // merged into toolCall
 
     if (m.role === "user") {
       const blocks: UIContentBlock[] = [];
@@ -107,7 +107,7 @@ export function serializeMessages(messages: unknown[]): UIMessage[] {
       continue;
     }
 
-    // custom/기타 메시지: 텍스트가 있으면 표시
+    // custom/other messages: show when there is text
     const text = textFromContent(m.content);
     if (text) out.push({ role: "custom", content: [{ type: "text", text }] });
   }

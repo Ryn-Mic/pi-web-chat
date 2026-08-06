@@ -2,7 +2,7 @@
 @plugin "@tailwindcss/typography";
 @import "highlight.js/styles/github-dark.css";
 
-/* JetBrainsMono Nerd Font (Medium, 로컬에서 woff2로 변환해 패키징) */
+/* JetBrainsMono Nerd Font (Medium, converted to woff2 locally for packaging) */
 @font-face {
   font-family: "JetBrainsMono Nerd Font";
   src: url("/fonts/JetBrainsMonoNerdFont-Medium.woff2") format("woff2");
@@ -11,12 +11,12 @@
   font-display: swap;
 }
 
-/* class 기반 다크모드 (html.dark) */
+/* Class-based dark mode (html.dark) */
 @custom-variant dark (&:where(.dark, .dark *));
 
 /*
- * Claude / ChatGPT desktop 스타일 토큰.
- * 실제 색은 --c-* 에서 오고, .dark 에서 값만 갈아끼운다.
+ * Claude / ChatGPT desktop-style tokens.
+ * Actual colors come from --c-* and only the values are swapped in .dark.
  */
 @theme {
   --color-canvas: var(--c-canvas);
@@ -48,7 +48,7 @@
   --composer-pad-top: 0.5rem;
   --composer-safe-bottom-max: 34px;
 
-  /* light — Claude 특유의 따뜻한 아이보리 */
+  /* light — Claude's warm ivory */
   --c-canvas: #faf9f5;
   --c-sidebar: #f2f0e9;
   --c-card: #ffffff;
@@ -126,7 +126,7 @@ body {
   display: none;
 }
 
-/* 사용자 메시지 앵커 점프 하이라이트 (1.6s 후 페이드) */
+/* User-message anchor jump highlight (fades out after 1.6s) */
 @keyframes anchor-flash {
   0% {
     outline-color: var(--c-accent);
@@ -142,7 +142,7 @@ body {
   animation: anchor-flash 1.6s ease-out forwards;
 }
 
-/* 얇은 스크롤바 (데스크톱 앱 느낌) */
+/* Thin scrollbar (desktop-app feel) */
 .thin-scroll {
   scrollbar-width: thin;
   scrollbar-color: var(--c-faint) transparent;
@@ -177,7 +177,19 @@ html.ua-keyboard .composer-bar {
   padding-bottom: 0.5rem;
 }
 
-/* 마크다운 본문 색을 토큰에 맞춤 (라이트/다크 자동) */
+/*
+ * Composer panel background with user-adjustable opacity (Settings → Composer
+ * opacity). color-mix blends --c-card with transparent at the chosen ratio.
+ */
+.composer-panel {
+  background-color: color-mix(
+    in srgb,
+    var(--c-card) var(--composer-bg-opacity, 100%),
+    transparent
+  );
+}
+
+/* Markdown body colors follow the tokens (light/dark automatic) */
 .prose {
   --tw-prose-body: var(--c-ink);
   --tw-prose-headings: var(--c-ink);
@@ -193,7 +205,7 @@ html.ua-keyboard .composer-bar {
   --tw-prose-code: var(--c-ink);
   --tw-prose-th-borders: var(--c-line);
   --tw-prose-td-borders: var(--c-line);
-  /* 긴 URL/경로도 넘치지 않게 (pre는 아래에서 자체 스크롤) */
+  /* Long URLs/paths don't overflow (pre scrolls on its own below) */
   overflow-wrap: break-word;
   min-width: 0;
 }

@@ -118,8 +118,8 @@ function startServer(port: string, host: string, token?: string): StartResult {
     };
   }
 
-  // pid 파일이 없는데도 포트가 열려 있으면 다른 서버/프로세스가 점유 중이다.
-  // 스폰해 봐야 EADDRINUSE 로 죽으므로 여기서 막는다.
+  // If the port is already open but there's no pid file, another server/
+  // process holds it. Spawning would just die with EADDRINUSE, so stop here.
   if (isPortListening(port, host)) {
     return {
       ok: false,
@@ -147,9 +147,10 @@ function startServer(port: string, host: string, token?: string): StartResult {
     return { ok: false, error: "failed to spawn server process" };
   }
 
-  // pid/port/host 파일은 서버가 포트 바인딩에 성공한 뒤 스스로 쓴다
-  // (server/index.ts listen 콜백). 여기서 먼저 쓰면 포트 점유로 죽은
-  // 프로세스의 pid 가 남아 다음 기동이 EADDRINUSE 로 루프할 수 있다.
+  // The pid/port/host files are written by the server itself after a
+  // successful bind (server/index.ts listen callback). Writing them here first
+  // would leave the pid of a port-conflict-dead process behind and loop the
+  // next start with EADDRINUSE.
   return { ok: true, port, host, already: false, pid: child.pid };
 }
 
@@ -180,8 +181,8 @@ function sleepSync(ms: number): void {
 }
 
 /**
- * 지정한 host:port 에 이미 리스너가 있는지 확인 (동기).
- * 스폰 전에 먼저 검사해서 EADDRINUSE 크래시/pid 파일 경쟁을 막는다.
+ * Check whether something is already listening on the given host:port (sync).
+ * Checked before spawning to avoid an EADDRINUSE crash / pid-file race.
  */
 function isPortListening(port: string, host: string): boolean {
   const target =
@@ -608,7 +609,8 @@ function launchDaemon(
   if (opts.openBrowser) openBrowser(url);
 }
 
-/** 액세스 토큰 교체: 새 토큰 생성 → 파일에 기록 (실행 중 서버도 다음 로그인부터 적용) */
+/** Rotate the access token: generate a new one and write it to the file
+ * (a running server also picks it up from the next login on) */
 function rotateToken(): string {
   const token = randomBytes(32).toString("hex");
   writeFileSync(TOKEN_FILE, token + "\n", { mode: 0o600 });

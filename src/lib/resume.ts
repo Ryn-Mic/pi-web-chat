@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 const LAST_SESSION_KEY = "pi-web-chat:last-session";
-/** "1" = 켜짐(기본), "0" = 꺼짐 */
+/** "1" = on (default), "0" = off */
 const ENABLED_KEY = "pi-web-chat:resume-session";
 const listeners = new Set<() => void>();
 
@@ -24,8 +24,8 @@ function readLast(): string | null {
 let enabled = typeof window !== "undefined" ? readEnabled() : true;
 let lastId = typeof window !== "undefined" ? readLast() : null;
 /**
- * "새 세션" 버튼 등 사용자가 명시적으로 새 초안을 연 경우, 다음 한 번의
- * resume 리다이렉트를 막는다. (모듈 상태 — 새로고침하면 사라짐)
+ * When the user explicitly opened a fresh draft (new-session button etc.),
+ * suppress the next resume redirect once. (Module state — lost on reload.)
  */
 let suppressResume = false;
 
@@ -38,7 +38,7 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
-/** 세션이 URL에 공개(session_bound)될 때마다 기록 */
+/** Record the id whenever a session is published in the URL (session_bound) */
 export function rememberSessionId(id: string) {
   lastId = id;
   try {
@@ -52,12 +52,12 @@ export function getLastSessionId(): string | null {
   return lastId;
 }
 
-/** 명시적 "새 세션" 동작: 다음 resume 리다이렉트를 한 번 억제 */
+/** Explicit "new session": suppress the next resume redirect once */
 export function suppressResumeOnce() {
   suppressResume = true;
 }
 
-/** ChatPage가 resume 분기를 건너뛸지 판단 (소모성) */
+/** Whether ChatPage should skip the resume branch (consuming) */
 export function consumeSuppressResume(): boolean {
   if (!suppressResume) return false;
   suppressResume = false;

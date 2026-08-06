@@ -1,6 +1,7 @@
 import { Menu } from "@base-ui-components/react/menu";
 import { useState } from "react";
 import { logout } from "../lib/auth";
+import { COMPOSER_OPACITY, setComposerOpacity, useComposerOpacity } from "../lib/composer";
 import { isLocale, LOCALES, setLocale, useLocale, useT } from "../lib/i18n";
 import { setResumeEnabled, useResumeEnabled } from "../lib/resume";
 import {
@@ -20,6 +21,7 @@ export function SettingsMenu() {
   const preference = useThemePreference();
   const locale = useLocale();
   const resumeEnabled = useResumeEnabled();
+  const composerOpacity = useComposerOpacity();
   const [forkOpen, setForkOpen] = useState(false);
   const [extensionsOpen, setExtensionsOpen] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
@@ -78,6 +80,30 @@ export function SettingsMenu() {
                     </Menu.RadioItem>
                   ))}
                 </Menu.RadioGroup>
+              </Menu.Group>
+
+              <div className="my-1 border-t border-line" />
+
+              {/* Composer background opacity (slider) */}
+              <Menu.Group>
+                <Menu.GroupLabel className="px-3 pt-2 pb-1 text-[11px] font-medium tracking-wide text-faint uppercase">
+                  {t("composerOpacity")}
+                </Menu.GroupLabel>
+                <div className="flex items-center gap-2 px-3 py-1.5">
+                  <input
+                    type="range"
+                    min={Math.round(COMPOSER_OPACITY.min * 100)}
+                    max={Math.round(COMPOSER_OPACITY.max * 100)}
+                    step={Math.round(COMPOSER_OPACITY.step * 100)}
+                    value={Math.round(composerOpacity * 100)}
+                    onChange={(e) => setComposerOpacity(Number(e.target.value) / 100)}
+                    aria-label={t("composerOpacity")}
+                    className="h-1.5 min-w-0 flex-1 cursor-pointer accent-accent"
+                  />
+                  <span className="w-10 shrink-0 text-right text-xs text-faint tabular-nums">
+                    {Math.round(composerOpacity * 100)}%
+                  </span>
+                </div>
               </Menu.Group>
 
               <div className="my-1 border-t border-line" />

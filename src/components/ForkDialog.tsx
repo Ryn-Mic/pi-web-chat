@@ -3,7 +3,7 @@ import { useForkPoints } from "../lib/api";
 import { chatClient, useChat } from "../lib/chat";
 import { useT } from "../lib/i18n";
 
-/** 세션의 특정 유저 메시지 지점에서 새 세션으로 fork */
+/** Fork into a new session from a specific user-message point */
 export function ForkDialog({
   open,
   onOpenChange,

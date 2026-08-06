@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 const STORAGE_KEY = "pi-web-chat:sidebar-pinned";
-/** 펼친(expanded) 프로젝트 목록만 저장 — 기본값은 전부 접힘 */
+/** Only expanded projects are stored — default is all collapsed */
 const EXPANDED_KEY = "pi-web-chat:sidebar-expanded-projects";
 const listeners = new Set<() => void>();
 
@@ -57,7 +57,7 @@ export function useSidebarPinned(): boolean {
   return useSyncExternalStore(subscribe, () => cache, () => false);
 }
 
-/** 프로젝트 그룹 접기/펼치기 (기본: 접힘 — localStorage엔 펼친 목록만 저장) */
+/** Project group collapse/expand (default: collapsed — only expanded projects are stored) */
 export function isProjectCollapsed(project: string): boolean {
   return !expanded.has(project);
 }

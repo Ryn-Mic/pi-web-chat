@@ -10,7 +10,7 @@ export function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [twoFactor, setTwoFactor] = useState(true);
 
-  // 2FA 활성 여부 (401 응답에도 twoFactor 포함)
+  // 2FA on/off (also included in 401 responses)
   useEffect(() => {
     fetch("/api/auth/status")
       .then(async (res) => {
@@ -18,7 +18,7 @@ export function LoginPage() {
         if (typeof body.twoFactor === "boolean") setTwoFactor(body.twoFactor);
       })
       .catch(() => {
-        /* 서버 미기동 — 기본값 유지 */
+        /* Server not up yet — keep the default */
       });
   }, []);
 

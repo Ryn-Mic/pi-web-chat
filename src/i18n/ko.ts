@@ -90,6 +90,7 @@ export const ko: Messages = {
   optional: "선택",
 
   emptyPrompt: "무엇을 도와드릴까요?",
+  composerOpacity: "컴포저 투명도",
   messageAnchors: "메시지로 이동",
   updateAvailable: "새 버전이 있습니다",
   reload: "새로고침",

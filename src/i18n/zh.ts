@@ -90,6 +90,7 @@ export const zh: Messages = {
   optional: "可选",
 
   emptyPrompt: "有什么可以帮您？",
+  composerOpacity: "输入框透明度",
   messageAnchors: "跳转到消息",
   updateAvailable: "有新版本可用",
   reload: "刷新",

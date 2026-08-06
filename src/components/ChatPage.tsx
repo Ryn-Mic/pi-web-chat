@@ -1,5 +1,5 @@
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { chatClient, useChat } from "../lib/chat";
 import { requestOpenSessionsDrawer } from "../lib/drawer";
 import { useT } from "../lib/i18n";
@@ -7,7 +7,9 @@ import { consumeSuppressResume, getLastSessionId, useResumeEnabled } from "../li
 import { useSidebarPinned } from "../lib/sidebar";
 import { useLeftEdgeSwipe } from "../lib/useEdgeSwipe";
 import { Composer } from "./Composer";
+import { MessageAnchors } from "./MessageAnchors";
 import { MessageList } from "./MessageList";
+import { ProjectBadge } from "./ProjectBadge";
 import { SessionsDrawer, SessionsSidebar } from "./SessionsDrawer";
 import { SettingsMenu } from "./SettingsMenu";
 
@@ -47,11 +49,13 @@ export function ChatPage() {
   const routeSessionId = params.sessionId ?? null;
   const navigate = useNavigate();
   const resumeEnabled = useResumeEnabled();
+  const messageListRef = useRef<HTMLDivElement>(null);
 
-  // URL → 연결 ("/"는 아직 id 없는 초안, 첫 입력 때 서버가 session_bound)
-  // "마지막 세션 복원"이 켜져 있고 / (초안) 진입 시 이전 세션으로 이동.
-  // 단, "새 세션" 버튼으로 명시적으로 연 경우는 suppressResumeOnce()가
-  // 리다이렉트를 막아 진짜 새 초안으로 간다.
+  // URL → connection ("/" is a draft without an id yet; the server sends
+  // session_bound on the first input)
+  // With "resume last session" on, an entry via / (draft) moves to the
+  // previous session. An explicit "new session" button call suppresses the
+  // redirect once so a real fresh draft is created.
   useEffect(() => {
     if (routeSessionId) {
       chatClient.connect(routeSessionId);
@@ -67,8 +71,9 @@ export function ChatPage() {
     chatClient.connect(null);
   }, [routeSessionId, resumeEnabled, navigate]);
 
-  // 연결 → URL (첫 메시지 / 포크 등으로 세션이 공개되면 주소 교체).
-  // 렌더 시점 값이 아닌 현재 상태를 읽어 "/"로 갔다가 즉시 되돌아오는 경합을 막는다.
+  // Connection → URL (address rewrites once the session is published: first
+  // message / fork etc.). Reads the current state instead of the render-time
+  // value to avoid a "to / and right back" race.
   useEffect(() => {
     const bound = chatClient.state.sessionId;
     if (bound && bound !== routeSessionId) {
@@ -80,7 +85,7 @@ export function ChatPage() {
     }
   }, [sessionId, routeSessionId, navigate]);
 
-  // 왼쪽 가장자리 → 오른쪽 스와이프로 세션 드로어 열기 (고정 사이드바 아닐 때)
+  // Left edge → right swipe opens the session drawer (when not docked)
   useLeftEdgeSwipe({
     enabled: !sidebarPinned,
     onSwipeRight: requestOpenSessionsDrawer,
@@ -94,15 +99,20 @@ export function ChatPage() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas md:my-2 md:mr-2 md:rounded-2xl md:border md:border-line md:shadow-sm">
         <header className="flex shrink-0 items-center gap-1 px-2.5 py-2 pt-[max(0.5rem,var(--safe-top))]">
           <SessionsDrawer currentSessionFile={snapshot?.sessionFile} />
-          <div className="flex min-w-0 items-center gap-2 px-1">
-            {!sidebarPinned && <span className="truncate text-sm font-medium text-ink">pi</span>}
+          <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
+            {!sidebarPinned && (
+              <span className="shrink-0 text-sm font-medium text-ink">pi</span>
+            )}
             <span
               className={`size-1.5 shrink-0 rounded-full ${connectionDotClass(connection)}`}
               title={connectionLabel(connection, t)}
               aria-label={connectionLabel(connection, t)}
             />
+            <div className="min-w-0 flex-1">
+              <ProjectBadge cwd={snapshot?.cwd} gitBranch={snapshot?.gitBranch} />
+            </div>
           </div>
-          <div className="flex-1" />
+          <MessageAnchors messages={snapshot?.messages ?? []} containerRef={messageListRef} />
           <SettingsMenu />
         </header>
 
@@ -124,6 +134,7 @@ export function ChatPage() {
               streamThinking={streamThinking}
               activeTools={activeTools}
               isStreaming={isStreaming}
+              containerRef={messageListRef}
             />
             {updateAvailable && (
               <div className="flex shrink-0 items-center justify-center gap-3 border-t border-line bg-card px-4 py-2">
@@ -131,7 +142,7 @@ export function ChatPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    // PWA 캐시를 비운 뒤 새로고침 → 최신 번들 보장
+                    // Clear the PWA cache first, then reload → newest bundle guaranteed
                     const reload = () => window.location.reload();
                     if ("caches" in window) {
                       caches

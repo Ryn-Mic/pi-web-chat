@@ -23,7 +23,7 @@ export function ModelMenu({ current }: { current: UIModel | null }) {
     return (models ?? []).filter((m) => matchesQuery(m, q));
   }, [models, query]);
 
-  // Menu 내부 focus manager가 먼저 잡은 뒤 검색창으로 재포커스
+  // The menu's focus manager grabs focus first; then re-focus the search input
   useEffect(() => {
     if (!open) return;
     setQuery("");
@@ -62,10 +62,10 @@ export function ModelMenu({ current }: { current: UIModel | null }) {
                   aria-label={t("searchModels")}
                   autoFocus
                   className="w-full bg-transparent py-2 text-sm text-ink outline-none placeholder:text-faint"
-                  // 메뉴 typeahead / 화살표 네비와 충돌 방지
+                  // Avoid colliding with menu typeahead / arrow-key navigation
                   onKeyDown={(e) => {
                     if (e.key === "Escape") return;
-                    // 아래 화살표는 목록으로 넘김
+                    // Down arrow moves to the list
                     if (e.key === "ArrowDown") {
                       e.preventDefault();
                       e.currentTarget.blur();
