@@ -39,6 +39,26 @@ function numberOrUndefined(v: string): number | undefined {
   return v.trim() === "" || !Number.isFinite(n) ? undefined : n;
 }
 
+type HighestThinkingLevel = "high" | "xhigh" | "max";
+
+function highestThinkingLevel(model: UICustomModel): HighestThinkingLevel {
+  if (model.thinkingLevelMap?.max != null) return "max";
+  if (model.thinkingLevelMap?.xhigh != null) return "xhigh";
+  return "high";
+}
+
+function withHighestThinkingLevel(
+  model: UICustomModel,
+  level: HighestThinkingLevel,
+): UICustomModel {
+  const map = { ...model.thinkingLevelMap };
+  delete map.xhigh;
+  delete map.max;
+  if (level === "xhigh" || level === "max") map.xhigh = "xhigh";
+  if (level === "max") map.max = "max";
+  return { ...model, thinkingLevelMap: Object.keys(map).length > 0 ? map : undefined };
+}
+
 function ModelRow({
   model,
   onChange,
@@ -126,6 +146,22 @@ function ModelRow({
           />
           {t("imageInput")}
         </label>
+        <div className="w-36">
+          <Field label={t("maxThinkingLevel")}>
+            <select
+              className={inputClass}
+              value={highestThinkingLevel(model)}
+              disabled={!model.reasoning}
+              onChange={(e) =>
+                onChange(withHighestThinkingLevel(model, e.target.value as HighestThinkingLevel))
+              }
+            >
+              <option value="high">high</option>
+              <option value="xhigh">xhigh</option>
+              <option value="max">max</option>
+            </select>
+          </Field>
+        </div>
       </div>
     </div>
   );

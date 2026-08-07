@@ -1,29 +1,47 @@
 import { useMemo, useState } from "react";
 import type { UIMessage } from "../../shared/protocol";
-import { useT } from "../lib/i18n";
+import { localeTag, useLocale, useT } from "../lib/i18n";
+
+function relativeAge(timestamp: number, locale: ReturnType<typeof useLocale>): string {
+  const age = Math.max(0, Date.now() - timestamp);
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  const formatter = new Intl.RelativeTimeFormat(localeTag(locale), {
+    numeric: "always",
+    style: "short",
+  });
+
+  if (age < hour) return formatter.format(-Math.max(1, Math.floor(age / minute)), "minute");
+  if (age < day) return formatter.format(-Math.floor(age / hour), "hour");
+  return formatter.format(-Math.floor(age / day), "day");
+}
 
 /**
- * User-message anchor navigation (header button + bottom sheet):
+ * User-message anchor navigation (composer button + bottom sheet):
  * lists user messages, tapping one scrolls to it and flashes the bubble.
  */
 export function MessageAnchors({
   messages,
   containerRef,
+  compact = false,
 }: {
   messages: UIMessage[];
   containerRef: React.RefObject<HTMLDivElement | null>;
+  compact?: boolean;
 }) {
   const t = useT();
+  const locale = useLocale();
   const [open, setOpen] = useState(false);
-  const userIndices = useMemo(() => {
-    const idx: number[] = [];
+  const userAnchors = useMemo(() => {
+    const anchors: { index: number; ordinal: number }[] = [];
     messages.forEach((m, i) => {
-      if (m.role === "user") idx.push(i);
+      if (m.role === "user") anchors.push({ index: i, ordinal: anchors.length + 1 });
     });
-    return idx;
+    return anchors.reverse();
   }, [messages]);
 
-  if (userIndices.length < 2) return null;
+  if (userAnchors.length < 2) return null;
 
   const jump = (i: number) => {
     const el = containerRef.current?.querySelector<HTMLElement>(`[data-msg-index="${i}"]`);
@@ -45,10 +63,15 @@ export function MessageAnchors({
         onClick={() => setOpen(true)}
         aria-label={t("messageAnchors")}
         title={t("messageAnchors")}
-        className="flex size-9 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink"
+        className={`flex items-center justify-center text-faint transition-colors hover:bg-hover hover:text-ink ${
+          compact ? "size-8 rounded-full" : "size-9 rounded-lg"
+        }`}
       >
         {/* map icon (lucide map) */}
-        <svg viewBox="0 0 24 24" className="size-5 fill-none stroke-current stroke-2">
+        <svg
+          viewBox="0 0 24 24"
+          className={`${compact ? "size-[18px]" : "size-5"} fill-none stroke-current stroke-2`}
+        >
           <path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z" />
           <path d="M15 5.764v15" />
           <path d="M9 3.236v15" />
@@ -81,8 +104,8 @@ export function MessageAnchors({
               </button>
             </div>
             <div className="thin-scroll overflow-y-auto py-1">
-              {userIndices.map((i, n) => {
-                const m = messages[i]!;
+              {userAnchors.map(({ index, ordinal }) => {
+                const m = messages[index]!;
                 const text =
                   m.content
                     .filter((b): b is { type: "text"; text: string } => b.type === "text")
@@ -92,15 +115,25 @@ export function MessageAnchors({
                     .trim() || t("emptyMessage");
                 return (
                   <button
-                    key={i}
+                    key={index}
                     type="button"
-                    onClick={() => jump(i)}
+                    onClick={() => jump(index)}
                     className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-hover"
                   >
-                    <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-selected text-[11px] text-muted tabular-nums">
-                      {n + 1}
+                    <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-selected px-1 text-[11px] text-muted tabular-nums">
+                      {ordinal}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink">{text}</span>
+                    <span className="flex min-w-0 flex-1 items-baseline gap-3">
+                      <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink">{text}</span>
+                      {m.timestamp != null && (
+                        <span
+                          className="shrink-0 text-[11px] text-faint tabular-nums"
+                          title={new Date(m.timestamp).toLocaleString(localeTag(locale))}
+                        >
+                          {relativeAge(m.timestamp, locale)}
+                        </span>
+                      )}
+                    </span>
                   </button>
                 );
               })}

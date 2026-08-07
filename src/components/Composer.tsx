@@ -1,40 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { UIImageAttachment } from "../../shared/protocol";
 import { chatClient, useChat } from "../lib/chat";
-import { useComposerOpacity } from "../lib/composer";
+import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
 import { useT } from "../lib/i18n";
-import { useTheme } from "../lib/theme";
+import { CommandPalette, commandMatches } from "./CommandPalette";
+import { ForkDialog } from "./ForkDialog";
+import { MessageAnchors } from "./MessageAnchors";
 import { ModelMenu } from "./ModelMenu";
+import { ActiveTodoBadge, BranchBadge, ProjectBadge, TodoProgress } from "./ProjectBadge";
 import { ThinkingMenu } from "./ThinkingMenu";
 
 interface PendingImage extends UIImageAttachment {
   previewUrl: string;
-}
-
-/**
- * Blend the card color toward the canvas color by `alpha` (0..1) using JS.
- * color-mix() with CSS variables is broken in Safari < 17.2, so this avoids it
- * entirely — works in every browser.
- */
-function blendCardOverCanvas(alpha: number): string | null {
-  try {
-    const cs = getComputedStyle(document.documentElement);
-    const card = cs.getPropertyValue("--c-card").trim();
-    const canvas = cs.getPropertyValue("--c-canvas").trim();
-    const parse = (c: string): [number, number, number] | null => {
-      const m = c.match(/^#([0-9a-f]{6})$/i);
-      if (!m) return null;
-      const n = parseInt(m[1]!, 16);
-      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-    };
-    const a = parse(card);
-    const b = parse(canvas);
-    if (!a || !b) return null;
-    const mix = (i: number) => Math.round(a[i]! * alpha + b[i]! * (1 - alpha));
-    return `rgb(${mix(0)}, ${mix(1)}, ${mix(2)})`;
-  } catch {
-    return null;
-  }
 }
 
 /** 12345 → "12.3k", 1234567 → "1.2M" */
@@ -44,37 +21,24 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-/**
- * Context usage progress ring (font color; deeper when almost full)
- */
 function ContextRing({ percent }: { percent: number }) {
   const pct = Math.min(100, Math.max(0, percent));
-  // Low → faint, high → strong (red is not used)
-  const tier =
-    pct >= 90 ? "text-ink" : pct >= 65 ? "text-muted" : "text-faint";
-  const r = 7;
-  const c = 2 * Math.PI * r;
-  const dash = (pct / 100) * c;
+  const tier = pct >= 90 ? "text-ink" : pct >= 65 ? "text-muted" : "text-faint";
+  const radius = 7;
+  const circumference = 2 * Math.PI * radius;
+  const dash = (pct / 100) * circumference;
   return (
     <svg viewBox="0 0 18 18" className={`size-4 shrink-0 ${tier}`} aria-hidden>
+      <circle cx="9" cy="9" r={radius} fill="none" stroke="currentColor" strokeWidth="2.5" opacity="0.18" />
       <circle
         cx="9"
         cy="9"
-        r={r}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.5"
-        opacity="0.18"
-      />
-      <circle
-        cx="9"
-        cy="9"
-        r={r}
+        r={radius}
         fill="none"
         stroke="currentColor"
         strokeWidth="2.5"
         strokeLinecap="round"
-        strokeDasharray={`${dash} ${c - dash}`}
+        strokeDasharray={`${dash} ${circumference - dash}`}
         transform="rotate(-90 9 9)"
       />
     </svg>
@@ -93,25 +57,34 @@ async function fileToImage(file: File): Promise<PendingImage | null> {
   return { data: base64, mimeType: file.type, previewUrl: dataUrl };
 }
 
-export function Composer({ isStreaming }: { isStreaming: boolean }) {
+export function Composer({
+  isStreaming,
+  containerRef,
+}: {
+  isStreaming: boolean;
+  containerRef: React.RefObject<HTMLDivElement | null>;
+}) {
   const t = useT();
   const [text, setText] = useState("");
   const [images, setImages] = useState<PendingImage[]>([]);
+  const [activeCommandIndex, setActiveCommandIndex] = useState(0);
+  const [commandPaletteDismissed, setCommandPaletteDismissed] = useState(false);
+  const [modelOpenToken, setModelOpenToken] = useState(0);
+  const [forkOpen, setForkOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { injectText, focusToken, snapshot } = useChat();
-  const composerOpacity = useComposerOpacity();
-  const theme = useTheme();
-  // Compute the blended background in JS (color-mix + CSS vars is unreliable
-  // in older Safari). Recompute on opacity or theme change.
-  const [composerBg, setComposerBg] = useState<string | null>(null);
-  useEffect(() => {
-    if (composerOpacity >= 1) {
-      setComposerBg(null);
-      return;
-    }
-    setComposerBg(blendCardOverCanvas(composerOpacity));
-  }, [composerOpacity, theme]);
+  const { injectText, focusToken, snapshot, commands, commandIntent } = useChat();
+  const chatFontSize = useChatFontSize();
+  const context = snapshot?.context;
+  const contextPercent = context?.percent ?? null;
+  const hasProjectStatus = Boolean(snapshot?.cwd || snapshot?.gitBranch || snapshot?.activeTodo);
+  const hasContext = contextPercent !== null;
+  const contextTitle =
+    context?.tokens != null && context.contextWindow != null
+      ? `${formatTokens(context.tokens)} / ${formatTokens(context.contextWindow)} tokens (${Math.round(contextPercent ?? 0)}%)`
+      : hasContext
+        ? `${Math.round(contextPercent)}%`
+        : undefined;
 
   // Inject the forked message text into the composer
   useEffect(() => {
@@ -126,6 +99,32 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
   useEffect(() => {
     if (focusToken > 0) textareaRef.current?.focus();
   }, [focusToken]);
+
+  useEffect(() => {
+    if (!commandIntent) return;
+    if (commandIntent.action === "open_model") {
+      setModelOpenToken((token) => token + 1);
+      chatClient.consumeCommandIntent();
+    } else if (commandIntent.action === "open_fork") {
+      setForkOpen(true);
+      chatClient.consumeCommandIntent();
+    } else if (commandIntent.action === "copy_text") {
+      void navigator.clipboard
+        .writeText(commandIntent.text)
+        .then(() => chatClient.reportNotice("Copied the last assistant message."))
+        .catch(() => chatClient.reportError("The browser could not copy this message."));
+      chatClient.consumeCommandIntent();
+    }
+  }, [commandIntent]);
+
+  const commandToken = text.trimStart().slice(1).split(/\s/, 1)[0] ?? "";
+  const commandMode = text.trimStart().startsWith("/") && !/\s/.test(text.trimStart().slice(1));
+  const matchingCommands = useMemo(() => commandMatches(commands, text), [commands, text]);
+  const commandPaletteOpen = commandMode && !commandPaletteDismissed;
+
+  useEffect(() => {
+    setActiveCommandIndex(0);
+  }, [commandToken, commands]);
 
   const addFiles = async (files: Iterable<File>) => {
     const loaded = await Promise.all([...files].map(fileToImage));
@@ -145,12 +144,38 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
     if (textareaRef.current) textareaRef.current.style.height = "auto";
   };
 
+  const completeCommand = (name: string, argumentHint?: string) => {
+    setText(`/${name}${argumentHint ? " " : ""}`);
+    setCommandPaletteDismissed(true);
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  };
+
   return (
     <div className="composer-bar shrink-0 bg-canvas md:rounded-b-2xl">
+      {/* Keep this row mounted at first paint so late session metadata cannot
+          change the composer's height or its keyboard position. */}
       <div
-        className="composer-panel mx-auto max-w-3xl rounded-2xl border border-line bg-card px-2 pt-2 pb-2 shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-colors focus-within:border-faint"
-        style={composerBg ? ({ backgroundColor: composerBg } as React.CSSProperties) : undefined}
+        className={`composer-status mx-auto grid h-7 max-w-3xl grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1fr)] items-center gap-2 overflow-hidden px-2 ${
+          hasProjectStatus ? "" : "invisible"
+        }`}
+        aria-hidden={!hasProjectStatus}
       >
+        <div className="min-w-0"><ProjectBadge cwd={snapshot?.cwd} /></div>
+        <ActiveTodoBadge todo={snapshot?.activeTodo} />
+        <div className="flex min-w-0 items-center justify-end gap-2">
+          <TodoProgress todo={snapshot?.activeTodo} />
+          <BranchBadge gitBranch={snapshot?.gitBranch} />
+        </div>
+      </div>
+      <div className="relative mx-auto max-w-3xl">
+        {commandPaletteOpen && (
+          <CommandPalette
+            matches={matchingCommands}
+            activeIndex={Math.min(activeCommandIndex, Math.max(0, matchingCommands.length - 1))}
+            onSelect={(command) => completeCommand(command.name, command.argumentHint)}
+          />
+        )}
+      <div className="composer-panel rounded-2xl border border-line bg-card px-2 pt-2 pb-2 shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-colors focus-within:border-faint">
         {images.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2 px-1">
             {images.map((img, i) => (
@@ -188,9 +213,12 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
             value={text}
             rows={1}
             placeholder={isStreaming ? t("streamingPlaceholder") : t("sendMessage")}
-            className="composer-textarea max-h-40 w-full resize-none bg-transparent px-3 pt-2 pb-1 text-[15px] leading-relaxed text-ink outline-none placeholder:text-faint"
+            className="composer-textarea max-h-40 w-full resize-none bg-transparent px-3 pt-2 pb-1 leading-relaxed text-ink outline-none placeholder:text-faint"
+            style={{ "--composer-font-size": `${chatFontSizePixels(chatFontSize)}px` } as React.CSSProperties}
             onChange={(e) => {
               setText(e.target.value);
+              setCommandPaletteDismissed(false);
+              if (e.target.value.trimStart() === "/") chatClient.send({ type: "get_commands" });
               e.target.style.height = "auto";
               e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
             }}
@@ -205,6 +233,29 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
               }
             }}
             onKeyDown={(e) => {
+              if (commandPaletteOpen && !e.nativeEvent.isComposing) {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setActiveCommandIndex((index) => Math.min(index + 1, Math.max(0, matchingCommands.length - 1)));
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setActiveCommandIndex((index) => Math.max(index - 1, 0));
+                  return;
+                }
+                if (e.key === "Tab" && matchingCommands[activeCommandIndex]) {
+                  e.preventDefault();
+                  const command = matchingCommands[activeCommandIndex];
+                  completeCommand(command.name, command.argumentHint);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setCommandPaletteDismissed(true);
+                  return;
+                }
+              }
               // Desktop: Enter sends; mobile (touch) uses the button
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 const isTouch = window.matchMedia("(pointer: coarse)").matches;
@@ -227,24 +278,24 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
                 <path d="M12 5v14M5 12h14" strokeLinecap="round" />
               </svg>
             </button>
-            <ModelMenu current={snapshot?.model ?? null} />
+            <ModelMenu current={snapshot?.model ?? null} openToken={modelOpenToken} />
             <ThinkingMenu
               current={snapshot?.thinkingLevel ?? "off"}
               levels={snapshot?.thinkingLevels ?? ["off"]}
             />
             <div className="flex-1" />
-            {snapshot?.context?.percent != null && (
-              <span
-                className="flex size-8 items-center justify-center"
-                title={
-                  snapshot.context.tokens != null
-                    ? `${formatTokens(snapshot.context.tokens)} / ${formatTokens(snapshot.context.contextWindow)} tokens (${Math.round(snapshot.context.percent)}%)`
-                    : undefined
-                }
-              >
-                <ContextRing percent={snapshot.context.percent} />
-              </span>
-            )}
+            <span
+              className={`flex size-8 shrink-0 items-center justify-center ${hasContext ? "" : "invisible"}`}
+              aria-hidden={!hasContext}
+              title={contextTitle}
+            >
+              {hasContext && <ContextRing percent={contextPercent} />}
+            </span>
+            <MessageAnchors
+              messages={snapshot?.messages ?? []}
+              containerRef={containerRef}
+              compact
+            />
             {isStreaming ? (
               <button
                 onClick={() => chatClient.send({ type: "abort" })}
@@ -270,6 +321,8 @@ export function Composer({ isStreaming }: { isStreaming: boolean }) {
           </div>
         </div>
       </div>
+      </div>
+      <ForkDialog open={forkOpen} onOpenChange={setForkOpen} />
     </div>
   );
 }

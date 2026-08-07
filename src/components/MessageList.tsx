@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, type CSSProperties, useEffect, useRef, useState } from "react";
 import type { UIContentBlock, UIMessage } from "../../shared/protocol";
 import type { ActiveTool } from "../lib/chat";
+import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
 import { buildEditDiffFromArgs, isUnifiedDiff } from "../lib/diff";
 import { useT } from "../lib/i18n";
 import { DiffView } from "./DiffView";
-import { Markdown } from "./Markdown";
+import { Markdown, streamdownPlugins } from "./Markdown";
 import { Streamdown } from "streamdown";
 
 /** todo 工具: 状态 → 표시 색/심볼 */
@@ -150,10 +151,13 @@ function ToolCallCard({ block }: { block: Extract<UIContentBlock, { type: "toolC
   // Expanded body for bash/read: the meaningful arg, not the full JSON blob
   const detailText =
     command != null ? `$ ${command}` : readPath != null ? `read ${readPath}` : null;
-  // If the edit result carries a real diff (details.diff), prefer showing it
+  // The edit request already produces the complete diff. pi repeats that
+  // payload as result.diff after success, so rendering both produces two
+  // identical panels for one file change.
   const resultDiff = block.result?.diff;
   const resultIsDiff = !!resultDiff || (!!block.result && isUnifiedDiff(block.result.text));
   const resultText = block.result?.text ?? "";
+  const showResult = Boolean(block.result) && !(edit && resultIsDiff && !block.result?.isError);
 
   return (
     <details className="my-2 rounded-xl border border-line bg-card/60 text-sm">
@@ -175,7 +179,7 @@ function ToolCallCard({ block }: { block: Extract<UIContentBlock, { type: "toolC
             </span>
             {edit.stats && (edit.stats.added > 0 || edit.stats.deleted > 0) && (
               <span className="shrink-0 font-mono text-[10px] tabular-nums">
-                <span className="text-blue-600 dark:text-blue-400">+{edit.stats.added}</span>{" "}
+                <span className="text-emerald-600 dark:text-emerald-400">+{edit.stats.added}</span>{" "}
                 <span className="text-red-500">−{edit.stats.deleted}</span>
               </span>
             )}
@@ -205,7 +209,7 @@ function ToolCallCard({ block }: { block: Extract<UIContentBlock, { type: "toolC
             {args}
           </pre>
         )}
-        {block.result && (
+        {showResult && block.result && (
           <div
             className={`mt-2 ${edit || resultIsDiff ? "" : "border-t border-line pt-2"}`}
           >
@@ -229,21 +233,34 @@ function ToolCallCard({ block }: { block: Extract<UIContentBlock, { type: "toolC
   );
 }
 
-function Thinking({ text, defaultOpen = true }: { text: string; defaultOpen?: boolean }) {
+function Thinking({
+  text,
+  defaultOpen = true,
+  streaming = false,
+  collapsed = false,
+}: {
+  text: string;
+  defaultOpen?: boolean;
+  streaming?: boolean;
+  /** The agent has sent its explicit thinking_end event. */
+  collapsed?: boolean;
+}) {
   // Streaming thinking is expanded by default; snapshot thinking blocks are
   // collapsed by default (defaultOpen=false). Users can toggle manually.
   const [open, setOpen] = useState(defaultOpen);
   return (
     <details
-      open={open}
+      open={collapsed ? false : open}
       onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
-      className="my-1.5 text-sm"
+      className="chat-message-text my-1.5"
     >
       <summary className="cursor-pointer text-xs text-faint select-none">thinking…</summary>
       <div className="mt-1 min-w-0 break-words border-l-2 border-line pl-3 text-muted italic [&_pre]:not-italic [&_code]:not-italic">
         {/* Thinking renders markdown too (bold/code/emphasis); Streamdown
             handles incomplete syntax while streaming. */}
-        <Streamdown mode="streaming">{text}</Streamdown>
+        <Streamdown mode={streaming ? "streaming" : "static"} plugins={streamdownPlugins}>
+          {text}
+        </Streamdown>
       </div>
     </details>
   );
@@ -252,13 +269,9 @@ function Thinking({ text, defaultOpen = true }: { text: string; defaultOpen?: bo
 function Blocks({
   blocks,
   markdown,
-  hiddenThinking = null,
 }: {
   blocks: UIContentBlock[];
   markdown: boolean;
-  /** A snapshot thinking block with this exact text is skipped while the
-      just-finished streamed copy is still fading out (avoids double display). */
-  hiddenThinking?: string | null;
 }) {
   const t = useT();
   return (
@@ -274,10 +287,6 @@ function Blocks({
               </div>
             );
           case "thinking":
-            // Snapshot thinking blocks are collapsed by default; while the
-            // streamed copy of the just-finished thinking is fading out, hide
-            // the matching snapshot block so it isn't shown twice.
-            if (hiddenThinking && b.text === hiddenThinking) return null;
             return <Thinking key={i} text={b.text} defaultOpen={false} />;
           case "toolCall":
             return <ToolCallCard key={i} block={b} />;
@@ -300,42 +309,97 @@ function Blocks({
   );
 }
 
-function Message({
+function copyableText(blocks: UIContentBlock[]): string {
+  return blocks
+    .filter((block): block is Extract<UIContentBlock, { type: "text" }> => block.type === "text")
+    .map((block) => block.text)
+    .join("\n")
+    .trim();
+}
+
+function CopyButton({ text }: { text: string }) {
+  const t = useT();
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_500);
+    } catch {
+      /* Clipboard permissions are controlled by the browser. */
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => void copy()}
+      className="flex size-7 items-center justify-center rounded-md border border-line bg-card text-faint shadow-sm transition-colors hover:bg-hover hover:text-ink"
+      aria-label={copied ? t("copied") : t("copyMessage")}
+      title={copied ? t("copied") : t("copyMessage")}
+    >
+      {copied ? (
+        <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2" aria-hidden>
+          <path d="m5 12 4 4L19 6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2" aria-hidden>
+          <rect x="8" y="8" width="11" height="11" rx="2" />
+          <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+const Message = memo(function Message({
   message,
   index,
-  hiddenThinking,
+  isLastAssistant,
 }: {
   message: UIMessage;
   index?: number;
-  hiddenThinking?: string | null;
+  isLastAssistant: boolean;
 }) {
+  const text = copyableText(message.content);
   if (message.role === "user") {
     return (
       <div
         className="flex min-w-0 justify-end scroll-mt-4"
         data-msg-index={index}
       >
-        <div className="user-bubble min-w-0 max-w-[85%] break-words rounded-2xl bg-bubble px-4 py-2.5 text-[15px] whitespace-pre-wrap text-ink sm:max-w-[75%]">
-          <Blocks blocks={message.content} markdown={false} />
+        <div className="user-bubble group/message relative min-w-0 max-w-[85%] break-words rounded-2xl bg-bubble px-4 py-2.5 whitespace-pre-wrap text-ink sm:max-w-[75%]">
+          <div className="chat-message-text pr-5"><Blocks blocks={message.content} markdown={false} /></div>
+          {text && (
+            <div className="absolute top-1 right-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover/message:opacity-100 sm:focus-within:opacity-100">
+              <CopyButton text={text} />
+            </div>
+          )}
         </div>
       </div>
     );
   }
   return (
-    <div className="min-w-0 text-[15px]">
-      <Blocks blocks={message.content} markdown hiddenThinking={hiddenThinking} />
+    <div className="group/message min-w-0">
+      <div className="chat-message-text min-w-0"><Blocks blocks={message.content} markdown /></div>
       {message.errorMessage && (
         <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600 dark:border-red-900 dark:bg-red-950/50 dark:text-red-400">
           {message.errorMessage}
         </div>
       )}
+      {isLastAssistant && text && (
+        <div className="mt-1 flex justify-end opacity-100 transition-opacity sm:opacity-0 sm:group-hover/message:opacity-100 sm:focus-within:opacity-100">
+          <CopyButton text={text} />
+        </div>
+      )}
     </div>
   );
-}
+});
 export function MessageList({
   messages,
   streamText,
   streamThinking,
+  streamThinkingComplete,
   activeTools,
   isStreaming,
   containerRef,
@@ -343,37 +407,37 @@ export function MessageList({
   messages: UIMessage[];
   streamText: string;
   streamThinking: string;
+  streamThinkingComplete: boolean;
   activeTools: ActiveTool[];
   isStreaming: boolean;
   /** Scroll container (owned externally for message-anchor jumps) */
   containerRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const t = useT();
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const chatFontSize = useChatFontSize();
+  const lastAssistantIndex = messages.reduce(
+    (lastIndex, message, index) => (message.role === "assistant" ? index : lastIndex),
+    -1,
+  );
   const stickToBottom = useRef(true);
-  // Streaming thinking that just finished: keep it visible for 2s, then let
-  // the collapsed snapshot block take over (no double display).
-  const lastStreamThinking = useRef("");
-  const [fadingThinking, setFadingThinking] = useState<string | null>(null);
+  const chatStyle = {
+    "--chat-font-size": `${chatFontSizePixels(chatFontSize)}px`,
+  } as CSSProperties;
 
+  // Scroll to bottom on new content. rAF-coalesced and gated on the user
+  // already being at the bottom — the old bare scrollIntoView ran on every
+  // render (per stream delta) and forced synchronous layout.
   useEffect(() => {
-    if (streamThinking) {
-      lastStreamThinking.current = streamThinking;
-      setFadingThinking(null);
-      return;
-    }
-    if (lastStreamThinking.current) {
-      setFadingThinking(lastStreamThinking.current);
-      const timer = setTimeout(() => setFadingThinking(null), 2_000);
-      return () => clearTimeout(timer);
-    }
-  }, [streamThinking]);
-
-  useEffect(() => {
-    if (stickToBottom.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "instant", block: "end" });
-    }
-  });
+      if (!stickToBottom.current) return;
+      const container = containerRef.current;
+      if (!container) return;
+      const raf = requestAnimationFrame(() => {
+        if (!stickToBottom.current) return;
+        const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
+        if (distance > 1) container.scrollTop = container.scrollHeight;
+      });
+    return () => cancelAnimationFrame(raf);
+  }, [messages, streamText, streamThinking, activeTools, isStreaming, containerRef]);
 
   // Only show ... while waiting for a response (hidden when final assistant
   // text exists → no ghost dots after the stream ends)
@@ -386,7 +450,7 @@ export function MessageList({
     isStreaming && !streamText && !streamThinking && activeTools.length === 0 && waitingForAssistant;
 
   return (
-    <div className="relative min-h-0 min-w-0 flex-1">
+    <div className="message-list relative min-h-0 min-w-0 flex-1" style={chatStyle}>
       <div
         ref={containerRef}
         onScroll={() => {
@@ -396,7 +460,7 @@ export function MessageList({
         }}
         className="thin-scroll h-full overflow-x-hidden overflow-y-auto"
       >
-        <div className="mx-auto flex min-w-0 max-w-3xl flex-col gap-6 px-4 py-6">
+        <div className="mx-auto flex min-w-0 max-w-3xl flex-col gap-4 px-3 py-4 sm:gap-5 sm:px-4 sm:py-5">
           {messages.length === 0 && !streamText && (
             <div className="mt-28 text-center">
               <div className="text-4xl text-accent">π</div>
@@ -408,19 +472,20 @@ export function MessageList({
               key={i}
               message={m}
               index={m.role === "user" ? i : undefined}
-              hiddenThinking={fadingThinking}
+              isLastAssistant={i === lastAssistantIndex}
             />
           ))}
-          {/* Streaming thinking stays open; after it ends it keeps showing for
-              2s (fadingThinking), then the collapsed snapshot block takes over. */}
-          {(() => {
-            const activeThinking = streamThinking || fadingThinking;
-            return activeThinking ? <Thinking text={activeThinking} /> : null;
-          })()}
+          {streamThinking && (
+            <Thinking
+              text={streamThinking}
+              streaming
+              collapsed={streamThinkingComplete}
+            />
+          )}
           {streamText && (
-            <div className="min-w-0 text-[15px]">
+            <div className="chat-message-text min-w-0">
               {/* Streamdown handles incomplete markdown natively — no manual escaping */}
-              <Markdown text={streamText} />
+              <Markdown text={streamText} streaming />
             </div>
           )}
           {activeTools.map((tool) => (
@@ -436,7 +501,6 @@ export function MessageList({
               <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:300ms]" />
             </div>
           )}
-          <div ref={bottomRef} />
         </div>
       </div>
     </div>

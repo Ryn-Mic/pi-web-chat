@@ -1,6 +1,6 @@
 {
   "name": "pi-web-chat",
-  "version": "0.1.22",
+  "version": "0.1.46",
   "description": "Web UI for the pi coding agent (OpenWebUI-style, mobile-friendly)",
   "type": "module",
   "license": "MIT",
@@ -49,6 +49,7 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "qrcode": "^1.5.4",
+    "shiki": "^3.23.0",
     "streamdown": "^2.5.0",
     "ws": "^8.21.1"
   },
@@ -83,7 +84,6 @@
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.0.0",
     "esbuild": "^0.28.1",
-    "highlight.js": "^11.11.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",

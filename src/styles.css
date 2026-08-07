@@ -1,6 +1,5 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
-@import "highlight.js/styles/github-dark.css";
 
 /* Streamdown (streaming markdown) utility classes */
 @source "../node_modules/streamdown/dist/*.js";
@@ -108,9 +107,9 @@
 }
 
 /*
- * Lock the page: body is fixed to the screen so iOS can't scroll the whole
- * app up when the keyboard opens. #root stays in normal flow (not fixed —
- * that truncates content on iOS 26+) and is sized from visualViewport.
+ * The document stays fixed for standalone-PWA bounds, while iOS is allowed to
+ * pan its visual viewport for the keyboard. #root stays in normal flow (not
+ * fixed — that truncates content on iOS 26+).
  */
 html,
 body {
@@ -124,19 +123,23 @@ body {
 }
 
 body {
-  /* Fixed to the screen so iOS can't scroll the whole app when the keyboard
-     opens. Follows the visual viewport: top = --app-top (offsetTop), height =
-     --app-height (innerHeight closed / visualViewport open). */
+  /* Closed state: let the browser define the standalone app's drawable bounds.
+     A fixed height based on screen/innerHeight can overrun or undershoot them. */
   position: fixed;
-  left: 0;
-  right: 0;
-  top: var(--app-top, 0px);
-  height: var(--app-height, 100%);
+  inset: 0;
+  height: auto;
   @apply bg-canvas text-ink antialiased;
 }
 
+/* Safari reserves the final home-indicator strip outside the fixed app box.
+   Let the composer use its own bottom padding, but do not send controls into
+   the native strip: a larger offset visibly clips the bottom control row. */
+html.ua-ios.ua-standalone body {
+  bottom: -0.5rem;
+}
+
 #root {
-  /* Fill the body, which already tracks the visual viewport */
+  /* Fill the browser-controlled viewport (or the keyboard viewport above). */
   height: 100%;
   max-height: 100%;
   display: flex;
@@ -146,14 +149,19 @@ body {
 
 @media (max-width: 640px) {
   textarea,
-  input {
-    font-size: 16px;
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
+    /* Prevent iOS focus zoom, which also pans a fixed app away from the
+       keyboard. Utility classes elsewhere may specify a smaller desktop size,
+       so this needs to win on mobile. */
+    font-size: 16px !important;
   }
+
 }
 
 .composer-textarea {
   scrollbar-width: none;
   -ms-overflow-style: none;
+  font-size: var(--composer-font-size, 15px);
 }
 .composer-textarea::-webkit-scrollbar {
   display: none;
@@ -186,6 +194,10 @@ body {
   -webkit-mask-image: linear-gradient(to right, black calc(100% - 2.5rem), transparent);
   mask-image: linear-gradient(to right, black calc(100% - 2.5rem), transparent);
 }
+.fade-x-compact {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.5rem), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 1.5rem), transparent);
+}
 .thin-scroll::-webkit-scrollbar {
   width: 8px;
 }
@@ -200,8 +212,7 @@ body {
 }
 
 /*
- * Bottom bar: floor padding + capped home-indicator inset. When the keyboard
- * is open there is no home indicator, so drop the safe-area entirely.
+ * Bottom bar: floor padding + capped home-indicator inset.
  */
 .composer-bar {
   padding-top: var(--composer-pad-top);
@@ -209,18 +220,136 @@ body {
   padding-right: var(--composer-pad-x);
   padding-bottom: max(
     0.5rem,
-    min(var(--composer-safe-bottom-max), env(safe-area-inset-bottom, 0px))
+    min(var(--composer-safe-bottom-max), var(--safe-bottom, env(safe-area-inset-bottom, 0px)))
   );
 }
-html.ua-keyboard .composer-bar {
+/* A standalone app's fixed viewport already stops above the native bottom
+   region. Applying the inset again leaves a visibly doubled gap. */
+html.ua-standalone .composer-bar {
   padding-bottom: 0.5rem;
 }
 
-/*
- * Composer panel background: opaque by default (bg-card utility); when the
- * user lowers the opacity, Composer sets an inline color-mix that blends
- * --c-card over --c-canvas with a literal percentage (browser-safe).
- */
+/* Streamdown tables keep their natural column width. On narrow screens the
+   wrapper becomes a touch-scroll surface instead of forcing every cell to
+   wrap into tall rows. */
+[data-streamdown="table-wrapper"] {
+  gap: 0.375rem !important;
+  padding: 0.375rem !important;
+}
+[data-streamdown="table-wrapper"] > div:last-child {
+  max-width: 100%;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x pan-y;
+}
+[data-streamdown="table"] {
+  width: max-content !important;
+  min-width: 100% !important;
+}
+[data-streamdown="table-header-cell"],
+[data-streamdown="table-cell"] {
+  padding: 0.375rem 0.625rem !important;
+  white-space: nowrap;
+}
+
+/* The controls sit on a solid compact surface rather than floating over table
+   content. Direct-child selectors leave copy/download dropdown menus roomy. */
+[data-streamdown="table-wrapper"] > div:first-child:not(:last-child) {
+  align-self: flex-end;
+  min-height: 1.5rem;
+  gap: 0.25rem !important;
+  padding: 0.125rem 0.25rem;
+  border: 1px solid var(--c-line);
+  border-radius: 0.375rem;
+  background-color: var(--c-card);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+[data-streamdown="table-wrapper"] > div:first-child:not(:last-child) > button,
+[data-streamdown="table-wrapper"] > div:first-child:not(:last-child) > div > button {
+  display: flex;
+  width: 1.25rem;
+  height: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0.125rem !important;
+  border-radius: 0.25rem;
+}
+[data-streamdown="table-wrapper"] > div:first-child:not(:last-child) > button svg,
+[data-streamdown="table-wrapper"] > div:first-child:not(:last-child) > div > button svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+/* Fullscreen tables start below the app header instead of covering it. */
+[data-streamdown="table-fullscreen"] {
+  top: max(3.25rem, calc(var(--safe-top) + 2.75rem)) !important;
+  background-color: var(--c-canvas) !important;
+}
+[data-streamdown="table-fullscreen"] > div > div:first-child {
+  padding: 0.5rem !important;
+}
+
+/* Compact Streamdown code header and action controls. The action row is an
+   overlay supplied by Streamdown, so its parent needs the matching height. */
+[data-streamdown="code-block"] {
+  gap: 0.375rem !important;
+  padding: 0.375rem !important;
+}
+[data-streamdown="code-block-header"] {
+  height: 1.5rem !important;
+  font-size: 0.6875rem !important;
+}
+[data-streamdown="code-block-header"] > span {
+  margin-left: 0.125rem !important;
+}
+[data-streamdown="code-block"] > div:has(> [data-streamdown="code-block-actions"]) {
+  height: 1.5rem !important;
+  margin-top: -1.875rem !important;
+}
+[data-streamdown="code-block-actions"] {
+  gap: 0.125rem !important;
+  padding: 0.125rem 0.25rem !important;
+  border: 1px solid var(--c-line);
+  background-color: var(--c-card) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  backdrop-filter: none;
+}
+[data-streamdown="code-block-actions"] button {
+  display: flex;
+  width: 1.25rem;
+  height: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0.125rem !important;
+  border-radius: 0.25rem;
+}
+[data-streamdown="code-block-actions"] button svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+[data-streamdown="code-block-body"] {
+  padding: 0.5rem 0.625rem 0.5rem 0.25rem !important;
+}
+[data-streamdown="code-block-body"] pre {
+  min-width: max-content;
+}
+[data-streamdown="code-block-body"] code > span {
+  display: block;
+  min-width: max-content;
+}
+[data-streamdown="code-block-body"] code > span::before {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: 0.875rem !important;
+  margin-right: 0.25rem !important;
+  background-color: var(--c-canvas);
+  box-shadow: 2px 0 var(--c-canvas);
+  color: var(--c-faint) !important;
+  font-size: 0.625rem !important;
+}
 
 /* Markdown body colors follow the tokens (light/dark automatic) */
 .prose {
@@ -235,7 +364,7 @@ html.ua-keyboard .composer-bar {
   --tw-prose-quotes: var(--c-muted);
   --tw-prose-quote-borders: var(--c-line);
   --tw-prose-captions: var(--c-muted);
-  --tw-prose-code: var(--c-ink);
+  --tw-prose-code: #62aeee;
   --tw-prose-th-borders: var(--c-line);
   --tw-prose-td-borders: var(--c-line);
   /* Long URLs/paths don't overflow (pre scrolls on its own below) */
@@ -248,6 +377,62 @@ html.ua-keyboard .composer-bar {
 }
 
 .prose :not(pre) > code {
-  background-color: var(--c-bubble);
+  background-color: transparent;
+  color: #62aeee;
   @apply rounded px-1.5 py-0.5 font-mono text-[13px] font-normal before:content-none after:content-none;
+}
+
+/* Streamdown assigns inline code its own bg-muted utility. Target its stable
+   data attribute so fenced code blocks keep their dark syntax background. */
+[data-streamdown="inline-code"] {
+  background-color: transparent !important;
+  color: #62aeee !important;
+}
+
+/* Conversation typography stays dense without sacrificing code/table spacing.
+   The size variable is set on MessageList from the persisted settings value. */
+.chat-message-text {
+  font-size: var(--chat-font-size, 15px);
+}
+.message-markdown > :first-child {
+  margin-top: 0;
+}
+.message-markdown > :last-child {
+  margin-bottom: 0;
+}
+.message-markdown p {
+  margin-top: 0.625rem;
+  margin-bottom: 0.625rem;
+}
+.message-markdown [data-streamdown="heading-1"],
+.message-markdown [data-streamdown="heading-2"],
+.message-markdown [data-streamdown="heading-3"],
+.message-markdown [data-streamdown="heading-4"],
+.message-markdown [data-streamdown="heading-5"],
+.message-markdown [data-streamdown="heading-6"] {
+  margin-top: 1rem !important;
+  margin-bottom: 0.375rem !important;
+}
+.message-markdown [data-streamdown="unordered-list"],
+.message-markdown [data-streamdown="ordered-list"] {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding-left: 1.25rem;
+  list-style-position: outside;
+}
+.message-markdown [data-streamdown="unordered-list"] > li,
+.message-markdown [data-streamdown="ordered-list"] > li {
+  padding-left: 0.25rem !important;
+  padding-top: 0.125rem;
+  padding-bottom: 0.125rem;
+}
+.message-markdown [data-streamdown="blockquote"] {
+  margin-top: 0.75rem;
+  margin-bottom: 0.75rem;
+  padding-left: 0.75rem;
+}
+.message-markdown [data-streamdown="code-block"],
+.message-markdown [data-streamdown="table-wrapper"] {
+  margin-top: 0.75rem;
+  margin-bottom: 0.75rem;
 }

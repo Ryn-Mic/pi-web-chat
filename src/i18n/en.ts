@@ -10,7 +10,13 @@ export type Messages = {
   themeSystem: string;
   themeLight: string;
   themeDark: string;
+  conversationFontSize: string;
+  fontSizeTiny: string;
+  fontSizeSmall: string;
+  fontSizeDefault: string;
+  fontSizeLarge: string;
   language: string;
+  browserNotifications: string;
 
   // sessions
   sessions: string;
@@ -37,7 +43,6 @@ export type Messages = {
   removeImage: string;
   send: string;
   abort: string;
-  composerOpacity: string;
 
   // model
   selectModel: string;
@@ -65,6 +70,11 @@ export type Messages = {
   scopeTemporary: string;
   tools: string;
   commands: string;
+  commandSourceBuiltin: string;
+  commandSourceExtension: string;
+  commandSourcePrompt: string;
+  commandSourceSkill: string;
+  noCommandsFound: string;
   flags: string;
   events: string;
 
@@ -85,6 +95,7 @@ export type Messages = {
   modelName: string;
   contextWindow: string;
   maxTokens: string;
+  maxThinkingLevel: string;
   reasoning: string;
   imageInput: string;
   noCustomProviders: string;
@@ -104,6 +115,8 @@ export type Messages = {
   imagePlaceholder: string;
   toolRunning: string;
   askAnswerInTerminal: string;
+  copyMessage: string;
+  copied: string;
 
   // auth
   login: string;
@@ -127,7 +140,13 @@ export const en: Messages = {
   themeSystem: "System",
   themeLight: "Light",
   themeDark: "Dark",
+  conversationFontSize: "Conversation font ({size}px)",
+  fontSizeTiny: "Tiny (12px)",
+  fontSizeSmall: "Small (14px)",
+  fontSizeDefault: "Default (15px)",
+  fontSizeLarge: "Large (17px)",
   language: "Language",
+  browserNotifications: "Task completion notifications",
 
   sessions: "Sessions",
   newSession: "New session",
@@ -177,6 +196,11 @@ export const en: Messages = {
   scopeTemporary: "Temporary",
   tools: "Tools",
   commands: "Commands",
+  commandSourceBuiltin: "Built-in",
+  commandSourceExtension: "Extension",
+  commandSourcePrompt: "Prompt",
+  commandSourceSkill: "Skill",
+  noCommandsFound: "No matching commands",
   flags: "Flags",
   events: "Events",
 
@@ -196,6 +220,7 @@ export const en: Messages = {
   modelName: "Display name",
   contextWindow: "Context window",
   maxTokens: "Max tokens",
+  maxThinkingLevel: "Max thinking level",
   reasoning: "Reasoning",
   imageInput: "Image input",
   noCustomProviders: "No custom providers yet",
@@ -206,7 +231,6 @@ export const en: Messages = {
   optional: "optional",
 
   emptyPrompt: "How can I help?",
-  composerOpacity: "Composer opacity",
   messageAnchors: "Jump to message",
   updateAvailable: "A new version is available",
   reload: "Reload",
@@ -215,6 +239,8 @@ export const en: Messages = {
   imagePlaceholder: "[image]",
   toolRunning: "Running {name}…",
   askAnswerInTerminal: "This needs input in the pi terminal — the web UI can't answer it.",
+  copyMessage: "Copy message",
+  copied: "Copied",
 
   login: "Sign in",
   loginFailed: "Invalid token or 2FA code.",

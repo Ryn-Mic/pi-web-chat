@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createServer, type IncomingMessage } from "node:http";
 import { homedir } from "node:os";
@@ -6,6 +6,7 @@ import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   type CreateAgentSessionRuntimeFactory,
+  type ExtensionUIContext,
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
@@ -21,13 +22,15 @@ import type {
   UICustomModelsResponse,
   UICustomProvider,
   UIExtensionInfo,
+  UICommandInfo,
+  UIExtensionUIRequest,
   UISessionInfo,
   UISnapshot,
   UIThinkingLevel,
 } from "../shared/protocol.ts";
 import { auth, authStartupInfo } from "./auth.ts";
 import { readCustomModels, validateProviders, writeCustomModels } from "./models-config.ts";
-import { serializeMessages } from "./serialize.ts";
+import { getActiveTodo, serializeMessages } from "./serialize.ts";
 
 const PORT = Number(process.env.PORT ?? 3141);
 // Default to loopback — this server has no auth and can drive a coding agent.
@@ -107,6 +110,12 @@ interface SessionEntry {
   published: boolean;
   /** Guards against duplicate reloads */
   reloading?: boolean;
+  /** Last (size, mtimeMs) seen by the external-append poller — avoids
+      re-reading the whole session file when it hasn't changed. */
+  lastFileStat?: { size: number; mtimeMs: number };
+  /** Browser that initiated the current extension command, if any. */
+  extensionUIClient?: WebSocket;
+  pendingExtensionUI: Map<string, (response: { cancelled?: boolean; value?: string; confirmed?: boolean }) => void>;
 }
 
 const entries = new Map<string, SessionEntry>();
@@ -193,9 +202,12 @@ async function createEntry(id: string | null, cwd?: string): Promise<SessionEntr
     // Only sessions opened with an explicit id are published immediately.
     // A null connect is a blank draft.
     published: id !== null,
+    pendingExtensionUI: new Map(),
   };
   entries.set(entry.id, entry);
   bindSession(entry);
+  await bindWebExtensions(entry);
+  installEntryRuntimeRebind(entry);
   return entry;
 }
 
@@ -249,7 +261,10 @@ async function reloadEntry(entry: SessionEntry): Promise<void> {
     await runtime.switchSession(file);
     entry.runtime = runtime;
     bindSession(entry);
+    await bindWebExtensions(entry);
+    installEntryRuntimeRebind(entry);
     broadcastSnapshot(entry);
+    sendCommandCatalog(entry);
   } finally {
     entry.reloading = false;
   }
@@ -270,6 +285,18 @@ setInterval(() => {
     if (entry.clients.size === 0) continue;
     const file = entry.runtime.session.sessionFile;
     if (!file || entry.reloading || entry.runtime.session.isStreaming) continue;
+    // Cheap stat first: only read the whole file when it actually changed.
+    // Long sessions grow to hundreds of KB — parsing that every 1.5s is a
+    // sustained disk/CPU cost (noticeable on battery-powered dev machines).
+    let stat;
+    try {
+      stat = statSync(file);
+    } catch {
+      continue; // file not created yet (blank draft)
+    }
+    const prev = entry.lastFileStat;
+    if (prev && prev.size === stat.size && prev.mtimeMs === stat.mtimeMs) continue;
+    entry.lastFileStat = { size: stat.size, mtimeMs: stat.mtimeMs };
     let fileEntries = 0;
     try {
       fileEntries = countFileEntries(file);
@@ -336,8 +363,9 @@ function buildSnapshot(entry: SessionEntry): UISnapshot {
   const session = entry.runtime.session;
   const model = session.model;
   const cwd = entry.runtime.cwd;
+  const messages = serializeMessages(session.messages);
   return {
-    messages: serializeMessages(session.messages),
+    messages,
     isStreaming: session.isStreaming,
     model: model
       ? {
@@ -354,11 +382,159 @@ function buildSnapshot(entry: SessionEntry): UISnapshot {
     sessionId: entry.id,
     cwd,
     gitBranch: gitBranchAt(cwd),
+    activeTodo: getActiveTodo(messages),
   };
 }
 
 function broadcastSnapshot(entry: SessionEntry) {
   broadcastTo(entry, { type: "snapshot", snapshot: buildSnapshot(entry) });
+}
+
+const BUILTIN_COMMANDS: UICommandInfo[] = [
+  { name: "settings", description: "Open web settings", source: "builtin" },
+  { name: "model", description: "Select a model or set provider/model", source: "builtin", argumentHint: "<provider/model>" },
+  { name: "new", description: "Start a new session", source: "builtin" },
+  { name: "resume", description: "Browse saved sessions", source: "builtin" },
+  { name: "fork", description: "Fork from a previous message", source: "builtin" },
+  { name: "copy", description: "Copy the last assistant message", source: "builtin" },
+  { name: "compact", description: "Compact the current context", source: "builtin", argumentHint: "[instructions]" },
+  { name: "name", description: "Set the session display name", source: "builtin", argumentHint: "<name>" },
+  { name: "session", description: "Show current session statistics", source: "builtin" },
+  { name: "reload", description: "Reload extensions, skills, prompts, and themes", source: "builtin" },
+];
+
+function buildCommandCatalog(entry: SessionEntry): UICommandInfo[] {
+  const session = entry.runtime.session;
+  const builtinNames = new Set(BUILTIN_COMMANDS.map((command) => command.name));
+  const commands: UICommandInfo[] = [...BUILTIN_COMMANDS];
+
+  for (const command of session.extensionRunner.getRegisteredCommands()) {
+    // Interactive mode reserves the un-suffixed built-in names too.
+    if (builtinNames.has(command.invocationName)) continue;
+    commands.push({
+      name: command.invocationName,
+      description: command.description,
+      source: "extension",
+      scope: command.sourceInfo.scope,
+    });
+  }
+  for (const template of session.promptTemplates) {
+    if (builtinNames.has(template.name)) continue;
+    commands.push({
+      name: template.name,
+      description: template.description,
+      source: "prompt",
+      scope: template.sourceInfo.scope,
+      argumentHint: template.argumentHint,
+    });
+  }
+  for (const skill of session.resourceLoader.getSkills().skills) {
+    commands.push({
+      name: `skill:${skill.name}`,
+      description: skill.description,
+      source: "skill",
+      scope: skill.sourceInfo.scope,
+    });
+  }
+  return commands;
+}
+
+function sendCommandCatalog(entry: SessionEntry, ws?: WebSocket) {
+  const event: ServerEvent = { type: "command_catalog", commands: buildCommandCatalog(entry) };
+  if (ws) sendTo(ws, event);
+  else broadcastTo(entry, event);
+}
+
+function parseSlashCommand(text: string): { name: string; args: string } | null {
+  if (!text.startsWith("/")) return null;
+  const firstSpace = text.search(/\s/);
+  const name = (firstSpace === -1 ? text.slice(1) : text.slice(1, firstSpace)).trim();
+  if (!name) return null;
+  return { name, args: firstSpace === -1 ? "" : text.slice(firstSpace).trim() };
+}
+
+async function handleBuiltinCommand(
+  parsed: { name: string; args: string },
+  entry: SessionEntry,
+  ws: WebSocket,
+): Promise<boolean> {
+  const session = entry.runtime.session;
+  switch (parsed.name) {
+    case "settings":
+      sendTo(ws, { type: "client_action", action: { action: "open_settings" } });
+      return true;
+    case "model": {
+      if (!parsed.args) {
+        sendTo(ws, { type: "client_action", action: { action: "open_model" } });
+        return true;
+      }
+      const slash = parsed.args.indexOf("/");
+      if (slash <= 0 || slash === parsed.args.length - 1) {
+        sendTo(ws, { type: "error", message: "Use /model <provider/model>." });
+        return true;
+      }
+      const provider = parsed.args.slice(0, slash);
+      const id = parsed.args.slice(slash + 1);
+      const model = modelRuntime.getModel(provider, id);
+      if (!model) {
+        sendTo(ws, { type: "error", message: `Model not found: ${provider}/${id}` });
+        return true;
+      }
+      await session.setModel(model);
+      broadcastSnapshot(entry);
+      sendTo(ws, { type: "command_result", message: `Model set to ${model.name ?? model.id}.` });
+      return true;
+    }
+    case "new":
+      sendTo(ws, { type: "client_action", action: { action: "new_session" } });
+      return true;
+    case "resume":
+      sendTo(ws, { type: "client_action", action: { action: "open_sessions" } });
+      return true;
+    case "fork":
+      sendTo(ws, { type: "client_action", action: { action: "open_fork" } });
+      return true;
+    case "copy": {
+      const text = session.getLastAssistantText();
+      if (!text) {
+        sendTo(ws, { type: "error", message: "There is no assistant message to copy." });
+        return true;
+      }
+      sendTo(ws, { type: "client_action", action: { action: "copy_text", text } });
+      return true;
+    }
+    case "compact":
+      await session.compact(parsed.args || undefined);
+      broadcastSnapshot(entry);
+      sendTo(ws, { type: "command_result", message: "Context compacted." });
+      return true;
+    case "name":
+      if (!parsed.args) {
+        sendTo(ws, { type: "error", message: "Use /name <name>." });
+        return true;
+      }
+      session.setSessionName(parsed.args);
+      broadcastSnapshot(entry);
+      sendTo(ws, { type: "command_result", message: "Session name updated." });
+      return true;
+    case "session": {
+      const stats = session.getSessionStats();
+      const name = session.sessionName ? ` (${session.sessionName})` : "";
+      sendTo(ws, {
+        type: "command_result",
+        message: `Session${name}: ${stats.userMessages} user messages, ${stats.assistantMessages} assistant messages, ${stats.toolCalls} tool calls.`,
+      });
+      return true;
+    }
+    case "reload":
+      await session.reload();
+      broadcastSnapshot(entry);
+      sendCommandCatalog(entry);
+      sendTo(ws, { type: "command_result", message: "Resources reloaded." });
+      return true;
+    default:
+      return false;
+  }
 }
 
 /** Subscribe to session events (re-subscribe after the session is replaced) */
@@ -374,6 +550,8 @@ function bindSession(entry: SessionEntry) {
           broadcast({ type: "delta", kind: "text", delta: e.delta });
         } else if (e.type === "thinking_delta") {
           broadcast({ type: "delta", kind: "thinking", delta: e.delta });
+        } else if (e.type === "thinking_end") {
+          broadcast({ type: "thinking_end" });
         }
         break;
       }
@@ -428,6 +606,11 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
       if (!text && images.length === 0) return;
       // Publish the session to the URL at first input → client switches to /s/:id
       if (!entry.published) publishEntry(entry, ws);
+      const slashCommand = parseSlashCommand(text);
+      if (slashCommand && (await handleBuiltinCommand(slashCommand, entry, ws))) {
+        return;
+      }
+      entry.extensionUIClient = ws;
       // prompt() doesn't resolve until the whole run ends, so don't await it
       session
         .prompt(text, {
@@ -436,6 +619,12 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
         })
         .catch((err) => {
           sendTo(ws, { type: "error", message: String(err instanceof Error ? err.message : err) });
+        })
+        .finally(() => {
+          if (entry.extensionUIClient === ws) entry.extensionUIClient = undefined;
+          // Commands may register resources dynamically; update each open client
+          // after the SDK has finished handling this input.
+          sendCommandCatalog(entry);
         });
       break;
     }
@@ -466,11 +655,159 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
       sendTo(ws, { type: "forked", selectedText: result.selectedText });
       break;
     }
+    case "get_commands":
+      sendCommandCatalog(entry, ws);
+      break;
+    case "extension_ui_response": {
+      const pending = entry.pendingExtensionUI.get(cmd.response.id);
+      if (pending) pending(cmd.response);
+      break;
+    }
   }
 }
 
 function sendTo(ws: WebSocket, event: ServerEvent) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));
+}
+
+function extensionUIClient(entry: SessionEntry): WebSocket | undefined {
+  const owner = entry.extensionUIClient;
+  if (owner && owner.readyState === owner.OPEN) return owner;
+  return [...entry.clients].find((client) => client.readyState === client.OPEN);
+}
+
+type ExtensionUIRequestPayload =
+  | Omit<Extract<UIExtensionUIRequest, { method: "select" }>, "id">
+  | Omit<Extract<UIExtensionUIRequest, { method: "confirm" }>, "id">
+  | Omit<Extract<UIExtensionUIRequest, { method: "input" }>, "id">
+  | Omit<Extract<UIExtensionUIRequest, { method: "editor" }>, "id">;
+
+function requestExtensionUI<T>(
+  entry: SessionEntry,
+  request: ExtensionUIRequestPayload,
+  fallback: T,
+  parse: (response: { cancelled?: boolean; value?: string; confirmed?: boolean }) => T,
+  options?: { timeout?: number; signal?: AbortSignal },
+): Promise<T> {
+  const ws = extensionUIClient(entry);
+  if (!ws) return Promise.resolve(fallback);
+  const id = crypto.randomUUID();
+  return new Promise((resolve) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const finish = (response: { cancelled?: boolean; value?: string; confirmed?: boolean }) => {
+      if (timeout) clearTimeout(timeout);
+      options?.signal?.removeEventListener("abort", onAbort);
+      entry.pendingExtensionUI.delete(id);
+      resolve(parse(response));
+    };
+    const onAbort = () => finish({ cancelled: true });
+    options?.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options?.timeout) timeout = setTimeout(onAbort, options.timeout);
+    entry.pendingExtensionUI.set(id, finish);
+    sendTo(ws, { type: "extension_ui_request", request: { ...request, id } as UIExtensionUIRequest });
+  });
+}
+
+function createWebExtensionUIContext(entry: SessionEntry): ExtensionUIContext {
+  return {
+    select: (title, options, opts) =>
+      requestExtensionUI(
+        entry,
+        { method: "select", title, options },
+        undefined,
+        (response) => (response.cancelled ? undefined : response.value),
+        opts,
+      ),
+    confirm: (title, message, opts) =>
+      requestExtensionUI(
+        entry,
+        { method: "confirm", title, message },
+        false,
+        (response) => !response.cancelled && response.confirmed === true,
+        opts,
+      ),
+    input: (title, placeholder, opts) =>
+      requestExtensionUI(
+        entry,
+        { method: "input", title, placeholder },
+        undefined,
+        (response) => (response.cancelled ? undefined : response.value),
+        opts,
+      ),
+    editor: (title, prefill) =>
+      requestExtensionUI(
+        entry,
+        { method: "editor", title, prefill },
+        undefined,
+        (response) => (response.cancelled ? undefined : response.value),
+      ),
+    notify(message) {
+      const ws = extensionUIClient(entry);
+      if (ws) sendTo(ws, { type: "command_result", message });
+    },
+    onTerminalInput: () => () => {},
+    setStatus: () => {},
+    setWorkingMessage: () => {},
+    setWorkingVisible: () => {},
+    setWorkingIndicator: () => {},
+    setHiddenThinkingLabel: () => {},
+    setWidget: () => {},
+    setFooter: () => {},
+    setHeader: () => {},
+    setTitle: () => {},
+    custom: async () => undefined,
+    pasteToEditor: () => {},
+    setEditorText: () => {},
+    getEditorText: () => "",
+    addAutocompleteProvider: () => {},
+    setEditorComponent: () => {},
+    getEditorComponent: () => undefined,
+    theme: {} as ExtensionUIContext["theme"],
+    getAllThemes: () => [],
+    getTheme: () => undefined,
+    setTheme: () => ({ success: false, error: "Theme switching is not supported in the web UI." }),
+    getToolsExpanded: () => false,
+    setToolsExpanded: () => {},
+  } as ExtensionUIContext;
+}
+
+async function bindWebExtensions(entry: SessionEntry) {
+  const runtime = entry.runtime;
+  const session = runtime.session;
+  await session.bindExtensions({
+    uiContext: createWebExtensionUIContext(entry),
+    mode: "rpc",
+    commandContextActions: {
+      waitForIdle: () => runtime.session.waitForIdle(),
+      newSession: (options) => runtime.newSession(options),
+      fork: async (entryId, options) => {
+        const result = await runtime.fork(entryId, options);
+        return { cancelled: result.cancelled };
+      },
+      navigateTree: async (entryId, options) => {
+        const result = await runtime.session.navigateTree(entryId, options);
+        return { cancelled: result.cancelled };
+      },
+      switchSession: (sessionPath, options) => runtime.switchSession(sessionPath, options),
+      reload: async () => {
+        await runtime.session.reload();
+        sendCommandCatalog(entry);
+      },
+    },
+    onError: (error) => {
+      broadcastTo(entry, { type: "error", message: `Extension error: ${error.error}` });
+    },
+  });
+}
+
+function installEntryRuntimeRebind(entry: SessionEntry) {
+  entry.runtime.setRebindSession(async () => {
+    await bindWebExtensions(entry);
+    bindSession(entry);
+    rekeyEntry(entry);
+    broadcastSnapshot(entry);
+    sendCommandCatalog(entry);
+  });
 }
 
 /**
@@ -587,6 +924,7 @@ async function reloadModelProviders(providers: UICustomProvider[]): Promise<stri
             id: m.id,
             name: m.name ?? m.id,
             reasoning: m.reasoning ?? false,
+            thinkingLevelMap: m.thinkingLevelMap,
             input: m.input && m.input.length > 0 ? m.input : ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: m.contextWindow ?? 128_000,
@@ -1010,6 +1348,7 @@ wss.on("connection", (ws, req) => {
       }
       sendTo(ws, { type: "hello", version: PACKAGE_VERSION });
       sendTo(ws, { type: "snapshot", snapshot: buildSnapshot(entry) });
+      sendCommandCatalog(entry, ws);
       ready = true;
       for (const cmd of queue.splice(0)) {
         handleCommand(cmd, ws).catch((err) => {
@@ -1025,6 +1364,10 @@ wss.on("connection", (ws, req) => {
   ws.on("close", () => {
     const entry = wsEntry.get(ws);
     if (entry) {
+      if (entry.extensionUIClient === ws) {
+        entry.extensionUIClient = undefined;
+        for (const pending of entry.pendingExtensionUI.values()) pending({ cancelled: true });
+      }
       entry.clients.delete(ws);
       entry.lastActive = Date.now();
       wsEntry.delete(ws);

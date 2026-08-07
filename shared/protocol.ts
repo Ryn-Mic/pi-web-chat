@@ -8,6 +8,15 @@ export interface UITodoTask {
   activeForm?: string;
 }
 
+/** The task currently being worked on, summarized for the composer status row. */
+export interface UIActiveTodo {
+  subject: string;
+  activeForm?: string;
+  /** One-based position of the active task in the todo list. */
+  current: number;
+  total: number;
+}
+
 export type UIContentBlock =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
@@ -32,6 +41,8 @@ export interface UIMessage {
   role: "user" | "assistant" | "custom";
   content: UIContentBlock[];
   errorMessage?: string;
+  /** Message creation time in Unix milliseconds. */
+  timestamp?: number;
 }
 
 export interface UIModel {
@@ -67,6 +78,8 @@ export interface UISnapshot {
   cwd?: string;
   /** Current branch when the cwd is a git repo, otherwise null */
   gitBranch?: string | null;
+  /** Current todo task, when the latest todo snapshot has an active item. */
+  activeTodo?: UIActiveTodo;
 }
 
 export interface UISessionInfo {
@@ -106,6 +119,40 @@ export interface UIExtensionInfo {
   events: string[];
 }
 
+/** A slash command available in the current session. */
+export interface UICommandInfo {
+  /** Invokable name without the leading slash. */
+  name: string;
+  description?: string;
+  /** Commands are grouped by where pi loaded them from. */
+  source: "builtin" | "extension" | "prompt" | "skill";
+  /** Resource scope for non-built-in commands. */
+  scope?: "user" | "project" | "temporary";
+  /** Short hint shown after completing a command with arguments. */
+  argumentHint?: string;
+}
+
+export type UIClientAction =
+  | { action: "open_settings" }
+  | { action: "open_model" }
+  | { action: "open_fork" }
+  | { action: "open_sessions" }
+  | { action: "new_session" }
+  | { action: "copy_text"; text: string };
+
+export type UIExtensionUIRequest =
+  | { id: string; method: "select"; title: string; options: string[] }
+  | { id: string; method: "confirm"; title: string; message: string }
+  | { id: string; method: "input"; title: string; placeholder?: string }
+  | { id: string; method: "editor"; title: string; prefill?: string };
+
+export interface UIExtensionUIResponse {
+  id: string;
+  cancelled?: boolean;
+  value?: string;
+  confirmed?: boolean;
+}
+
 export interface UIExtensionsResponse {
   extensions: UIExtensionInfo[];
   /** Extensions that failed to load */
@@ -121,6 +168,8 @@ export interface UICustomModel {
   maxTokens?: number;
   /** Input modalities (default ["text"]) */
   input?: ("text" | "image")[];
+  /** Provider-native names for the supported thinking strengths. */
+  thinkingLevelMap?: Partial<Record<UIThinkingLevel, string | null>>;
 }
 
 export type UICustomApi =
@@ -170,11 +219,17 @@ export type ServerEvent =
    */
   | { type: "session_bound"; sessionId: string }
   | { type: "delta"; kind: "text" | "thinking"; delta: string }
+  /** The agent closed its current reasoning block; keep it available but collapse it. */
+  | { type: "thinking_end" }
   | { type: "tool_start"; toolCallId: string; toolName: string }
   | { type: "tool_end"; toolCallId: string; toolName: string; isError: boolean }
   | { type: "agent_start" }
   | { type: "agent_end" }
   | { type: "forked"; selectedText?: string }
+  | { type: "command_catalog"; commands: UICommandInfo[] }
+  | { type: "command_result"; message: string }
+  | { type: "client_action"; action: UIClientAction }
+  | { type: "extension_ui_request"; request: UIExtensionUIRequest }
   | { type: "error"; message: string };
 
 export type ClientCommand =
@@ -182,4 +237,6 @@ export type ClientCommand =
   | { type: "abort" }
   | { type: "set_model"; provider: string; id: string }
   | { type: "set_thinking_level"; level: UIThinkingLevel }
-  | { type: "fork"; entryId: string };
+  | { type: "fork"; entryId: string }
+  | { type: "get_commands" }
+  | { type: "extension_ui_response"; response: UIExtensionUIResponse };

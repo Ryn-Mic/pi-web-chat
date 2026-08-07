@@ -1,15 +1,14 @@
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { chatClient, useChat } from "../lib/chat";
 import { requestOpenSessionsDrawer } from "../lib/drawer";
 import { useT } from "../lib/i18n";
-import { consumeSuppressResume, getLastSessionId, useResumeEnabled } from "../lib/resume";
+import { consumeSuppressResume, getLastSessionId, suppressResumeOnce, useResumeEnabled } from "../lib/resume";
 import { useSidebarPinned } from "../lib/sidebar";
 import { useLeftEdgeSwipe } from "../lib/useEdgeSwipe";
 import { Composer } from "./Composer";
-import { MessageAnchors } from "./MessageAnchors";
+import { ExtensionUIHost } from "./ExtensionUIHost";
 import { MessageList } from "./MessageList";
-import { ProjectBadge } from "./ProjectBadge";
 import { SessionsDrawer, SessionsSidebar } from "./SessionsDrawer";
 import { SettingsMenu } from "./SettingsMenu";
 
@@ -40,7 +39,19 @@ function connectionLabel(
 
 export function ChatPage() {
   const t = useT();
-  const { connection, sessionId, snapshot, streamText, streamThinking, activeTools, updateAvailable, lastError } =
+  const {
+    connection,
+    sessionId,
+    snapshot,
+    streamText,
+    streamThinking,
+    streamThinkingComplete,
+    activeTools,
+    updateAvailable,
+    lastError,
+    lastNotice,
+    commandIntent,
+  } =
     useChat();
   const isStreaming = snapshot?.isStreaming ?? false;
   const sidebarPinned = useSidebarPinned();
@@ -50,6 +61,7 @@ export function ChatPage() {
   const navigate = useNavigate();
   const resumeEnabled = useResumeEnabled();
   const messageListRef = useRef<HTMLDivElement>(null);
+  const [settingsOpenToken, setSettingsOpenToken] = useState(0);
 
   // URL → connection ("/" is a draft without an id yet; the server sends
   // session_bound on the first input)
@@ -91,13 +103,30 @@ export function ChatPage() {
     onSwipeRight: requestOpenSessionsDrawer,
   });
 
+  useEffect(() => {
+    if (!commandIntent) return;
+    if (commandIntent.action === "open_settings") {
+      setSettingsOpenToken((token) => token + 1);
+      chatClient.consumeCommandIntent();
+    } else if (commandIntent.action === "open_sessions") {
+      requestOpenSessionsDrawer();
+      chatClient.consumeCommandIntent();
+    } else if (commandIntent.action === "new_session") {
+      suppressResumeOnce();
+      void navigate({ to: "/" });
+      chatClient.connect(null, { force: true });
+      chatClient.requestComposerFocus();
+      chatClient.consumeCommandIntent();
+    }
+  }, [commandIntent, navigate]);
+
   // #root is the flex/dvh shell; fill it (no position:fixed — iOS 26 safe).
   return (
     <div className="flex h-full min-h-0 w-full flex-1 bg-sidebar">
       {sidebarPinned && <SessionsSidebar currentSessionFile={snapshot?.sessionFile} />}
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas md:my-2 md:mr-2 md:rounded-2xl md:border md:border-line md:shadow-sm">
-        <header className="flex shrink-0 items-center gap-1 px-2.5 py-2 pt-[max(0.5rem,var(--safe-top))]">
+        <header className="flex shrink-0 items-center gap-1 px-2.5 py-2 pt-[calc(max(0.5rem,var(--safe-top))+0.25rem)]">
           <SessionsDrawer currentSessionFile={snapshot?.sessionFile} />
           <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
             {!sidebarPinned && (
@@ -108,12 +137,8 @@ export function ChatPage() {
               title={connectionLabel(connection, t)}
               aria-label={connectionLabel(connection, t)}
             />
-            <div className="min-w-0 flex-1">
-              <ProjectBadge cwd={snapshot?.cwd} gitBranch={snapshot?.gitBranch} />
-            </div>
           </div>
-          <MessageAnchors messages={snapshot?.messages ?? []} containerRef={messageListRef} />
-          <SettingsMenu />
+          <SettingsMenu openToken={settingsOpenToken} />
         </header>
 
         {showConnectingOverlay ? (
@@ -132,6 +157,7 @@ export function ChatPage() {
               messages={snapshot?.messages ?? []}
               streamText={streamText}
               streamThinking={streamThinking}
+              streamThinkingComplete={streamThinkingComplete}
               activeTools={activeTools}
               isStreaming={isStreaming}
               containerRef={messageListRef}
@@ -172,9 +198,22 @@ export function ChatPage() {
                 </button>
               </div>
             )}
-            <Composer isStreaming={isStreaming} />
+            {lastNotice && (
+              <div className="flex shrink-0 items-center gap-3 border-t border-line bg-card px-4 py-2 text-sm text-muted">
+                <span className="min-w-0 flex-1 break-words">{lastNotice}</span>
+                <button
+                  type="button"
+                  onClick={() => chatClient.clearNotice()}
+                  className="shrink-0 rounded-lg border border-line px-2 py-0.5 text-xs font-medium transition-colors hover:bg-hover hover:text-ink"
+                >
+                  {t("dismiss")}
+                </button>
+              </div>
+            )}
+            <Composer isStreaming={isStreaming} containerRef={messageListRef} />
           </>
         )}
+        <ExtensionUIHost />
       </div>
     </div>
   );

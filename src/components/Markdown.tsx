@@ -1,5 +1,8 @@
 import { memo, type ReactNode } from "react";
 import { Streamdown } from "streamdown";
+import { streamdownPlugins } from "../lib/streamdownCode";
+
+export { streamdownPlugins } from "../lib/streamdownCode";
 
 /** Flatten p's children into plain text so they can be inspected */
 function flattenText(node: ReactNode): string {
@@ -29,10 +32,22 @@ const components = {
  * removes the need for manual marker-escaping and the full re-parse jank on
  * every delta.
  */
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown({
+  text,
+  streaming = false,
+}: {
+  text: string;
+  /** Streaming mode keeps incomplete markdown open; static mode avoids the
+      extra normalization and transition work for completed messages. */
+  streaming?: boolean;
+}) {
   return (
-    <div className="max-w-none text-[15px] leading-relaxed">
-      <Streamdown mode="streaming" components={components}>
+    <div className="message-markdown max-w-none leading-[1.6]">
+      <Streamdown
+        mode={streaming ? "streaming" : "static"}
+        components={components}
+        plugins={streamdownPlugins}
+      >
         {text}
       </Streamdown>
     </div>

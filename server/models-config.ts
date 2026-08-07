@@ -13,6 +13,7 @@ import type {
   UICustomModel,
   UICustomModelsResponse,
   UICustomProvider,
+  UIThinkingLevel,
 } from "../shared/protocol.ts";
 
 const HOME = homedir();
@@ -22,6 +23,16 @@ const APIS: UICustomApi[] = [
   "openai-responses",
   "anthropic-messages",
   "google-generative-ai",
+];
+
+const THINKING_LEVELS: UIThinkingLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
 ];
 
 export function modelsPath(): string {
@@ -52,6 +63,20 @@ function toNumber(v: unknown): number | undefined {
   return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }
 
+function toThinkingLevelMap(
+  value: unknown,
+): Partial<Record<UIThinkingLevel, string | null>> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value).filter(
+    ([level, mapped]) =>
+      THINKING_LEVELS.includes(level as UIThinkingLevel) &&
+      (typeof mapped === "string" || mapped === null),
+  );
+  return entries.length > 0
+    ? (Object.fromEntries(entries) as Partial<Record<UIThinkingLevel, string | null>>)
+    : undefined;
+}
+
 export function readCustomModels(): UICustomModelsResponse {
   const { json, parseError } = readRaw();
   const providersRaw = (json.providers ?? {}) as Record<string, Json>;
@@ -73,6 +98,7 @@ export function readCustomModels(): UICustomModelsResponse {
           input: Array.isArray(m.input)
             ? (m.input.filter((i) => i === "text" || i === "image") as ("text" | "image")[])
             : undefined,
+          thinkingLevelMap: toThinkingLevelMap(m.thinkingLevelMap),
         })),
     };
   });
@@ -126,6 +152,7 @@ function mergeModel(existing: Json | undefined, next: UICustomModel): Json {
   put("contextWindow", next.contextWindow);
   put("maxTokens", next.maxTokens);
   put("input", next.input && next.input.length > 0 ? next.input : undefined);
+  put("thinkingLevelMap", next.thinkingLevelMap);
   return out;
 }
 

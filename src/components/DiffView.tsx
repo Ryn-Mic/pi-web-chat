@@ -2,28 +2,27 @@ import { useMemo } from "react";
 import { parseDiff, type DiffLineKind } from "../lib/diff";
 
 const KIND_CLASS: Record<DiffLineKind, string> = {
-  header: "text-faint",
-  hunk: "bg-faint/10 text-muted font-semibold",
-  // added = blue, deleted = red (blue/red scheme)
-  add: "bg-blue-500/10 text-blue-700 dark:text-blue-400",
-  del: "bg-red-500/10 text-red-600 dark:text-red-400",
+  header: "bg-selected/70 text-faint",
+  hunk: "border-y border-line bg-sidebar text-muted",
+  add: "bg-emerald-500/10 text-emerald-800 dark:text-emerald-300",
+  del: "bg-red-500/10 text-red-700 dark:text-red-300",
   context: "text-muted",
   nonewline: "text-faint italic",
   ellipsis: "text-faint select-none",
   plain: "text-ink",
 };
 
-/** content of a + / - line (prefix stripped) */
-function lineContent(l: { kind: DiffLineKind; text: string }): string {
-  return l.kind === "add" || l.kind === "del" ? l.text.slice(1) : l.text;
+function splitLine(line: { kind: DiffLineKind; text: string }) {
+  if (line.kind === "add" || line.kind === "del" || line.kind === "context") {
+    return { marker: line.text.slice(0, 1), content: line.text.slice(1) };
+  }
+  return { marker: "", content: line.text };
 }
 
 /**
- * Render a unified diff with line numbers and a red(delete)/blue(add) scheme.
- * Old/new line-number gutters + content (code blocks use JetBrainsMono Nerd
- * Font). Gutter columns are narrow on mobile so the content gets the room.
- * A delete immediately followed by an identical add (e.g. reordered lines) is
- * shown once as a purple "move" row instead of a confusing delete+add pair.
+ * Render a unified diff with a stable old/new line-number gutter. This is a
+ * div-based grid rather than a pre containing divs: that keeps each row valid
+ * HTML and makes horizontal scrolling consistent on Safari.
  */
 export function DiffView({
   text,
@@ -34,46 +33,42 @@ export function DiffView({
 }) {
   const lines = useMemo(() => parseDiff(text), [text]);
   return (
-    <pre
-      className={`${maxHeight} overflow-auto rounded-lg font-mono text-xs leading-relaxed whitespace-pre`}
+    <div
+      className={`diff-view ${maxHeight} overflow-auto rounded-md border border-line bg-canvas font-mono text-[11px] leading-5`}
     >
-      {lines.map((l, i) => {
-        const next = lines[i + 1];
-        const isMove =
-          l.kind === "del" && next?.kind === "add" && lineContent(l) === lineContent(next);
-        if (isMove) {
+      {/* The inner flex column is sized by the longest diff row. Every child
+          stretches to that same width, so short hunk/header backgrounds do
+          not end halfway through the horizontal scroll range. */}
+      <div className="inline-flex min-w-full flex-col">
+        {lines.map((l, i) => {
+          const isMeta =
+            l.kind === "header" ||
+            l.kind === "hunk" ||
+            l.kind === "nonewline" ||
+            l.kind === "ellipsis" ||
+            l.kind === "plain";
+          if (isMeta) {
+            return (
+              <div key={i} className={`px-2 whitespace-pre ${KIND_CLASS[l.kind]}`}>
+                {l.text}
+              </div>
+            );
+          }
+          const { marker, content } = splitLine(l);
           return (
-            <div
-              key={i}
-              className="flex bg-purple-500/10 text-purple-700 dark:text-purple-400"
-              title="moved"
-            >
-              <span className="w-7 shrink-0 pr-1.5 text-right tabular-nums opacity-40 select-none sm:w-10 sm:pr-2">
+            <div key={i} className={`flex min-w-max ${KIND_CLASS[l.kind]}`}>
+              <span className="w-7 shrink-0 pr-1 text-right tabular-nums opacity-45 select-none sm:w-9">
                 {l.oldNo ?? ""}
               </span>
-              <span className="w-7 shrink-0 pr-1.5 text-right tabular-nums opacity-40 select-none sm:w-10 sm:pr-2">
-                {next!.newNo ?? ""}
+              <span className="w-7 shrink-0 pr-1 text-right tabular-nums opacity-45 select-none sm:w-9">
+                {l.newNo ?? ""}
               </span>
-              <span className="min-w-0 flex-1 whitespace-pre">⇄ {lineContent(l)}</span>
+              <span className="w-4 shrink-0 text-center font-semibold select-none">{marker}</span>
+              <span className="pr-3 whitespace-pre">{content}</span>
             </div>
           );
-        }
-        if (l.kind === "add") {
-          const prev = lines[i - 1];
-          if (prev?.kind === "del" && lineContent(l) === lineContent(prev)) return null;
-        }
-        return (
-          <div key={i} className={`flex ${KIND_CLASS[l.kind]}`}>
-            <span className="w-7 shrink-0 pr-1.5 text-right tabular-nums opacity-40 select-none sm:w-10 sm:pr-2">
-              {l.oldNo ?? ""}
-            </span>
-            <span className="w-7 shrink-0 pr-1.5 text-right tabular-nums opacity-40 select-none sm:w-10 sm:pr-2">
-              {l.newNo ?? ""}
-            </span>
-            <span className="min-w-0 flex-1 whitespace-pre">{l.text}</span>
-          </div>
-        );
-      })}
-    </pre>
+        })}
+      </div>
+    </div>
   );
 }

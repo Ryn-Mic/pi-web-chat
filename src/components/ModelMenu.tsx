@@ -11,7 +11,7 @@ function matchesQuery(model: UIModel, q: string) {
   return hay.includes(q);
 }
 
-export function ModelMenu({ current }: { current: UIModel | null }) {
+export function ModelMenu({ current, openToken = 0 }: { current: UIModel | null; openToken?: number }) {
   const t = useT();
   const { data: models } = useModels();
   const [open, setOpen] = useState(false);
@@ -35,6 +35,10 @@ export function ModelMenu({ current }: { current: UIModel | null }) {
       window.clearTimeout(t2);
     };
   }, [open]);
+
+  useEffect(() => {
+    if (openToken > 0) setOpen(true);
+  }, [openToken]);
 
   return (
     <Menu.Root open={open} onOpenChange={setOpen}>

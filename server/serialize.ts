@@ -1,4 +1,4 @@
-import type { UIContentBlock, UIMessage, UITodoTask } from "../shared/protocol.ts";
+import type { UIActiveTodo, UIContentBlock, UIMessage, UITodoTask } from "../shared/protocol.ts";
 
 type AnyMessage = {
   role: string;
@@ -83,7 +83,13 @@ export function serializeMessages(messages: unknown[]): UIMessage[] {
           }
         }
       }
-      if (blocks.length > 0) out.push({ role: "user", content: blocks });
+      if (blocks.length > 0) {
+        out.push({
+          role: "user",
+          content: blocks,
+          timestamp: typeof m.timestamp === "number" ? m.timestamp : undefined,
+        });
+      }
       continue;
     }
 
@@ -112,6 +118,7 @@ export function serializeMessages(messages: unknown[]): UIMessage[] {
           role: "assistant",
           content: blocks,
           errorMessage: typeof m.errorMessage === "string" ? m.errorMessage : undefined,
+          timestamp: typeof m.timestamp === "number" ? m.timestamp : undefined,
         });
       }
       continue;
@@ -119,8 +126,42 @@ export function serializeMessages(messages: unknown[]): UIMessage[] {
 
     // custom/other messages: show when there is text
     const text = textFromContent(m.content);
-    if (text) out.push({ role: "custom", content: [{ type: "text", text }] });
+    if (text) {
+      out.push({
+        role: "custom",
+        content: [{ type: "text", text }],
+        timestamp: typeof m.timestamp === "number" ? m.timestamp : undefined,
+      });
+    }
   }
 
   return out;
+}
+
+/** Find the live task from the most recent todo tool result in a session. */
+export function getActiveTodo(messages: UIMessage[]): UIActiveTodo | undefined {
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = messages[messageIndex];
+    if (message?.role !== "assistant") continue;
+
+    for (let blockIndex = message.content.length - 1; blockIndex >= 0; blockIndex -= 1) {
+      const block = message.content[blockIndex];
+      if (block?.type !== "toolCall" || block.name !== "todo") continue;
+      const tasks = block.result?.tasks;
+      if (!tasks?.length) continue;
+      const current = tasks.findIndex((task) => task.status === "in_progress");
+      // A later todo snapshot with no active task means the list has completed;
+      // do not fall back to an obsolete in-progress snapshot.
+      if (current < 0) return undefined;
+      const task = tasks[current];
+      if (!task) continue;
+      return {
+        subject: task.subject,
+        activeForm: task.activeForm,
+        current: current + 1,
+        total: tasks.length,
+      };
+    }
+  }
+  return undefined;
 }

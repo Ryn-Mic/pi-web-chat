@@ -1,6 +1,15 @@
 import { useSyncExternalStore } from "react";
-import type { ClientCommand, ServerEvent, UISnapshot } from "../../shared/protocol";
+import type {
+  ClientCommand,
+  ServerEvent,
+  UIClientAction,
+  UICommandInfo,
+  UIExtensionUIRequest,
+  UIExtensionUIResponse,
+  UISnapshot,
+} from "../../shared/protocol";
 import { authHeaders, checkAuth } from "./auth";
+import { notifyTaskComplete } from "./browserNotifications";
 import { rememberSessionId } from "./resume";
 
 export interface ActiveTool {
@@ -19,6 +28,8 @@ export interface ChatState {
   /** Assistant text streaming right now (not yet in the snapshot) */
   streamText: string;
   streamThinking: string;
+  /** The live thinking block has finished and should be collapsed immediately. */
+  streamThinkingComplete: boolean;
   activeTools: ActiveTool[];
   /** Text to inject into the composer right after a fork (cleared after consumption) */
   injectText: string | null;
@@ -28,6 +39,14 @@ export interface ChatState {
   updateAvailable: boolean;
   /** Error event from the server (failed prompt etc.) — shown as a banner */
   lastError: string | null;
+  /** Low-priority confirmation from a slash command. */
+  lastNotice: string | null;
+  /** A slash command that opens an existing Web UI surface. */
+  commandIntent: UIClientAction | null;
+  /** Slash commands available in the connected session. */
+  commands: UICommandInfo[];
+  /** Current dialog requested by a pi extension. */
+  extensionUIRequest: UIExtensionUIRequest | null;
 }
 
 const initialState: ChatState = {
@@ -36,11 +55,16 @@ const initialState: ChatState = {
   snapshot: null,
   streamText: "",
   streamThinking: "",
+  streamThinkingComplete: false,
   activeTools: [],
   injectText: null,
   focusToken: 0,
   updateAvailable: false,
   lastError: null,
+  lastNotice: null,
+  commandIntent: null,
+  commands: [],
+  extensionUIRequest: null,
 };
 
 class ChatClient {
@@ -53,6 +77,57 @@ class ChatClient {
   private everConnected = false;
   /** Session id to connect to (null = new session) */
   private target: string | null = null;
+
+  /**
+   * Stream deltas coalesced here and flushed on a fixed cadence. Fast models
+   * emit ~100 delta frames/s; every flush re-renders the whole MessageList
+   * and re-parses the accumulated markdown, so rendering per-token is a
+   * sustained CPU load on phones (heat / battery drain). 100ms keeps the
+   * stream visually smooth at ~10 updates/s.
+   */
+  private static readonly DELTA_FLUSH_MS = 100;
+  private streamBuf: { text?: string; thinking?: string } | null = null;
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private scheduleFlush() {
+    if (this.flushTimer) return;
+    // One-shot timeout: fires once, clears itself, and the next delta after
+    // that schedules a fresh one. (setInterval here leaks — the callback
+    // nulls the handle before it can be cleared, so a new interval gets
+    // created every window and never stops.)
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      this.flushStreamBuffer();
+    }, ChatClient.DELTA_FLUSH_MS);
+  }
+
+  /** Apply buffered deltas to state and stop the timer. */
+  private flushStreamBuffer() {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    const buf = this.streamBuf;
+    this.streamBuf = null;
+    if (!buf) return;
+    this.update({
+      streamText: buf.text ? this.state.streamText + buf.text : this.state.streamText,
+      streamThinking: buf.thinking
+        ? this.state.streamThinking + buf.thinking
+        : this.state.streamThinking,
+      ...(buf.thinking ? { streamThinkingComplete: false } : {}),
+    });
+  }
+
+  /** Drop any pending stream deltas (session switch / disconnect). */
+  private clearStreamBuffer() {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.streamBuf = null;
+  }
+
   state: ChatState = initialState;
 
   /**
@@ -69,12 +144,17 @@ class ChatClient {
       }
       // Session switch: close the previous connection and reset the view
       this.closeSocket();
+      this.clearStreamBuffer();
       this.update({
         snapshot: null,
         sessionId: null,
         streamText: "",
         streamThinking: "",
+        streamThinkingComplete: false,
         activeTools: [],
+        commands: [],
+        commandIntent: null,
+        extensionUIRequest: null,
       });
     }
     this.target = sessionId;
@@ -106,6 +186,7 @@ class ChatClient {
     };
     ws.onclose = () => {
       this.ws = null;
+      this.clearStreamBuffer();
       if (this.intentionalClose) return;
 
       // Soft state while retrying — don't flash red on first paint / brief blips.
@@ -173,6 +254,9 @@ class ChatClient {
   }
 
   private handle(event: ServerEvent) {
+    // A non-delta event can replace/clear the streaming text (snapshot,
+    // agent_end …). Flush pending deltas first so no characters are lost.
+    if (event.type !== "delta") this.flushStreamBuffer();
     switch (event.type) {
       case "hello":
         // Show an update banner when the server version differs from the client build
@@ -189,14 +273,27 @@ class ChatClient {
         break;
       case "snapshot":
         // Completed messages are reflected in the snapshot, so clear the stream buffers
-        this.update({ snapshot: event.snapshot, streamText: "", streamThinking: "" });
+        this.update({
+          snapshot: event.snapshot,
+          streamText: "",
+          streamThinking: "",
+          streamThinkingComplete: false,
+        });
         break;
-      case "delta":
-        if (event.kind === "text") {
-          this.update({ streamText: this.state.streamText + event.delta });
-        } else {
-          this.update({ streamThinking: this.state.streamThinking + event.delta });
-        }
+      case "delta": {
+        // Coalesce per-token deltas into one React update per flush window
+        // (see DELTA_FLUSH_MS) — rendering once per token is a sustained CPU
+        // load on phones (each render re-parses the accumulated markdown).
+        const buf = (this.streamBuf ??= {});
+        if (event.kind === "text") buf.text = (buf.text ?? "") + event.delta;
+        else buf.thinking = (buf.thinking ?? "") + event.delta;
+        this.scheduleFlush();
+        break;
+      }
+      case "thinking_end":
+        // The agent gives us an explicit end marker, so there is no reason to
+        // keep the expanded streaming card around while the response continues.
+        this.update({ streamThinkingComplete: true });
         break;
       case "tool_start":
         this.update({
@@ -217,11 +314,13 @@ class ChatClient {
         });
         break;
       case "agent_end":
+        notifyTaskComplete();
         // Drop isStreaming before the snapshot arrives so no loading dots linger
         this.update({
           activeTools: [],
           streamText: "",
           streamThinking: "",
+          streamThinkingComplete: false,
           snapshot: this.state.snapshot
             ? { ...this.state.snapshot, isStreaming: false }
             : null,
@@ -229,6 +328,18 @@ class ChatClient {
         break;
       case "forked":
         if (event.selectedText) this.update({ injectText: event.selectedText });
+        break;
+      case "command_catalog":
+        this.update({ commands: event.commands });
+        break;
+      case "command_result":
+        this.update({ lastNotice: event.message });
+        break;
+      case "client_action":
+        this.update({ commandIntent: event.action });
+        break;
+      case "extension_ui_request":
+        this.update({ extensionUIRequest: event.request });
         break;
       case "error":
         console.error("[pi-web-chat]", event.message);
@@ -243,6 +354,27 @@ class ChatClient {
 
   clearError() {
     if (this.state.lastError !== null) this.update({ lastError: null });
+  }
+
+  clearNotice() {
+    if (this.state.lastNotice !== null) this.update({ lastNotice: null });
+  }
+
+  consumeCommandIntent() {
+    if (this.state.commandIntent !== null) this.update({ commandIntent: null });
+  }
+
+  reportNotice(message: string) {
+    this.update({ lastNotice: message });
+  }
+
+  reportError(message: string) {
+    this.update({ lastError: message });
+  }
+
+  respondExtensionUI(response: UIExtensionUIResponse) {
+    this.send({ type: "extension_ui_response", response });
+    if (this.state.extensionUIRequest?.id === response.id) this.update({ extensionUIRequest: null });
   }
 
   /** Delay slightly so it doesn't collide with drawer close etc., then focus the composer */
