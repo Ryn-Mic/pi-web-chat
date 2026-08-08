@@ -2,6 +2,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   UICustomModelsResponse,
   UICustomProvider,
+  UIModelDiscoveryRequest,
+  UIModelDiscoveryResponse,
   UIExtensionsResponse,
   UIForkPoint,
   UIModel,
@@ -90,6 +92,20 @@ export function useCustomModels(enabled = true) {
     staleTime: 0,
     refetchOnMount: "always",
   });
+}
+
+export async function discoverCustomModels(
+  provider: UIModelDiscoveryRequest,
+): Promise<UIModelDiscoveryResponse> {
+  const res = await fetch("/api/custom-models/discover", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authHeaders() },
+    body: JSON.stringify(provider),
+  });
+  if (res.status === 401) setAuthStatus("unauthenticated");
+  const json = (await res.json()) as UIModelDiscoveryResponse & { error?: string };
+  if (!res.ok) throw new Error(json.error ?? `model discovery failed: ${res.status}`);
+  return json;
 }
 
 export async function saveCustomModels(

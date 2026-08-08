@@ -21,6 +21,7 @@ import type {
   ServerEvent,
   UICustomModelsResponse,
   UICustomProvider,
+  UIModelDiscoveryRequest,
   UIExtensionInfo,
   UICommandInfo,
   UIExtensionUIRequest,
@@ -63,6 +64,29 @@ function readPackageVersion(): string {
   return "unknown";
 }
 const PACKAGE_VERSION = readPackageVersion();
+
+function readReleaseNotes(version: string): string[] {
+  const candidates = [
+    join(HERE, "..", "release-notes.json"),
+    join(HERE, "release-notes.json"),
+    join(HERE, "..", "..", "release-notes.json"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (!existsSync(candidate)) continue;
+      const parsed = JSON.parse(readFileSync(candidate, "utf8")) as Record<string, unknown>;
+      const notes = parsed[version];
+      if (!Array.isArray(notes)) continue;
+      return notes.filter(
+        (note): note is string => typeof note === "string" && note.trim().length > 0,
+      );
+    } catch {
+      /* A missing or malformed notes file must not prevent the server from starting. */
+    }
+  }
+  return [];
+}
+const RELEASE_NOTES = readReleaseNotes(PACKAGE_VERSION);
 const DIST_DIR = (() => {
   const candidates = [
     join(HERE, "public"), // dist/index.js → dist/public
@@ -893,6 +917,82 @@ function readBody(req: IncomingMessage, limit = 1_000_000): Promise<string> {
   });
 }
 
+function resolveDiscoveryApiKey(value?: string): string | undefined {
+  const key = value?.trim();
+  if (!key) return undefined;
+  const envMatch = /^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(key);
+  if (!envMatch) return key;
+  const resolved = process.env[envMatch[1]]?.trim();
+  if (!resolved) throw new Error(`environment variable ${envMatch[1]} is not set`);
+  return resolved;
+}
+
+function appendModelsPath(baseUrl: string): URL {
+  const url = new URL(baseUrl);
+  const pathname = url.pathname.replace(/\/+$/, "");
+  if (!pathname.endsWith("/models")) url.pathname = `${pathname}/models`;
+  return url;
+}
+
+function extractDiscoveredModelIds(payload: unknown): string[] {
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === "object";
+  const root = isRecord(payload) ? payload : undefined;
+  const rawItems = Array.isArray(payload)
+    ? payload
+    : Array.isArray(root?.data)
+      ? root.data
+      : Array.isArray(root?.models)
+        ? root.models
+        : Array.isArray(root?.items)
+          ? root.items
+          : [];
+  const ids = rawItems.flatMap((item) => {
+    if (typeof item === "string") return [item];
+    if (!isRecord(item)) return [];
+    for (const key of ["id", "name", "model"]) {
+      if (typeof item[key] === "string" && item[key].trim()) return [item[key].trim()];
+    }
+    return [];
+  });
+  return [...new Set(ids.map((id) => id.replace(/^models\//, "")).filter(Boolean))];
+}
+
+async function discoverProviderModels(provider: UIModelDiscoveryRequest): Promise<string[]> {
+  if (!provider.baseUrl?.trim()) throw new Error("base URL is required");
+  const endpoint = appendModelsPath(provider.baseUrl.trim());
+  const apiKey = resolveDiscoveryApiKey(provider.apiKey);
+  const headers: Record<string, string> = { accept: "application/json" };
+
+  if (provider.api === "google-generative-ai") {
+    if (apiKey && !endpoint.searchParams.has("key")) endpoint.searchParams.set("key", apiKey);
+  } else if (provider.api === "anthropic-messages") {
+    if (apiKey) headers["x-api-key"] = apiKey;
+    headers["anthropic-version"] = "2023-06-01";
+  } else if (apiKey) {
+    headers.authorization = `Bearer ${apiKey}`;
+  }
+
+  const response = await fetch(endpoint, {
+    headers,
+    signal: AbortSignal.timeout(15_000),
+  });
+  const text = await response.text();
+  let payload: unknown = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    const detail = typeof text === "string" ? text.replace(/\s+/g, " ").trim().slice(0, 180) : "";
+    throw new Error(`provider returned ${response.status}${detail ? `: ${detail}` : ""}`);
+  }
+  const models = extractDiscoveredModelIds(payload);
+  if (models.length === 0) throw new Error("provider returned no model ids");
+  return models;
+}
+
 /**
  * Reflect saved providers into running runtimes.
  * - The list modelRuntime is recreated (re-reads models.json)
@@ -1157,6 +1257,45 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
+    // Discover remote models using the unsaved provider connection details.
+    if (url.pathname === "/api/custom-models/discover") {
+      if (req.method !== "POST") {
+        res.writeHead(405, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "method not allowed" }));
+        return;
+      }
+      const body = await readBody(req, 50_000);
+      try {
+        const parsed = JSON.parse(body) as Partial<UIModelDiscoveryRequest>;
+        const supportedApis = [
+          "openai-completions",
+          "openai-responses",
+          "anthropic-messages",
+          "google-generative-ai",
+        ] as const;
+        if (
+          typeof parsed.baseUrl !== "string" ||
+          !parsed.baseUrl.trim() ||
+          !supportedApis.includes(parsed.api as (typeof supportedApis)[number])
+        ) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "base URL and a supported API type are required" }));
+          return;
+        }
+        const models = await discoverProviderModels({
+          baseUrl: parsed.baseUrl,
+          api: parsed.api as UIModelDiscoveryRequest["api"],
+          apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey : undefined,
+        });
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ models }));
+      } catch (err) {
+        res.writeHead(502, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+      }
+      return;
+    }
+
     // Custom model management (~/.pi/agent/models.json)
     if (url.pathname === "/api/custom-models") {
       if (req.method === "GET") {
@@ -1346,7 +1485,7 @@ wss.on("connection", (ws, req) => {
       if (entry.published || requested) {
         publishEntry(entry, ws);
       }
-      sendTo(ws, { type: "hello", version: PACKAGE_VERSION });
+      sendTo(ws, { type: "hello", version: PACKAGE_VERSION, updateNotes: RELEASE_NOTES });
       sendTo(ws, { type: "snapshot", snapshot: buildSnapshot(entry) });
       sendCommandCatalog(entry, ws);
       ready = true;

@@ -5,6 +5,10 @@ import { useModels } from "../lib/api";
 import { chatClient } from "../lib/chat";
 import { useT } from "../lib/i18n";
 
+function modelLabel(model: UIModel) {
+  return model.name?.trim() || model.id;
+}
+
 function matchesQuery(model: UIModel, q: string) {
   if (!q) return true;
   const hay = `${model.name ?? ""} ${model.id} ${model.provider}`.toLowerCase();
@@ -20,7 +24,15 @@ export function ModelMenu({ current, openToken = 0 }: { current: UIModel | null;
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return (models ?? []).filter((m) => matchesQuery(m, q));
+    return (models ?? [])
+      .filter((m) => matchesQuery(m, q))
+      .sort((a, b) => {
+        const byName = modelLabel(a).localeCompare(modelLabel(b), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
+        return byName || a.provider.localeCompare(b.provider, undefined, { sensitivity: "base" });
+      });
   }, [models, query]);
 
   // The menu's focus manager grabs focus first; then re-focus the search input
@@ -47,7 +59,7 @@ export function ModelMenu({ current, openToken = 0 }: { current: UIModel | null;
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner sideOffset={6} align="end">
-          <Menu.Popup className="flex w-72 flex-col overflow-hidden rounded-xl border border-line bg-card shadow-xl outline-none">
+          <Menu.Popup className="flex w-[min(22rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border border-line bg-card shadow-xl outline-none">
             <div className="border-b border-line p-2">
               <div className="flex items-center gap-2 rounded-lg bg-hover px-2.5">
                 <svg
@@ -106,12 +118,12 @@ export function ModelMenu({ current, openToken = 0 }: { current: UIModel | null;
                     onClick={() =>
                       chatClient.send({ type: "set_model", provider: m.provider, id: m.id })
                     }
-                    className={`flex cursor-pointer flex-col px-3 py-2 text-sm outline-none data-[highlighted]:bg-hover ${
+                    className={`flex min-w-0 cursor-pointer items-center gap-3 px-3 py-2 text-sm outline-none data-[highlighted]:bg-hover ${
                       active ? "text-accent" : "text-ink"
                     }`}
                   >
-                    <span className="truncate">{m.name ?? m.id}</span>
-                    <span className="text-xs text-faint">{m.provider}</span>
+                    <span className="min-w-0 flex-1 truncate">{modelLabel(m)}</span>
+                    <span className="max-w-[42%] shrink-0 truncate text-right text-xs text-faint">{m.provider}</span>
                   </Menu.Item>
                 );
               })}
