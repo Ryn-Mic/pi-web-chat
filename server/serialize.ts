@@ -138,7 +138,7 @@ export function serializeMessages(messages: unknown[]): UIMessage[] {
   return out;
 }
 
-/** Find the live task from the most recent todo tool result in a session. */
+/** Find the live or final completed task from the most recent todo snapshot. */
 export function getActiveTodo(messages: UIMessage[]): UIActiveTodo | undefined {
   for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
     const message = messages[messageIndex];
@@ -149,16 +149,30 @@ export function getActiveTodo(messages: UIMessage[]): UIActiveTodo | undefined {
       if (block?.type !== "toolCall" || block.name !== "todo") continue;
       const tasks = block.result?.tasks;
       if (!tasks?.length) continue;
+
       const current = tasks.findIndex((task) => task.status === "in_progress");
-      // A later todo snapshot with no active task means the list has completed;
-      // do not fall back to an obsolete in-progress snapshot.
-      if (current < 0) return undefined;
-      const task = tasks[current];
-      if (!task) continue;
+      if (current >= 0) {
+        const task = tasks[current];
+        if (!task) continue;
+        return {
+          subject: task.subject,
+          activeForm: task.activeForm,
+          status: "in_progress",
+          current: current + 1,
+          total: tasks.length,
+        };
+      }
+
+      // Preserve the completed state for the final snapshot so the UI can
+      // show a stable green indicator instead of hiding the todo immediately.
+      if (!tasks.every((task) => task.status === "completed")) return undefined;
+      const lastTask = tasks[tasks.length - 1];
+      if (!lastTask) continue;
       return {
-        subject: task.subject,
-        activeForm: task.activeForm,
-        current: current + 1,
+        subject: lastTask.subject,
+        activeForm: lastTask.activeForm,
+        status: "completed",
+        current: tasks.length,
         total: tasks.length,
       };
     }

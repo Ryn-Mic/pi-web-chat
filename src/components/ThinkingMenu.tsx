@@ -2,6 +2,41 @@ import { Menu } from "@base-ui-components/react/menu";
 import type { UIThinkingLevel } from "../../shared/protocol";
 import { chatClient } from "../lib/chat";
 
+const LEVEL_BAR_COUNT: Record<UIThinkingLevel, number> = {
+  off: 0,
+  minimal: 1,
+  low: 2,
+  medium: 3,
+  high: 4,
+  xhigh: 5,
+  max: 6,
+};
+
+function ThinkingLevelIcon({ level }: { level: UIThinkingLevel }) {
+  const barCount = LEVEL_BAR_COUNT[level];
+  return (
+    <svg viewBox="0 0 24 24" className="size-4 shrink-0 fill-current" aria-hidden>
+      {Array.from({ length: 6 }, (_, index) => {
+        const height = 4 + index * 2;
+        return (
+          <rect
+            key={index}
+            x={2 + index * 3.4}
+            y={20 - height}
+            width="2.4"
+            height={height}
+            rx="1"
+            className={index < barCount ? "opacity-80" : "opacity-15"}
+          />
+        );
+      })}
+      {level === "off" && (
+        <path d="m4 4 16 16" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" />
+      )}
+    </svg>
+  );
+}
+
 export function ThinkingMenu({
   current,
   levels,
@@ -15,10 +50,9 @@ export function ThinkingMenu({
   return (
     <Menu.Root>
       <Menu.Trigger
-        className="flex h-8 shrink-0 items-center rounded-full border border-line px-2.5 text-xs text-muted transition-colors hover:bg-hover hover:text-ink"
+        className="max-w-[40vw] truncate rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-hover hover:text-ink sm:max-w-xs"
         title="Thinking level"
       >
-        <span className="mr-1 text-[11px]">🧠</span>
         <span className="truncate">{current}</span>
       </Menu.Trigger>
       <Menu.Portal>
@@ -28,11 +62,12 @@ export function ThinkingMenu({
               <Menu.Item
                 key={level}
                 onClick={() => chatClient.send({ type: "set_thinking_level", level })}
-                className={`cursor-pointer px-3 py-2 text-sm outline-none data-[highlighted]:bg-hover ${
+                className={`flex cursor-pointer items-center gap-2 px-3 py-2 text-sm outline-none data-[highlighted]:bg-hover ${
                   level === current ? "font-medium text-accent" : "text-ink"
                 }`}
               >
-                {level}
+                <ThinkingLevelIcon level={level} />
+                <span>{level}</span>
               </Menu.Item>
             ))}
           </Menu.Popup>

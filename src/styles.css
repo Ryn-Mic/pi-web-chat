@@ -189,6 +189,29 @@ html.ua-ios.ua-standalone body {
   scrollbar-color: var(--c-faint) transparent;
 }
 
+/* Slowly reveal long branch/todo labels without moving their leading icons. */
+@keyframes badge-marquee {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+  45%,
+  68% {
+    transform: translateX(calc(-1 * var(--badge-marquee-distance)));
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+.badge-marquee {
+  animation: badge-marquee 14s ease-in-out 1.2s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .badge-marquee {
+    animation: none;
+  }
+}
+
 /* Fade the right edge of truncated inline text (tool summaries etc.) */
 .fade-x {
   -webkit-mask-image: linear-gradient(to right, black calc(100% - 2.5rem), transparent);

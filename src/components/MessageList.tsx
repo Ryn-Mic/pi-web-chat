@@ -1,6 +1,6 @@
 import { memo, type CSSProperties, useEffect, useRef, useState } from "react";
 import type { UIContentBlock, UIMessage } from "../../shared/protocol";
-import type { ActiveTool } from "../lib/chat";
+import { chatClient, type ActiveTool } from "../lib/chat";
 import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
 import { buildEditDiffFromArgs, isUnifiedDiff } from "../lib/diff";
 import { useT } from "../lib/i18n";
@@ -352,30 +352,61 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+/** 重新填充: 把这条消息的文本填回输入框 (corner-up-left icon) */
+function ReuseButton({ onClick }: { onClick: () => void }) {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex size-7 items-center justify-center rounded-md border border-line bg-card text-faint shadow-sm transition-colors hover:bg-hover hover:text-ink"
+      aria-label={t("reuseMessage")}
+      title={t("reuseMessage")}
+    >
+      <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2" aria-hidden>
+        <path d="M9 14 4 9l5-5" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </button>
+  );
+}
+
+/** 消息操作按钮行: 从左侧开始排 (copy + optional reuse) */
+function MessageActions({ text, onReuse }: { text: string; onReuse?: () => void }) {
+  return (
+    <div className="mt-1 flex justify-start gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover/message:opacity-100 sm:focus-within:opacity-100">
+      <CopyButton text={text} />
+      {onReuse && <ReuseButton onClick={onReuse} />}
+    </div>
+  );
+}
+
 const Message = memo(function Message({
   message,
   index,
-  isLastAssistant,
+  isRoundSummary,
 }: {
   message: UIMessage;
   index?: number;
-  isLastAssistant: boolean;
+  /** 本轮任务的总结消息 (最后一条 assistant 消息) — 展示复制按钮 */
+  isRoundSummary: boolean;
 }) {
   const text = copyableText(message.content);
   if (message.role === "user") {
     return (
       <div
-        className="flex min-w-0 justify-end scroll-mt-4"
+        className="group/message flex min-w-0 scroll-mt-4 flex-col items-end"
         data-msg-index={index}
       >
-        <div className="user-bubble group/message relative min-w-0 max-w-[85%] break-words rounded-2xl bg-bubble px-4 py-2.5 whitespace-pre-wrap text-ink sm:max-w-[75%]">
-          <div className="chat-message-text pr-5"><Blocks blocks={message.content} markdown={false} /></div>
-          {text && (
-            <div className="absolute top-1 right-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover/message:opacity-100 sm:focus-within:opacity-100">
-              <CopyButton text={text} />
-            </div>
-          )}
+        <div className="user-bubble relative min-w-0 max-w-[85%] break-words rounded-2xl bg-bubble px-4 py-2.5 whitespace-pre-wrap text-ink sm:max-w-[75%]">
+          <div className="chat-message-text"><Blocks blocks={message.content} markdown={false} /></div>
         </div>
+        {text && (
+          <MessageActions
+            text={text}
+            onReuse={() => chatClient.refillComposer(text)}
+          />
+        )}
       </div>
     );
   }
@@ -387,10 +418,8 @@ const Message = memo(function Message({
           {message.errorMessage}
         </div>
       )}
-      {isLastAssistant && text && (
-        <div className="mt-1 flex justify-end opacity-100 transition-opacity sm:opacity-0 sm:group-hover/message:opacity-100 sm:focus-within:opacity-100">
-          <CopyButton text={text} />
-        </div>
+      {isRoundSummary && text && (
+        <MessageActions text={text} />
       )}
     </div>
   );
@@ -415,10 +444,13 @@ export function MessageList({
 }) {
   const t = useT();
   const chatFontSize = useChatFontSize();
-  const lastAssistantIndex = messages.reduce(
-    (lastIndex, message, index) => (message.role === "assistant" ? index : lastIndex),
-    -1,
-  );
+  // 一轮任务以 user 消息为界; 每个 user 消息后的最后一条 assistant 消息就是该轮总结
+  const isRoundSummary = (i: number): boolean => {
+    const m = messages[i];
+    if (!m || m.role !== "assistant") return false;
+    const next = messages[i + 1];
+    return next === undefined || next.role === "user";
+  };
   const stickToBottom = useRef(true);
   const chatStyle = {
     "--chat-font-size": `${chatFontSizePixels(chatFontSize)}px`,
@@ -472,7 +504,7 @@ export function MessageList({
               key={i}
               message={m}
               index={m.role === "user" ? i : undefined}
-              isLastAssistant={i === lastAssistantIndex}
+              isRoundSummary={isRoundSummary(i)}
             />
           ))}
           {streamThinking && (
