@@ -1,6 +1,6 @@
 {
   "name": "pi-web-chat",
-  "version": "0.1.46",
+  "version": "0.1.62",
   "description": "Web UI for the pi coding agent (OpenWebUI-style, mobile-friendly)",
   "type": "module",
   "license": "MIT",
@@ -27,6 +27,7 @@
     "bin",
     "dist",
     "extensions",
+    "release-notes.json",
     "LICENSE",
     "README.md"
   ],
@@ -36,6 +37,7 @@
     "dev:web": "wait-on -t 30s tcp:3141 && vite",
     "build": "node scripts/build.mjs",
     "build:web": "vite build",
+    "test": "node --import tsx --test tests/*.test.ts",
     "start": "node bin/pi-web-chat.mjs",
     "typecheck": "tsc --noEmit",
     "prepack": "npm run build",
