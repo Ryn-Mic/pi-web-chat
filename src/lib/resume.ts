@@ -24,10 +24,11 @@ function readLast(): string | null {
 let enabled = typeof window !== "undefined" ? readEnabled() : true;
 let lastId = typeof window !== "undefined" ? readLast() : null;
 /**
- * When the user explicitly opened a fresh draft (new-session button etc.),
- * suppress the next resume redirect once. (Module state — lost on reload.)
+ * When the user explicitly opens a fresh draft, keep `/` as a draft until it
+ * is published. Module state is intentionally lost on reload, because an
+ * unpublished draft cannot be restored.
  */
-let suppressResume = false;
+let freshDraftRequested = false;
 
 function emit() {
   for (const l of listeners) l();
@@ -41,6 +42,7 @@ function subscribe(listener: () => void) {
 /** Record the id whenever a session is published in the URL (session_bound) */
 export function rememberSessionId(id: string) {
   lastId = id;
+  freshDraftRequested = false;
   try {
     localStorage.setItem(LAST_SESSION_KEY, id);
   } catch {
@@ -52,16 +54,14 @@ export function getLastSessionId(): string | null {
   return lastId;
 }
 
-/** Explicit "new session": suppress the next resume redirect once */
-export function suppressResumeOnce() {
-  suppressResume = true;
+/** Explicit "new session": keep the root route on a fresh draft. */
+export function markFreshDraftRequested() {
+  freshDraftRequested = true;
 }
 
-/** Whether ChatPage should skip the resume branch (consuming) */
-export function consumeSuppressResume(): boolean {
-  if (!suppressResume) return false;
-  suppressResume = false;
-  return true;
+/** Whether ChatPage should skip the resume branch for the active fresh draft. */
+export function isFreshDraftRequested(): boolean {
+  return freshDraftRequested;
 }
 
 export function isResumeEnabled(): boolean {

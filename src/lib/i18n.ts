@@ -6,11 +6,11 @@ import { zh } from "../i18n/zh";
 
 export type Locale = "ko" | "en" | "ja" | "zh";
 
-export const LOCALES: { value: Locale; label: string; nativeLabel: string }[] = [
-  { value: "ko", label: "Korean", nativeLabel: "한국어" },
-  { value: "en", label: "English", nativeLabel: "English" },
-  { value: "ja", label: "Japanese", nativeLabel: "日本語" },
-  { value: "zh", label: "Chinese", nativeLabel: "中文" },
+export const LOCALES: { value: Locale; label: string; nativeLabel: string; flag: string }[] = [
+  { value: "zh", label: "Chinese", nativeLabel: "中文", flag: "🇨🇳" },
+  { value: "ko", label: "Korean", nativeLabel: "한국어", flag: "🇰🇷" },
+  { value: "en", label: "English", nativeLabel: "English", flag: "🇺🇸" },
+  { value: "ja", label: "Japanese", nativeLabel: "日本語", flag: "🇯🇵" },
 ];
 
 const STORAGE_KEY = "pi-web-chat-locale";

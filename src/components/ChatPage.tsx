@@ -3,14 +3,28 @@ import { useEffect, useRef, useState } from "react";
 import { chatClient, useChat } from "../lib/chat";
 import { requestOpenSessionsDrawer } from "../lib/drawer";
 import { useT } from "../lib/i18n";
-import { consumeSuppressResume, getLastSessionId, suppressResumeOnce, useResumeEnabled } from "../lib/resume";
+import {
+  getLastSessionId,
+  isFreshDraftRequested,
+  markFreshDraftRequested,
+  useResumeEnabled,
+} from "../lib/resume";
 import { useSidebarPinned } from "../lib/sidebar";
 import { useLeftEdgeSwipe } from "../lib/useEdgeSwipe";
 import { Composer } from "./Composer";
 import { ExtensionUIHost } from "./ExtensionUIHost";
+import { ProjectBadge } from "./ProjectBadge";
 import { MessageList } from "./MessageList";
+import { SessionTabs } from "./SessionTabs";
 import { SessionsDrawer, SessionsSidebar } from "./SessionsDrawer";
-import { SettingsMenu } from "./SettingsMenu";
+
+function NewSessionIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-5 fill-none stroke-current stroke-[1.8]" aria-hidden>
+      <path d="M12 5v14M5 12h14" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 function connectionDotClass(connection: "connecting" | "connected" | "disconnected"): string {
   switch (connection) {
@@ -51,9 +65,12 @@ export function ChatPage() {
     lastError,
     lastNotice,
     commandIntent,
+    updateVersion,
+    updateNotes,
   } =
     useChat();
   const isStreaming = snapshot?.isStreaming ?? false;
+  const activeTabKey = chatClient.activeTabKey ?? "unbound";
   const sidebarPinned = useSidebarPinned();
   const showConnectingOverlay = connection !== "connected" && !snapshot;
   const params = useParams({ strict: false }) as { sessionId?: string };
@@ -66,14 +83,14 @@ export function ChatPage() {
   // URL → connection ("/" is a draft without an id yet; the server sends
   // session_bound on the first input)
   // With "resume last session" on, an entry via / (draft) moves to the
-  // previous session. An explicit "new session" button call suppresses the
-  // redirect once so a real fresh draft is created.
+  // previous session. An explicit "new session" keeps resume suppressed until
+  // the fresh draft is published.
   useEffect(() => {
     if (routeSessionId) {
       chatClient.connect(routeSessionId);
       return;
     }
-    if (resumeEnabled && !consumeSuppressResume()) {
+    if (resumeEnabled && !isFreshDraftRequested()) {
       const last = getLastSessionId();
       if (last) {
         void navigate({ to: "/s/$sessionId", params: { sessionId: last }, replace: true });
@@ -112,34 +129,59 @@ export function ChatPage() {
       requestOpenSessionsDrawer();
       chatClient.consumeCommandIntent();
     } else if (commandIntent.action === "new_session") {
-      suppressResumeOnce();
-      void navigate({ to: "/" });
-      chatClient.connect(null, { force: true });
-      chatClient.requestComposerFocus();
       chatClient.consumeCommandIntent();
+      markFreshDraftRequested();
+      chatClient.connect(null, { force: true });
+      void navigate({ to: "/" });
+      chatClient.requestComposerFocus();
     }
   }, [commandIntent, navigate]);
 
   // #root is the flex/dvh shell; fill it (no position:fixed — iOS 26 safe).
   return (
     <div className="flex h-full min-h-0 w-full flex-1 bg-sidebar">
-      {sidebarPinned && <SessionsSidebar currentSessionFile={snapshot?.sessionFile} />}
+      {sidebarPinned && (
+        <SessionsSidebar
+          currentSessionFile={snapshot?.sessionFile}
+          settingsOpenToken={settingsOpenToken}
+        />
+      )}
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas md:my-2 md:mr-2 md:rounded-2xl md:border md:border-line md:shadow-sm">
         <header className="flex shrink-0 items-center gap-1 px-2.5 py-2 pt-[calc(max(0.5rem,var(--safe-top))+0.25rem)]">
-          <SessionsDrawer currentSessionFile={snapshot?.sessionFile} />
+          <SessionsDrawer
+            currentSessionFile={snapshot?.sessionFile}
+            settingsOpenToken={settingsOpenToken}
+          />
           <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
             {!sidebarPinned && (
-              <span className="shrink-0 text-sm font-medium text-ink">pi</span>
+              <span className="shrink-0 text-sm font-medium text-ink" aria-label="pi">
+                &#x03c0;
+              </span>
             )}
             <span
               className={`size-1.5 shrink-0 rounded-full ${connectionDotClass(connection)}`}
               title={connectionLabel(connection, t)}
               aria-label={connectionLabel(connection, t)}
             />
+            <ProjectBadge cwd={snapshot?.cwd} />
           </div>
-          <SettingsMenu openToken={settingsOpenToken} />
+          <button
+            type="button"
+            onClick={() => {
+              markFreshDraftRequested();
+              chatClient.connect(null, { force: true });
+              void navigate({ to: "/" });
+              chatClient.requestComposerFocus();
+            }}
+            aria-label={t("newSession")}
+            title={t("newSession")}
+            className="flex size-9 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink"
+          >
+            <NewSessionIcon />
+          </button>
         </header>
+        <SessionTabs />
 
         {showConnectingOverlay ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
@@ -163,8 +205,25 @@ export function ChatPage() {
               containerRef={messageListRef}
             />
             {updateAvailable && (
-              <div className="flex shrink-0 items-center justify-center gap-3 border-t border-line bg-card px-4 py-2">
-                <span className="text-xs text-muted">{t("updateAvailable")}</span>
+              <div
+                role="status"
+                className="flex shrink-0 items-start gap-3 border-t border-line bg-card px-4 py-2.5"
+              >
+                <div className="min-w-0 flex-1 text-xs text-muted">
+                  <p className="font-medium text-ink">
+                    {t("updateAvailable")}
+                    {updateVersion ? ` · v${updateVersion}` : ""}
+                  </p>
+                  {updateNotes.length > 0 && (
+                    <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                      {updateNotes.map((note, index) => (
+                        <li key={`${updateVersion ?? "update"}-${index}`} className="break-words">
+                          {note}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
                 <button
                   type="button"
                   onClick={() => {
@@ -180,7 +239,7 @@ export function ChatPage() {
                       reload();
                     }
                   }}
-                  className="rounded-lg bg-accent px-3 py-1 text-xs font-medium text-accent-ink transition-opacity hover:opacity-90"
+                  className="shrink-0 rounded-lg bg-accent px-3 py-1 text-xs font-medium text-accent-ink transition-opacity hover:opacity-90"
                 >
                   {t("reload")}
                 </button>
@@ -210,7 +269,12 @@ export function ChatPage() {
                 </button>
               </div>
             )}
-            <Composer isStreaming={isStreaming} containerRef={messageListRef} />
+            <Composer
+              key={activeTabKey}
+              tabKey={activeTabKey}
+              isStreaming={isStreaming}
+              containerRef={messageListRef}
+            />
           </>
         )}
         <ExtensionUIHost />

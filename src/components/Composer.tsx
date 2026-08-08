@@ -2,12 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { UIImageAttachment } from "../../shared/protocol";
 import { chatClient, useChat } from "../lib/chat";
 import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
+import { getComposerDraft, setComposerDraft } from "../lib/composer-drafts";
 import { useT } from "../lib/i18n";
 import { CommandPalette, commandMatches } from "./CommandPalette";
 import { ForkDialog } from "./ForkDialog";
 import { MessageAnchors } from "./MessageAnchors";
 import { ModelMenu } from "./ModelMenu";
-import { ActiveTodoBadge, BranchBadge, ProjectBadge, TodoProgress } from "./ProjectBadge";
+import { ActiveTodoBadge, BranchBadge, TodoProgress } from "./ProjectBadge";
 import { ThinkingMenu } from "./ThinkingMenu";
 
 interface PendingImage extends UIImageAttachment {
@@ -60,13 +61,16 @@ async function fileToImage(file: File): Promise<PendingImage | null> {
 export function Composer({
   isStreaming,
   containerRef,
+  tabKey,
 }: {
   isStreaming: boolean;
   containerRef: React.RefObject<HTMLDivElement | null>;
+  tabKey: string;
 }) {
   const t = useT();
-  const [text, setText] = useState("");
-  const [images, setImages] = useState<PendingImage[]>([]);
+  const initialDraft = useState(() => getComposerDraft(tabKey))[0];
+  const [text, setText] = useState(initialDraft.text);
+  const [images, setImages] = useState<PendingImage[]>(initialDraft.images);
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
   const [commandPaletteDismissed, setCommandPaletteDismissed] = useState(false);
   const [modelOpenToken, setModelOpenToken] = useState(0);
@@ -77,7 +81,7 @@ export function Composer({
   const chatFontSize = useChatFontSize();
   const context = snapshot?.context;
   const contextPercent = context?.percent ?? null;
-  const hasProjectStatus = Boolean(snapshot?.cwd || snapshot?.gitBranch || snapshot?.activeTodo);
+  const hasProjectStatus = Boolean(snapshot?.gitBranch || snapshot?.activeTodo);
   const hasContext = contextPercent !== null;
   const contextTitle =
     context?.tokens != null && context.contextWindow != null
@@ -85,6 +89,13 @@ export function Composer({
       : hasContext
         ? `${Math.round(contextPercent)}%`
         : undefined;
+
+  // Keep unsent text and attachments isolated to the active session tab. The
+  // component is keyed by tab in ChatPage, so switching tabs restores that
+  // tab's draft instead of sending another session's input.
+  useEffect(() => {
+    setComposerDraft(tabKey, { text, images });
+  }, [tabKey, text, images]);
 
   // Inject the forked message text into the composer
   useEffect(() => {
@@ -109,10 +120,25 @@ export function Composer({
       setForkOpen(true);
       chatClient.consumeCommandIntent();
     } else if (commandIntent.action === "copy_text") {
+      const originatingTabKey = chatClient.activeTabKey;
       void navigator.clipboard
         .writeText(commandIntent.text)
-        .then(() => chatClient.reportNotice("Copied the last assistant message."))
-        .catch(() => chatClient.reportError("The browser could not copy this message."));
+        .then(() => {
+          if (originatingTabKey) {
+            chatClient.reportNoticeFor(
+              originatingTabKey,
+              "Copied the last assistant message.",
+            );
+          }
+        })
+        .catch(() => {
+          if (originatingTabKey) {
+            chatClient.reportErrorFor(
+              originatingTabKey,
+              "The browser could not copy this message.",
+            );
+          }
+        });
       chatClient.consumeCommandIntent();
     }
   }, [commandIntent]);
@@ -155,17 +181,23 @@ export function Composer({
       {/* Keep this row mounted at first paint so late session metadata cannot
           change the composer's height or its keyboard position. */}
       <div
-        className={`composer-status mx-auto grid h-7 max-w-3xl grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1fr)] items-center gap-2 overflow-hidden px-2 ${
+        className={`composer-status mx-auto flex h-7 max-w-3xl items-center gap-2 overflow-hidden px-2 ${
           hasProjectStatus ? "" : "invisible"
         }`}
         aria-hidden={!hasProjectStatus}
       >
-        <div className="min-w-0"><ProjectBadge cwd={snapshot?.cwd} /></div>
-        <ActiveTodoBadge todo={snapshot?.activeTodo} />
-        <div className="flex min-w-0 items-center justify-end gap-2">
-          <TodoProgress todo={snapshot?.activeTodo} />
-          <BranchBadge gitBranch={snapshot?.gitBranch} />
-        </div>
+        <BranchBadge gitBranch={snapshot?.gitBranch} />
+        {/* Todo follows the branch; without a branch it starts at the row's left edge. */}
+        {snapshot?.activeTodo && (
+          <div
+            className={`flex min-w-0 flex-1 items-center gap-2 border-l border-line/60 px-2 ${
+              snapshot.gitBranch ? "" : "border-l-0 pl-0"
+            }`}
+          >
+            <ActiveTodoBadge todo={snapshot.activeTodo} isStreaming={isStreaming} />
+            <TodoProgress todo={snapshot.activeTodo} />
+          </div>
+        )}
       </div>
       <div className="relative mx-auto max-w-3xl">
         {commandPaletteOpen && (

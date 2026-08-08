@@ -15,6 +15,10 @@ export type Messages = {
   fontSizeSmall: string;
   fontSizeDefault: string;
   fontSizeLarge: string;
+  fontSizeTinyShort: string;
+  fontSizeSmallShort: string;
+  fontSizeDefaultShort: string;
+  fontSizeLargeShort: string;
   language: string;
   browserNotifications: string;
 
@@ -35,6 +39,7 @@ export type Messages = {
   pinSidebar: string;
   unpinSidebar: string;
   closeSidebar: string;
+  closeSessionTab: string;
 
   // composer
   sendMessage: string;
@@ -82,6 +87,12 @@ export type Messages = {
   manageModels: string;
   manageModelsEllipsis: string;
   customModelsDescription: string;
+  models: string;
+  chooseModel: string;
+  discoverModels: string;
+  discoveringModels: string;
+  noModelsFound: string;
+  newModel: string;
   addProvider: string;
   addModel: string;
   removeProvider: string;
@@ -90,12 +101,14 @@ export type Messages = {
   apiType: string;
   baseUrl: string;
   apiKey: string;
+  showApiKey: string;
+  hideApiKey: string;
   apiKeyHint: string;
   modelId: string;
   modelName: string;
   contextWindow: string;
   maxTokens: string;
-  maxThinkingLevel: string;
+  thinkingLevels: string;
   reasoning: string;
   imageInput: string;
   noCustomProviders: string;
@@ -117,6 +130,7 @@ export type Messages = {
   askAnswerInTerminal: string;
   copyMessage: string;
   copied: string;
+  reuseMessage: string;
 
   // auth
   login: string;
@@ -145,6 +159,10 @@ export const en: Messages = {
   fontSizeSmall: "Small (14px)",
   fontSizeDefault: "Default (15px)",
   fontSizeLarge: "Large (17px)",
+  fontSizeTinyShort: "T",
+  fontSizeSmallShort: "S",
+  fontSizeDefaultShort: "D",
+  fontSizeLargeShort: "L",
   language: "Language",
   browserNotifications: "Task completion notifications",
 
@@ -164,6 +182,7 @@ export const en: Messages = {
   pinSidebar: "Pin sidebar",
   unpinSidebar: "Unpin sidebar",
   closeSidebar: "Close sidebar",
+  closeSessionTab: "Close session tab",
 
   sendMessage: "Send a message",
   streamingPlaceholder: "Streaming… (send to steer)",
@@ -207,6 +226,12 @@ export const en: Messages = {
   manageModels: "Manage models",
   manageModelsEllipsis: "Manage models…",
   customModelsDescription: "Custom providers and models in {path}",
+  models: "Models",
+  chooseModel: "Choose a model",
+  discoverModels: "Get models",
+  discoveringModels: "Getting models…",
+  noModelsFound: "No models found",
+  newModel: "New model",
   addProvider: "Add provider",
   addModel: "Add model",
   removeProvider: "Remove provider",
@@ -215,12 +240,14 @@ export const en: Messages = {
   apiType: "API",
   baseUrl: "Base URL",
   apiKey: "API key",
+  showApiKey: "Show API key",
+  hideApiKey: "Hide API key",
   apiKeyHint: "Value or $ENV_VAR (local servers can use a dummy value)",
   modelId: "Model ID",
   modelName: "Display name",
   contextWindow: "Context window",
   maxTokens: "Max tokens",
-  maxThinkingLevel: "Max thinking level",
+  thinkingLevels: "Supported thinking levels",
   reasoning: "Reasoning",
   imageInput: "Image input",
   noCustomProviders: "No custom providers yet",
@@ -241,6 +268,7 @@ export const en: Messages = {
   askAnswerInTerminal: "This needs input in the pi terminal — the web UI can't answer it.",
   copyMessage: "Copy message",
   copied: "Copied",
+  reuseMessage: "Reuse in composer",
 
   login: "Sign in",
   loginFailed: "Invalid token or 2FA code.",

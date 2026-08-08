@@ -12,6 +12,8 @@ export interface UITodoTask {
 export interface UIActiveTodo {
   subject: string;
   activeForm?: string;
+  /** Current task state; completed is emitted for a fully completed todo list. */
+  status: "in_progress" | "completed";
   /** One-based position of the active task in the todo list. */
   current: number;
   total: number;
@@ -188,6 +190,13 @@ export interface UICustomProvider {
   models: UICustomModel[];
 }
 
+/** The provider connection details used to discover remote model ids. */
+export type UIModelDiscoveryRequest = Pick<UICustomProvider, "baseUrl" | "api" | "apiKey">;
+
+export interface UIModelDiscoveryResponse {
+  models: string[];
+}
+
 export interface UICustomModelsResponse {
   /** models.json path, ~-shortened */
   path: string;
@@ -210,6 +219,8 @@ export type ServerEvent =
       type: "hello";
       /** Server build version — prompts a reload when different from the client __APP_VERSION__ */
       version: string;
+      /** User-facing descriptions for the server build version. */
+      updateNotes?: string[];
     }
   /**
    * Session this connection is bound to in the URL.

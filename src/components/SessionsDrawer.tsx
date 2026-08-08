@@ -6,13 +6,14 @@ import { deleteSession, renameSession, useInvalidateSessions, useSessions } from
 import { chatClient, useChat } from "../lib/chat";
 import { onRequestOpenSessionsDrawer } from "../lib/drawer";
 import { localeTag, useLocale, useT } from "../lib/i18n";
-import { suppressResumeOnce } from "../lib/resume";
+import { markFreshDraftRequested } from "../lib/resume";
 import {
   setSidebarPinned,
   toggleProjectCollapsed,
   useProjectCollapsed,
   useSidebarPinned,
 } from "../lib/sidebar";
+import { SettingsMenu } from "./SettingsMenu";
 
 function formatDate(iso: string, locale: string) {
   const d = new Date(iso);
@@ -332,6 +333,7 @@ function SessionsPanel({
   onSelectSession,
   onClose,
   onDock,
+  settingsOpenToken = 0,
 }: {
   currentSessionFile?: string;
   docked?: boolean;
@@ -341,12 +343,14 @@ function SessionsPanel({
   onClose?: () => void;
   /** Drawer → docked transition (no close animation) */
   onDock?: () => void;
+  settingsOpenToken?: number;
 }) {
   const t = useT();
   const navigate = useNavigate();
   const sidebarPinned = useSidebarPinned();
   const { data: sessions, refetch } = useSessions(active);
   useSessionListSync(active);
+  const activeSessionId = chatClient.state.sessionId;
 
   // Refresh whenever the panel becomes active (drawer open / dock mount)
   useEffect(() => {
@@ -363,24 +367,12 @@ function SessionsPanel({
     else setSidebarPinned(true);
   };
 
-  const startNewSession = () => {
-    // "/" is the draft screen. Even when already on /, force a fresh draft WS.
-    // The session id is handed out by the server on the first message, then
-    // the URL switches to /s/:id.
-    suppressResumeOnce(); // don't resume-redirect back to the last session
-    void navigate({ to: "/" });
-    chatClient.connect(null, { force: true });
-    window.setTimeout(() => void refetch(), 150);
-    onClose?.();
-    chatClient.requestComposerFocus();
-  };
-
   /** New session in a specific project directory (the server expands ~) */
   const startNewSessionInProject = (project: string) => {
     if (!project || !(project.startsWith("~") || project.startsWith("/"))) return;
-    suppressResumeOnce(); // don't resume-redirect back to the last session
-    void navigate({ to: "/" });
+    markFreshDraftRequested(); // don't resume-redirect back to the last session
     chatClient.connect(null, { force: true, cwd: project });
+    void navigate({ to: "/" });
     window.setTimeout(() => void refetch(), 150);
     onClose?.();
     chatClient.requestComposerFocus();
@@ -393,11 +385,27 @@ function SessionsPanel({
       return;
     }
     void refetch();
-    // If we deleted the session we're viewing, go back to a fresh draft
-    if (session.path === currentSessionFile) {
-      suppressResumeOnce(); // don't resume-redirect to the deleted session
-      void navigate({ to: "/" });
-      chatClient.connect(null, { force: true });
+    const deletingActiveSession =
+      session.id === activeSessionId || session.path === currentSessionFile;
+    const nextTab = chatClient.closeTab(session.id);
+    // If we deleted the session we're viewing, activate the next tab or create
+    // a fresh draft instead of reconnecting the deleted session from the URL.
+    if (deletingActiveSession) {
+      markFreshDraftRequested(); // don't resume-redirect to the deleted session
+      if (nextTab) {
+        if (nextTab.sessionId) {
+          void navigate({
+            to: "/s/$sessionId",
+            params: { sessionId: nextTab.sessionId },
+            replace: true,
+          });
+        } else {
+          void navigate({ to: "/", replace: true });
+        }
+      } else {
+        chatClient.connect(null, { force: true });
+        void navigate({ to: "/", replace: true });
+      }
     }
   };
 
@@ -432,13 +440,14 @@ function SessionsPanel({
         }`}
       >
         {docked ? (
-          <h2 className="px-1 text-[15px] font-semibold tracking-tight text-ink">pi</h2>
+          <h2 className="px-1 text-[15px] font-semibold tracking-tight text-ink">{t("sessions")}</h2>
         ) : (
           <Dialog.Title className="px-1 text-[15px] font-semibold tracking-tight text-ink">
             {t("sessions")}
           </Dialog.Title>
         )}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5">
+          <SettingsMenu openToken={settingsOpenToken} />
           {/* Desktop-only sidebar dock toggle */}
           <button
             type="button"
@@ -451,17 +460,6 @@ function SessionsPanel({
             <SidebarPanelIcon />
           </button>
         </div>
-      </div>
-
-      <div className="px-2 pb-1">
-        <button
-          type="button"
-          onClick={startNewSession}
-          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13.5px] font-medium text-accent transition-colors hover:bg-hover"
-        >
-          <PlusIcon />
-          {t("newSession")}
-        </button>
       </div>
 
       <div className="thin-scroll flex-1 overflow-y-auto px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
@@ -489,16 +487,33 @@ function SessionsPanel({
 }
 
 /** Desktop docked sidebar */
-export function SessionsSidebar({ currentSessionFile }: { currentSessionFile?: string }) {
+export function SessionsSidebar({
+  currentSessionFile,
+  settingsOpenToken = 0,
+}: {
+  currentSessionFile?: string;
+  settingsOpenToken?: number;
+}) {
   return (
     <aside className="hidden h-full min-h-0 w-64 shrink-0 flex-col overflow-hidden bg-sidebar md:flex">
-      <SessionsPanel currentSessionFile={currentSessionFile} docked active />
+      <SessionsPanel
+        currentSessionFile={currentSessionFile}
+        settingsOpenToken={settingsOpenToken}
+        docked
+        active
+      />
     </aside>
   );
 }
 
 /** Overlay drawer (mobile / unpinned state) */
-export function SessionsDrawer({ currentSessionFile }: { currentSessionFile?: string }) {
+export function SessionsDrawer({
+  currentSessionFile,
+  settingsOpenToken = 0,
+}: {
+  currentSessionFile?: string;
+  settingsOpenToken?: number;
+}) {
   const t = useT();
   const [open, setOpen] = useState(false);
   /** true during a pin switch → portal is removed immediately to skip the close animation */
@@ -542,6 +557,7 @@ export function SessionsDrawer({ currentSessionFile }: { currentSessionFile?: st
           <Dialog.Popup className="fixed inset-y-0 left-0 flex w-[82vw] max-w-xs flex-col bg-sidebar shadow-2xl outline-none transition-transform data-[starting-style]:-translate-x-full data-[ending-style]:-translate-x-full">
             <SessionsPanel
               currentSessionFile={currentSessionFile}
+              settingsOpenToken={sidebarPinned ? 0 : settingsOpenToken}
               active={open}
               onSelectSession={() => setOpen(false)}
               onClose={() => setOpen(false)}

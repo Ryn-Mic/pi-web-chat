@@ -1,8 +1,9 @@
+import { useEffect, useRef, useState } from "react";
 import type { UIActiveTodo } from "../../shared/protocol";
 
 /**
- * Compact project + git branch status for the composer status row.
- * Style reference: zentui extension footer — cwd basename + git branch with
+ * Compact project status badge for the header.
+ * Style reference: zentui extension footer — cwd basename with
  * Nerd Font glyphs (JetBrainsMono Nerd Font is bundled in this app).
  */
 export function ProjectBadge({
@@ -15,7 +16,7 @@ export function ProjectBadge({
 
   return (
     <span
-      className="flex min-w-0 items-center gap-1.5 overflow-hidden font-mono text-[10px] leading-none text-muted sm:text-xs"
+      className="flex min-w-0 max-w-[50%] shrink items-center gap-1.5 overflow-hidden font-mono text-[10px] leading-none text-muted sm:max-w-[40%] sm:text-xs"
       title={cwd}
     >
       <span className="text-faint" aria-hidden>
@@ -27,17 +28,68 @@ export function ProjectBadge({
   );
 }
 
-export function ActiveTodoBadge({ todo }: { todo?: UIActiveTodo }) {
-  if (!todo) return null;
-  const label = todo.activeForm ?? todo.subject;
+function ScrollingLabel({ label }: { label: string }) {
+  const viewportRef = useRef<HTMLSpanElement>(null);
+  const contentRef = useRef<HTMLSpanElement>(null);
+  const [scrollDistance, setScrollDistance] = useState(0);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    const content = contentRef.current;
+    if (!viewport || !content) return;
+
+    const measure = () => {
+      setScrollDistance(Math.max(0, content.scrollWidth - viewport.clientWidth));
+    };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(viewport);
+    observer?.observe(content);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [label]);
 
   return (
-    <span
-      className="flex min-w-0 items-center justify-center gap-1.5 overflow-hidden font-mono text-[10px] leading-none text-muted sm:text-xs"
-      title={label}
-    >
-      <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-accent" aria-hidden />
-      <span className="fade-x-compact min-w-0 truncate">{label}</span>
+    <span ref={viewportRef} className="min-w-0 flex-1 overflow-hidden whitespace-nowrap" title={label}>
+      <span
+        ref={contentRef}
+        className={`inline-block ${scrollDistance > 0 ? "badge-marquee" : ""}`}
+        style={
+          scrollDistance > 0
+            ? ({ "--badge-marquee-distance": `${scrollDistance}px` } as React.CSSProperties)
+            : undefined
+        }
+      >
+        {label}
+      </span>
+    </span>
+  );
+}
+
+export function ActiveTodoBadge({
+  todo,
+  isStreaming = false,
+}: {
+  todo?: UIActiveTodo;
+  isStreaming?: boolean;
+}) {
+  if (!todo) return null;
+  const label = todo.activeForm ?? todo.subject;
+  const isCompleted = todo.status === "completed";
+  const isPulsing = todo.status === "in_progress" && isStreaming;
+
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden font-mono text-[10px] leading-none text-muted sm:text-xs">
+      <span
+        className={`size-1.5 shrink-0 rounded-full ${isCompleted ? "bg-emerald-500" : "bg-accent"} ${
+          isPulsing ? "animate-pulse" : ""
+        }`}
+        aria-hidden
+      />
+      <ScrollingLabel label={label} />
     </span>
   );
 }
@@ -60,14 +112,14 @@ export function BranchBadge({
 
   return (
     <span
-      className="flex min-w-0 max-w-[55%] items-center gap-1.5 overflow-hidden font-mono text-[10px] leading-none text-faint sm:text-xs"
+      className="flex min-w-0 max-w-[35%] shrink-0 items-center gap-1.5 overflow-hidden font-mono text-[10px] leading-none text-faint sm:max-w-[40%] sm:text-xs"
       title={gitBranch}
     >
       {/* nf-oct-git_branch */}
       <span className="shrink-0" aria-hidden>
         &#xf418;
       </span>
-      <span className="truncate text-muted">{gitBranch}</span>
+      <ScrollingLabel label={gitBranch} />
     </span>
   );
 }
