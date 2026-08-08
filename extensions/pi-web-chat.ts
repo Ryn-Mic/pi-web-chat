@@ -614,11 +614,14 @@ function parseWebDaemonArgs(argv: string[] = process.argv): {
   return { enabled: true, ...parsed };
 }
 
-/** Resolve port/host for start/restart, keeping previous bind on bare restart. */
+/** Resolve port/host for start/restart, keeping the previous bind on bare
+ * restart. The state files are authoritative even when the pid file is stale
+ * (crashed/stopped daemon) — a restart must never silently move to another
+ * port, or browsers that cached the old URL would lose the server. */
 function resolveLaunchTarget(parsed: ParsedWebArgs): { port: string; host: string } {
-  const running = readPid() !== null;
-  const prevPort = running ? readPort() : null;
-  const prevHost = running ? readHost() : null;
+  // readPort/readHost already fall back to env/defaults when no file exists.
+  const prevPort = readPort();
+  const prevHost = readHost();
   return {
     port: parsed.portExplicit ? parsed.port : (prevPort ?? parsed.port),
     host: parsed.hostExplicit ? parsed.host : (prevHost ?? parsed.host),
