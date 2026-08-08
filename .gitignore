@@ -6,3 +6,6 @@ dist/
 
 # Playwright MCP debugging artifacts
 .playwright-mcp/
+
+# Local npm package archives
+*.tgz
