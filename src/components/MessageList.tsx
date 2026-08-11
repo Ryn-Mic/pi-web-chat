@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type TouchEvent, type WheelEvent } from "react";
 import type { UIContentBlock, UIMessage } from "../../shared/protocol";
 import type { ActiveTool } from "../lib/chat";
 import { useT } from "../lib/i18n";
@@ -123,15 +123,50 @@ export function MessageList({
   isStreaming: boolean;
 }) {
   const t = useT();
-  const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  /**
+   * 바닥 고정 모드: 스트리밍 중 내용이 자라면 바닥을 따라간다.
+   * 사용자가 위로 올리면 해제되고, 다시 바닥 근처로 내려오면 복귀한다.
+   *
+   * onScroll만으로 판단하면 경합이 생긴다: scroll 이벤트는 프레임 단위로
+   * 비동기 dispatch되므로, 사용자가 위로 스크롤한 직후 delta 렌더가
+   * 끼어들면 stickToBottom이 아직 true여서 화면이 아래로 강제 당겨진다
+   * (스트리밍 중 "위로 못 올라감" 증상). wheel/touch는 스크롤보다 먼저
+   * 동기로 도착하므로 여기서 즉시 해제해 경합을 없앤다.
+   */
   const stickToBottom = useRef(true);
+  const touchStartY = useRef<number | null>(null);
 
+  // 바닥 고정 중이면 컨테이너를 직접 바닥으로 스크롤한다.
+  // scrollIntoView는 조상 스크롤러까지 건드릴 수 있어 비결정적이다.
   useEffect(() => {
-    if (stickToBottom.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "instant", block: "end" });
+    const el = containerRef.current;
+    if (stickToBottom.current && el) {
+      el.scrollTop = el.scrollHeight;
     }
   });
+
+  const handleScroll = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
+
+  const handleWheel = (e: WheelEvent) => {
+    if (e.deltaY < 0) stickToBottom.current = false; // 위로 올리려는 시도
+  };
+
+  const handleTouchStart = (e: TouchEvent) => {
+    touchStartY.current = e.touches[0]?.clientY ?? null;
+  };
+
+  const handleTouchMove = (e: TouchEvent) => {
+    if (touchStartY.current === null) return;
+    const y = e.touches[0]?.clientY;
+    if (y != null && y > touchStartY.current + 4) {
+      stickToBottom.current = false; // 손가락 아래로 = 내용이 위로
+    }
+  };
 
   // 응답 대기 중일 때만 ... 표시 (최종 assistant 텍스트가 있으면 숨김 → 종료 후 잔상 방지)
   const last = messages[messages.length - 1];
@@ -145,11 +180,10 @@ export function MessageList({
   return (
     <div
       ref={containerRef}
-      onScroll={() => {
-        const el = containerRef.current;
-        if (!el) return;
-        stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-      }}
+      onScroll={handleScroll}
+      onWheel={handleWheel}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
       className="thin-scroll min-h-0 flex-1 overflow-y-auto"
     >
       <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-6">
@@ -181,7 +215,6 @@ export function MessageList({
             <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:300ms]" />
           </div>
         )}
-        <div ref={bottomRef} />
       </div>
     </div>
   );

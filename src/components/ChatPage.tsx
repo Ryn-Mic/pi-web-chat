@@ -109,6 +109,7 @@ export function ChatPage() {
         ) : (
           <>
             <MessageList
+              key={sessionId ?? "new"}
               messages={snapshot?.messages ?? []}
               streamText={streamText}
               streamThinking={streamThinking}

@@ -45,6 +45,14 @@ class ChatClient {
   private everConnected = false;
   /** 접속하려는 세션 id (null = 새 세션) */
   private target: string | null = null;
+  /**
+   * 스트리밍 delta 병합 버퍼. 토큰 단위로 도착하는 delta를 그대로 렌더하면
+   * 초당 수십~수백 번 re-render + 누적 마크다운 전체 재파싱이 발생한다.
+   * 짧은 주기로 모아서 한 번에 반영해 렌더/스크롤 경합을 줄인다.
+   */
+  private pendingText = "";
+  private pendingThinking = "";
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
   state: ChatState = initialState;
 
   /**
@@ -60,6 +68,7 @@ class ChatClient {
       }
       // 세션 전환: 이전 연결 종료 + 화면 초기화
       this.closeSocket();
+      this.clearPendingDeltas();
       this.update({
         snapshot: null,
         sessionId: null,
@@ -159,14 +168,17 @@ class ChatClient {
         break;
       case "snapshot":
         // 완결된 메시지가 snapshot에 반영되므로 스트림 버퍼는 비운다
+        this.flushPendingDeltas();
         this.update({ snapshot: event.snapshot, streamText: "", streamThinking: "" });
         break;
       case "delta":
+        // 토큰 단위 delta를 병합해 일정 주기로 한 번에 반영
         if (event.kind === "text") {
-          this.update({ streamText: this.state.streamText + event.delta });
+          this.pendingText += event.delta;
         } else {
-          this.update({ streamThinking: this.state.streamThinking + event.delta });
+          this.pendingThinking += event.delta;
         }
+        this.scheduleDeltaFlush();
         break;
       case "tool_start":
         this.update({
@@ -188,6 +200,7 @@ class ChatClient {
         break;
       case "agent_end":
         // snapshot 도착 전에도 isStreaming을 즉시 내려 로딩 점이 남지 않게 한다
+        this.flushPendingDeltas();
         this.update({
           activeTools: [],
           streamText: "",
@@ -215,6 +228,40 @@ class ChatClient {
     window.setTimeout(() => {
       this.update({ focusToken: this.state.focusToken + 1 });
     }, 50);
+  }
+
+  private scheduleDeltaFlush() {
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      this.flushPendingDeltas();
+    }, 40);
+  }
+
+  /** 버퍼에 쌓인 delta를 state에 반영 (snapshot/agent_end 등 종료 시점엔 즉시 flush) */
+  private flushPendingDeltas() {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    const text = this.pendingText;
+    const thinking = this.pendingThinking;
+    if (!text && !thinking) return;
+    this.pendingText = "";
+    this.pendingThinking = "";
+    this.update({
+      streamText: text ? this.state.streamText + text : this.state.streamText,
+      streamThinking: thinking ? this.state.streamThinking + thinking : this.state.streamThinking,
+    });
+  }
+
+  private clearPendingDeltas() {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.pendingText = "";
+    this.pendingThinking = "";
   }
 
   private update(partial: Partial<ChatState>) {
