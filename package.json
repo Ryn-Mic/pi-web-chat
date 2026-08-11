@@ -1,6 +1,6 @@
 {
   "name": "pi-web-chat",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "Web UI for the pi coding agent (OpenWebUI-style, mobile-friendly)",
   "type": "module",
   "license": "MIT",
