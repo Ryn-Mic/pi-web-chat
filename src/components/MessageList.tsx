@@ -1,4 +1,7 @@
 import { useEffect, useRef, type TouchEvent, type WheelEvent } from "react";
+
+/** "진짜 바닥" 판정 여유 (px). 이 밴드 안에서만 재고정/스냅한다. */
+const BOTTOM_TOLERANCE = 8;
 import type { UIContentBlock, UIMessage } from "../../shared/protocol";
 import type { ActiveTool } from "../lib/chat";
 import { useT } from "../lib/i18n";
@@ -125,23 +128,37 @@ export function MessageList({
   const t = useT();
   const containerRef = useRef<HTMLDivElement>(null);
   /**
-   * 바닥 고정 모드: 스트리밍 중 내용이 자라면 바닥을 따라간다.
-   * 사용자가 위로 올리면 해제되고, 다시 바닥 근처로 내려오면 복귀한다.
+   * 바닥 고정 스크롤 (스트리밍 중 "덜덜덜" 흔들림 방지):
    *
-   * onScroll만으로 판단하면 경합이 생긴다: scroll 이벤트는 프레임 단위로
-   * 비동기 dispatch되므로, 사용자가 위로 스크롤한 직후 delta 렌더가
-   * 끼어들면 stickToBottom이 아직 true여서 화면이 아래로 강제 당겨진다
-   * (스트리밍 중 "위로 못 올라감" 증상). wheel/touch는 스크롤보다 먼저
-   * 동기로 도착하므로 여기서 즉시 해제해 경합을 없앤다.
+   * 1. 위로 올리려는 의도는 wheel/touch에서 동기로 해제한다.
+   *    - wheel: deltaY < 0 (ctrl+휠 핀치 줌 제외)
+   *    - touch: 손가락이 시작점보다 아래로 움직인 즉시 (임계값 없음).
+   *      passive 리스너는 브라우저의 기본 스크롤보다 먼저 실행되므로,
+   *      첫 픽셀이 움직이기 전에 해제된다. +4px 임계값은 "브라우저는 이미
+   *      위로 스크롤됐는데 아직 고정 상태"인 구간을 만들어 느린 드래그에서
+   *      40ms 단위 delta 렌더가 화면을 계속 아래로 끌어당겼다 (덜덜덜).
+   * 2. 재고정은 진짜 바닥(여유 8px)에서만 한다. 40px 재고정 밴드는 바닥
+   *    근처 내용을 읽으려 조금 올린 사용자를 매 delta마다 강제로
+   *    끌어내려 같은 흔들림을 만들었다.
+   * 3. snap 전에 "직전 렌더 시점에 바닥이었는지"를 확인한다. 렌더 이후엔
+   *    DOM이 이미 자랐으므로 직전 scrollHeight와 비교해야 사용자가 방금
+   *    위로 올렸는지 안다. 이로써 scroll 이벤트가 프레임 단위로 늦게
+   *    도착하는 경로(데스크톱 스크롤바 드래그 등)에서도 렌더가 끼어들어
+   *    화면을 당기는 경합이 없다.
    */
   const stickToBottom = useRef(true);
+  const prevScrollHeight = useRef(0);
   const touchStartY = useRef<number | null>(null);
 
   // 바닥 고정 중이면 컨테이너를 직접 바닥으로 스크롤한다.
   // scrollIntoView는 조상 스크롤러까지 건드릴 수 있어 비결정적이다.
   useEffect(() => {
     const el = containerRef.current;
-    if (stickToBottom.current && el) {
+    if (!el) return;
+    const wasAtBottom =
+      el.scrollTop + el.clientHeight >= prevScrollHeight.current - BOTTOM_TOLERANCE;
+    prevScrollHeight.current = el.scrollHeight;
+    if (stickToBottom.current && wasAtBottom) {
       el.scrollTop = el.scrollHeight;
     }
   });
@@ -149,11 +166,14 @@ export function MessageList({
   const handleScroll = () => {
     const el = containerRef.current;
     if (!el) return;
-    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    // 진짜 바닥 근처에서만 다시 고정한다
+    stickToBottom.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_TOLERANCE;
   };
 
   const handleWheel = (e: WheelEvent) => {
-    if (e.deltaY < 0) stickToBottom.current = false; // 위로 올리려는 시도
+    // ctrl+휠(트랙패드 핀치 줌)은 스크롤 의도가 아니다
+    if (!e.ctrlKey && e.deltaY < 0) stickToBottom.current = false; // 위로 올리려는 시도
   };
 
   const handleTouchStart = (e: TouchEvent) => {
@@ -163,8 +183,10 @@ export function MessageList({
   const handleTouchMove = (e: TouchEvent) => {
     if (touchStartY.current === null) return;
     const y = e.touches[0]?.clientY;
-    if (y != null && y > touchStartY.current + 4) {
-      stickToBottom.current = false; // 손가락 아래로 = 내용이 위로
+    // 손가락이 아래로 = 내용이 위로 = 과거 내용 보기. 첫 픽셀부터 해제.
+    // 위로만 움직이는 드래그(바닥에서의 반동 등)는 해제하지 않는다.
+    if (y != null && y > touchStartY.current) {
+      stickToBottom.current = false;
     }
   };
 
