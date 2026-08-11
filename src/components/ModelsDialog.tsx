@@ -75,16 +75,6 @@ function CloseIcon() {
   );
 }
 
-function EyeIcon({ crossed = false }: { crossed?: boolean }) {
-  return (
-    <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-[1.5]" aria-hidden>
-      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" strokeLinejoin="round" />
-      <circle cx="12" cy="12" r="2.5" />
-      {crossed && <path d="m4 4 16 16" strokeLinecap="round" />}
-    </svg>
-  );
-}
-
 function TrashIcon() {
   return (
     <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-[1.5]" aria-hidden>
@@ -427,7 +417,6 @@ function ProviderCard({
   onRemove: () => void;
 }) {
   const t = useT();
-  const [showApiKey, setShowApiKey] = useState(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [discovered, setDiscovered] = useState(false);
   const [discovering, setDiscovering] = useState(false);
@@ -446,6 +435,7 @@ function ProviderCard({
     setDiscoveryError(null);
     try {
       const result = await discoverCustomModels({
+        key: provider.key,
         baseUrl: provider.baseUrl,
         api: provider.api,
         apiKey: provider.apiKey,
@@ -504,21 +494,12 @@ function ProviderCard({
           <Field label={t("apiKey")} hint={`(${t("optional")})`}>
             <div className="relative">
               <input
-                type={showApiKey ? "text" : "password"}
-                className={`${inputClass} pr-9 font-mono`}
+                type="text"
+                className={`${inputClass} font-mono`}
                 value={provider.apiKey ?? ""}
                 placeholder="$OPENAI_API_KEY"
                 onChange={(e) => patch({ apiKey: e.target.value })}
               />
-              <button
-                type="button"
-                onClick={() => setShowApiKey((visible) => !visible)}
-                aria-label={showApiKey ? t("hideApiKey") : t("showApiKey")}
-                title={showApiKey ? t("hideApiKey") : t("showApiKey")}
-                className="absolute top-1/2 right-1 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink"
-              >
-                <EyeIcon crossed={!showApiKey} />
-              </button>
             </div>
           </Field>
         </div>

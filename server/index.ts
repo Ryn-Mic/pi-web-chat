@@ -30,7 +30,7 @@ import type {
   UIThinkingLevel,
 } from "../shared/protocol.ts";
 import { auth, authStartupInfo } from "./auth.ts";
-import { readCustomModels, validateProviders, writeCustomModels } from "./models-config.ts";
+import { readCustomModels, resolveIncomingApiKey, validateProviders, writeCustomModels } from "./models-config.ts";
 import { getActiveTodo, serializeMessages } from "./serialize.ts";
 
 const PORT = Number(process.env.PORT ?? 3141);
@@ -1285,7 +1285,11 @@ const httpServer = createServer(async (req, res) => {
         const models = await discoverProviderModels({
           baseUrl: parsed.baseUrl,
           api: parsed.api as UIModelDiscoveryRequest["api"],
-          apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey : undefined,
+          // A masked apiKey (from the UI) is restored to the stored real key.
+          apiKey: resolveIncomingApiKey(
+            typeof parsed.key === "string" ? parsed.key : "",
+            typeof parsed.apiKey === "string" ? parsed.apiKey : undefined,
+          ),
         });
         res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ models }));
@@ -1319,8 +1323,17 @@ const httpServer = createServer(async (req, res) => {
           res.end(JSON.stringify({ error: invalid }));
           return;
         }
-        writeCustomModels(providers);
-        const warning = await reloadModelProviders(providers);
+        // writeCustomModels resolves masked apiKeys back to the stored real
+        // keys, so the reload below must use its return value (not the input).
+        let resolved: UICustomProvider[];
+        try {
+          resolved = writeCustomModels(providers);
+        } catch (err) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          return;
+        }
+        const warning = await reloadModelProviders(resolved);
         const result: UICustomModelsResponse = { ...readCustomModels(), warning };
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(result));

@@ -101,8 +101,6 @@ export type Messages = {
   apiType: string;
   baseUrl: string;
   apiKey: string;
-  showApiKey: string;
-  hideApiKey: string;
   apiKeyHint: string;
   modelId: string;
   modelName: string;
@@ -240,9 +238,7 @@ export const en: Messages = {
   apiType: "API",
   baseUrl: "Base URL",
   apiKey: "API key",
-  showApiKey: "Show API key",
-  hideApiKey: "Hide API key",
-  apiKeyHint: "Value or $ENV_VAR (local servers can use a dummy value)",
+  apiKeyHint: "Value or $ENV_VAR (local servers can use a dummy value); saved keys show only the first/last 4 chars",
   modelId: "Model ID",
   modelName: "Display name",
   contextWindow: "Context window",

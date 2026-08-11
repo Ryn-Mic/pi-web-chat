@@ -191,7 +191,10 @@ export interface UICustomProvider {
 }
 
 /** The provider connection details used to discover remote model ids. */
-export type UIModelDiscoveryRequest = Pick<UICustomProvider, "baseUrl" | "api" | "apiKey">;
+export type UIModelDiscoveryRequest = Pick<UICustomProvider, "baseUrl" | "api" | "apiKey"> & {
+  /** providers key — lets the server restore a masked apiKey to the stored key */
+  key?: string;
+};
 
 export interface UIModelDiscoveryResponse {
   models: string[];

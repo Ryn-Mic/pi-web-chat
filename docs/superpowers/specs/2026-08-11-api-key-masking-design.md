@@ -45,6 +45,5 @@ Web 端模型管理（ModelsDialog）不再暴露完整 API 密钥：
 
 ## 验证
 
-- 无相关单元测试（现有测试覆盖 chat-client/session-workspace），人工验证：
-  - GET 返回掩码值；保存后 models.json 真 key 未被掩码覆盖；重载后运行时用真 key；
-  - discover 用掩码值可还原真 key 拉取模型；`$ENV_VAR` 正常解析；前端展示为普通文本。
+- 新增 `tests/models-config.test.ts`（node:test）：覆盖掩码规则、读掩码、保存保留真 key、新 key 替换、空值删除、stale mask 拒绝（保存/发现两条路径）。
+- e2e 冒烟（临时 agent 目录 + 真实 HTTP）：GET 返回掩码；PUT 掩码往返不覆盖真 key；改名 provider 保存掩码返回 400；discover 掩码还原后发出带真 key 的请求；未知 provider 掩码给出清晰报错。
