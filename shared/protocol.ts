@@ -218,6 +218,8 @@ export interface UIImageAttachment {
 
 export type ServerEvent =
   | { type: "snapshot"; snapshot: UISnapshot }
+  /** Sent after a client abort command has been processed by the session. */
+  | { type: "abort_complete" }
   | {
       type: "hello";
       /** Server build version — prompts a reload when different from the client __APP_VERSION__ */

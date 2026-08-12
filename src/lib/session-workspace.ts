@@ -8,6 +8,8 @@ export interface WorkspaceClient<State extends WorkspaceClientState> {
   state: State;
   connect(sessionId: string | null, opts?: { force?: boolean; cwd?: string }): void;
   dispose(): void;
+  /** Clear one-shot UI requests when a client becomes inactive. */
+  clearComposerFocus?(): void;
   subscribe(listener: () => void): () => void;
 }
 
@@ -20,6 +22,7 @@ export interface WorkspaceTab<State extends WorkspaceClientState> {
 type ClientFactory<Client> = (
   sessionId: string | null,
   onBound: (sessionId: string) => void,
+  tabKey: string,
 ) => Client;
 
 /**
@@ -63,9 +66,11 @@ export class SessionWorkspace<
   /** Open an existing session or reuse/create the active draft. */
   open(sessionId: string | null, opts?: { force?: boolean; cwd?: string }): Client {
     if (sessionId) {
-      const existing = this.clients.get(sessionId);
+      const existingKey =
+        this.tabsSnapshot.find((tab) => tab.sessionId === sessionId)?.key ?? sessionId;
+      const existing = this.clients.get(existingKey);
       if (existing) {
-        this.setActive(sessionId);
+        this.setActive(existingKey);
         return existing;
       }
       return this.createTab(sessionId, opts);
@@ -87,15 +92,18 @@ export class SessionWorkspace<
 
   /** Close a tab and return the key that became active, if any. */
   close(key: string): string | null {
-    const client = this.clients.get(key);
+    const resolvedKey = this.clients.has(key)
+      ? key
+      : this.tabsSnapshot.find((tab) => tab.sessionId === key)?.key ?? key;
+    const client = this.clients.get(resolvedKey);
     if (!client) return this.activeKeyValue;
 
     const keysBeforeClose = [...this.clients.keys()];
-    const wasActive = this.activeKeyValue === key;
-    const closedIndex = keysBeforeClose.indexOf(key);
-    this.unsubscriptions.get(key)?.();
-    this.unsubscriptions.delete(key);
-    this.clients.delete(key);
+    const wasActive = this.activeKeyValue === resolvedKey;
+    const closedIndex = keysBeforeClose.indexOf(resolvedKey);
+    this.unsubscriptions.get(resolvedKey)?.();
+    this.unsubscriptions.delete(resolvedKey);
+    this.clients.delete(resolvedKey);
     client.dispose();
 
     if (wasActive) {
@@ -114,12 +122,13 @@ export class SessionWorkspace<
 
   private createTab(sessionId: string | null, opts?: { force?: boolean; cwd?: string }): Client {
     const key = sessionId ?? `draft:${this.nextDraftId++}`;
-    // Keep the current key by reference: a draft can be rebound more than once
-    // (for example after a fork), so a callback that closes over the original
-    // draft key would stop finding the client after the first re-key.
+    // Keep the tab key in a mutable reference for the bound-session callback.
+    // Draft tab keys remain stable across session binding and forks.
     const keyRef = { value: key };
-    const client = this.createClient(sessionId, (boundId) =>
-      this.handleBound(keyRef, boundId),
+    const client = this.createClient(
+      sessionId,
+      (boundId) => this.handleBound(keyRef, boundId),
+      key,
     );
     this.clients.set(key, client);
     this.unsubscriptions.set(
@@ -128,49 +137,54 @@ export class SessionWorkspace<
         this.refresh();
       }),
     );
+    this.clearInactiveFocus(key);
     this.activeKeyValue = key;
     this.refresh();
     client.connect(sessionId, opts);
     return client;
   }
 
+  private clearInactiveFocus(nextKey: string) {
+    if (this.activeKeyValue && this.activeKeyValue !== nextKey) {
+      this.clients.get(this.activeKeyValue)?.clearComposerFocus?.();
+    }
+  }
+
   private setActive(key: string) {
     if (this.activeKeyValue === key) return;
+    this.clearInactiveFocus(key);
     this.activeKeyValue = key;
     this.refresh();
   }
 
   private handleBound(keyRef: { value: string }, boundId: string) {
-    const oldKey = keyRef.value;
-    const client = this.clients.get(oldKey);
+    const tabKey = keyRef.value;
+    const client = this.clients.get(tabKey);
     if (!client) return;
 
-    const wasActive = this.activeKeyValue === oldKey;
-    const existing = this.clients.get(boundId);
+    const wasActive = this.activeKeyValue === tabKey;
+    const existingKey =
+      this.tabsSnapshot.find((tab) => tab.sessionId === boundId)?.key ?? boundId;
+    const existing = this.clients.get(existingKey);
     if (existing && existing !== client) {
-      this.unsubscriptions.get(oldKey)?.();
-      this.unsubscriptions.delete(oldKey);
-      this.clients.delete(oldKey);
+      this.unsubscriptions.get(tabKey)?.();
+      this.unsubscriptions.delete(tabKey);
+      this.clients.delete(tabKey);
       client.dispose();
-      if (wasActive) this.activeKeyValue = boundId;
-    } else if (oldKey !== boundId) {
-      const unsubscribe = this.unsubscriptions.get(oldKey);
-      this.clients.delete(oldKey);
-      this.unsubscriptions.delete(oldKey);
-      this.clients.set(boundId, client);
-      if (unsubscribe) this.unsubscriptions.set(boundId, unsubscribe);
-      if (wasActive) this.activeKeyValue = boundId;
+      if (wasActive) this.activeKeyValue = existingKey;
     }
-    keyRef.value = boundId;
 
+    // Keep the UI tab key stable. The bound session id is derived from the
+    // client's state, so composer drafts and pending prompt state survive the
+    // server's draft -> session transition.
     this.refresh();
-    this.onSessionBound?.(boundId, this.activeKeyValue === boundId);
+    this.onSessionBound?.(boundId, this.activeKeyValue === tabKey);
   }
 
   private refresh() {
     this.tabsSnapshot = [...this.clients.entries()].map(([key, client]) => ({
       key,
-      sessionId: key.startsWith("draft:") ? client.state.sessionId : key,
+      sessionId: client.state.sessionId ?? (key.startsWith("draft:") ? null : key),
       state: client.state,
     }));
     for (const listener of this.listeners) listener();

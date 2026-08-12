@@ -77,7 +77,20 @@ export function Composer({
   const [forkOpen, setForkOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { injectText, focusToken, snapshot, commands, commandIntent } = useChat();
+  const pendingPromptRef = useRef(false);
+  const submittedPromptRef = useRef<{ text: string; images: PendingImage[] } | null>(null);
+  const responseTokenRef = useRef(0);
+  const failureTokenRef = useRef(0);
+  const {
+    injectText,
+    focusToken,
+    snapshot,
+    commands,
+    commandIntent,
+    promptStatus,
+    promptResponseToken,
+    promptFailureToken,
+  } = useChat();
   const chatFontSize = useChatFontSize();
   const context = snapshot?.context;
   const contextPercent = context?.percent ?? null;
@@ -89,6 +102,41 @@ export function Composer({
       : hasContext
         ? `${Math.round(contextPercent)}%`
         : undefined;
+  const waitingForPromptResponse = promptStatus === "waiting";
+  const promptResponseStarted = promptStatus === "responding";
+
+  useEffect(() => {
+    if (promptResponseToken === responseTokenRef.current) return;
+    responseTokenRef.current = promptResponseToken;
+    if (!pendingPromptRef.current) return;
+
+    pendingPromptRef.current = false;
+    const submittedPrompt = submittedPromptRef.current;
+    submittedPromptRef.current = null;
+    const sameImages =
+      submittedPrompt !== null &&
+      images.length === submittedPrompt.images.length &&
+      images.every(
+        (image, index) =>
+          image.data === submittedPrompt.images[index]?.data &&
+          image.mimeType === submittedPrompt.images[index]?.mimeType,
+      );
+    if (!submittedPrompt || text.trim() !== submittedPrompt.text || !sameImages) return;
+
+    setText("");
+    setImages([]);
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
+  }, [promptResponseToken]);
+
+  useEffect(() => {
+    if (promptFailureToken === failureTokenRef.current) return;
+    failureTokenRef.current = promptFailureToken;
+    // Keep the submitted prompt in the composer so it can be retried after a
+    // timeout or server error. The ChatClient status makes the send button
+    // available again.
+    pendingPromptRef.current = false;
+    submittedPromptRef.current = null;
+  }, [promptFailureToken]);
 
   // Keep unsent text and attachments isolated to the active session tab. The
   // component is keyed by tab in ChatPage, so switching tabs restores that
@@ -108,7 +156,9 @@ export function Composer({
 
   // Focus the input on new session etc.
   useEffect(() => {
-    if (focusToken > 0) textareaRef.current?.focus();
+    if (focusToken <= 0) return;
+    textareaRef.current?.focus();
+    chatClient.clearComposerFocus();
   }, [focusToken]);
 
   useEffect(() => {
@@ -159,15 +209,17 @@ export function Composer({
 
   const send = () => {
     const trimmed = text.trim();
-    if (!trimmed && images.length === 0) return;
+    if ((!trimmed && images.length === 0) || waitingForPromptResponse) return;
+
+    pendingPromptRef.current = true;
+    submittedPromptRef.current = { text: trimmed, images: [...images] };
+    responseTokenRef.current = promptResponseToken;
+    failureTokenRef.current = promptFailureToken;
     chatClient.send({
       type: "prompt",
       text: trimmed,
       images: images.length > 0 ? images.map(({ data, mimeType }) => ({ data, mimeType })) : undefined,
     });
-    setText("");
-    setImages([]);
-    if (textareaRef.current) textareaRef.current.style.height = "auto";
   };
 
   const completeCommand = (name: string, argumentHint?: string) => {
@@ -328,7 +380,7 @@ export function Composer({
               containerRef={containerRef}
               compact
             />
-            {isStreaming ? (
+            {isStreaming || promptResponseStarted ? (
               <button
                 onClick={() => chatClient.send({ type: "abort" })}
                 className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink text-canvas transition-opacity hover:opacity-85"
@@ -336,6 +388,18 @@ export function Composer({
               >
                 <svg viewBox="0 0 24 24" className="size-3 fill-current">
                   <rect x="6" y="6" width="12" height="12" rx="2" />
+                </svg>
+              </button>
+            ) : waitingForPromptResponse ? (
+              <button
+                type="button"
+                disabled
+                className="flex size-8 shrink-0 cursor-wait items-center justify-center rounded-full bg-accent text-accent-ink opacity-70"
+                aria-label={t("send")}
+                aria-busy="true"
+              >
+                <svg viewBox="0 0 24 24" className="size-[18px] animate-spin fill-none stroke-current stroke-2">
+                  <circle cx="12" cy="12" r="8" strokeDasharray="34 16" strokeLinecap="round" />
                 </svg>
               </button>
             ) : (

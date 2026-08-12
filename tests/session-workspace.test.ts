@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SessionWorkspace, type WorkspaceClient } from "../src/lib/session-workspace.ts";
-import { getComposerDraft, setComposerDraft } from "../src/lib/composer-drafts.ts";
+import {
+  clearComposerDraftIfMatches,
+  getComposerDraft,
+  setComposerDraft,
+} from "../src/lib/composer-drafts.ts";
 
 type FakeState = {
   sessionId: string | null;
@@ -12,6 +16,7 @@ type FakeState = {
 class FakeClient implements WorkspaceClient<FakeState> {
   state: FakeState = { sessionId: null, connection: "connecting", snapshot: null };
   disposed = false;
+  focusToken = 0;
   private listeners = new Set<() => void>();
   private readonly onBound: (sessionId: string) => void;
 
@@ -34,6 +39,10 @@ class FakeClient implements WorkspaceClient<FakeState> {
     this.disposed = true;
   }
 
+  clearComposerFocus() {
+    this.focusToken = 0;
+  }
+
   subscribe(listener: () => void) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -54,6 +63,16 @@ function createWorkspace() {
   return { workspace, clients };
 }
 
+test("clears a background tab's pending focus when switching tabs", () => {
+  const { workspace, clients } = createWorkspace();
+
+  workspace.open("session-a");
+  clients[0].focusToken = 1;
+  workspace.open("session-b");
+
+  assert.equal(clients[0].focusToken, 0);
+});
+
 test("keeps multiple session clients alive while switching the active tab", () => {
   const { workspace, clients } = createWorkspace();
 
@@ -71,7 +90,7 @@ test("keeps multiple session clients alive while switching the active tab", () =
   assert.equal(clients[1].disposed, false);
 });
 
-test("renames a draft tab when the server binds its real session id", () => {
+test("keeps a draft tab key stable while updating its bound session id", () => {
   const { workspace, clients } = createWorkspace();
 
   workspace.open(null);
@@ -81,11 +100,24 @@ test("renames a draft tab when the server binds its real session id", () => {
   clients[0].bind("session-created");
   clients[0].bind("session-forked");
 
-  assert.equal(workspace.activeKey, "session-forked");
+  assert.equal(workspace.activeKey, draftKey);
   assert.deepEqual(
-    workspace.getTabsSnapshot().map((tab) => tab.sessionId),
-    ["session-forked"],
+    workspace.getTabsSnapshot().map((tab) => ({ key: tab.key, sessionId: tab.sessionId })),
+    [{ key: draftKey, sessionId: "session-forked" }],
   );
+});
+
+test("keeps an existing tab identity stable when a fork changes its session id", () => {
+  const { workspace, clients } = createWorkspace();
+
+  workspace.open("session-a");
+  const tabKey = workspace.activeKey;
+  clients[0].bind("session-b");
+
+  assert.equal(workspace.activeKey, tabKey);
+  assert.equal(workspace.getTabsSnapshot()[0]?.sessionId, "session-b");
+  assert.equal(workspace.open("session-b"), clients[0]);
+  assert.equal(workspace.activeKey, tabKey);
 });
 
 test("closes only the selected client and activates the remaining tab", () => {
@@ -111,4 +143,15 @@ test("keeps unsent composer drafts isolated by session tab", () => {
   assert.equal(getComposerDraft("tab-a").text, "message A");
   assert.equal(getComposerDraft("tab-b").text, "message B");
   assert.equal(getComposerDraft("tab-c").text, "");
+});
+
+test("only clears a composer draft when it still matches the submitted prompt", () => {
+  setComposerDraft("tab-match", { text: "submitted", images: [] });
+  setComposerDraft("tab-changed", { text: "new input", images: [] });
+
+  clearComposerDraftIfMatches("tab-match", { text: "submitted", images: [] });
+  clearComposerDraftIfMatches("tab-changed", { text: "submitted", images: [] });
+
+  assert.equal(getComposerDraft("tab-match").text, "");
+  assert.equal(getComposerDraft("tab-changed").text, "new input");
 });

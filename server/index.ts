@@ -653,8 +653,16 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
       break;
     }
     case "abort":
-      await session.abort();
-      broadcastSnapshot(entry);
+      try {
+        await session.abort();
+      } finally {
+        // Always refresh the UI after an abort attempt. Only acknowledge the
+        // recovery barrier once the session is no longer streaming; if abort
+        // failed while work is still active, the client must keep blocking a
+        // retry until the normal agent_end/snapshot sequence settles it.
+        broadcastSnapshot(entry);
+        if (!session.isStreaming) sendTo(ws, { type: "abort_complete" });
+      }
       break;
     case "set_model": {
       const model = modelRuntime.getModel(cmd.provider, cmd.id);
