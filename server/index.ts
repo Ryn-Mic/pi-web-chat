@@ -21,6 +21,7 @@ import type {
   ServerEvent,
   UICustomModelsResponse,
   UICustomProvider,
+  UIFileSearchResponse,
   UIModelDiscoveryRequest,
   UIExtensionInfo,
   UICommandInfo,
@@ -28,8 +29,10 @@ import type {
   UISessionInfo,
   UISnapshot,
   UIThinkingLevel,
+  UITreeResponse,
 } from "../shared/protocol.ts";
 import { auth, authStartupInfo } from "./auth.ts";
+import { listDir, PathEscapeError, searchFiles } from "./files.ts";
 import { readCustomModels, resolveIncomingApiKey, validateProviders, writeCustomModels } from "./models-config.ts";
 import { getActiveTodo, serializeMessages } from "./serialize.ts";
 
@@ -366,6 +369,31 @@ function gitBranchAt(cwd: string): string | null {
   }
   gitBranchCache.set(cwd, { branch, at: Date.now() });
   return branch;
+}
+
+/** ~-shorten an absolute path for display */
+function shortenHome(p: string): string {
+  return p === HOME ? "~" : p.startsWith(HOME + "/") ? "~" + p.slice(HOME.length) : p;
+}
+
+// Known-project cache for file API authorization (anti arbitrary-read).
+const KNOWN_ROOTS_TTL_MS = 3_000;
+let knownRootsCache: { at: number; roots: Set<string> } | null = null;
+
+/** Roots the file APIs may serve: loaded runtimes + sessions' cwds + the chat workspace. */
+async function knownProjectRoots(): Promise<Set<string>> {
+  if (knownRootsCache && Date.now() - knownRootsCache.at < KNOWN_ROOTS_TTL_MS) {
+    return knownRootsCache.roots;
+  }
+  const roots = new Set<string>([AGENT_CWD]);
+  for (const entry of entries.values()) roots.add(entry.runtime.cwd);
+  try {
+    for (const s of await SessionManager.listAll()) if (s.cwd) roots.add(s.cwd);
+  } catch {
+    /* keep the entry/AGENT_CWD roots */
+  }
+  knownRootsCache = { at: Date.now(), roots };
+  return roots;
 }
 
 function supportedThinkingLevels(model: unknown): UIThinkingLevel[] {
@@ -1365,6 +1393,44 @@ const httpServer = createServer(async (req, res) => {
         JSON.stringify(points.map((p) => ({ entryId: p.entryId, text: p.text.slice(0, 200) }))),
       );
       return;
+    }
+
+    // Project file browsing (tree + @-mention search). cwd must be a known project root.
+    if (url.pathname === "/api/tree" || url.pathname === "/api/files/search") {
+      const root = expandHome(url.searchParams.get("cwd") ?? "");
+      if (!root || !(await knownProjectRoots()).has(root)) {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unknown project cwd" }));
+        return;
+      }
+      try {
+        if (!statSync(root).isDirectory()) throw Object.assign(new Error("not a directory"), { code: "ENOENT" });
+        if (url.pathname === "/api/tree") {
+          const rel = url.searchParams.get("path") ?? "";
+          const { nodes, truncated } = listDir(root, rel);
+          const body: UITreeResponse = { root: shortenHome(root), path: rel, nodes, ...(truncated ? { truncated } : {}) };
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(body));
+          return;
+        }
+        const q = url.searchParams.get("q") ?? "";
+        const limitParam = Number(url.searchParams.get("limit") ?? "50");
+        const { matches, partial } = searchFiles(root, q, Number.isFinite(limitParam) ? limitParam : 50);
+        const body: UIFileSearchResponse = { root: shortenHome(root), query: q, matches, ...(partial ? { partial } : {}) };
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(body));
+        return;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        const status =
+          err instanceof PathEscapeError || code === "ENOTDIR" ? 400
+          : code === "ENOENT" ? 404
+          : code === "EACCES" ? 403
+          : 500;
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        return;
+      }
     }
 
     if (url.pathname === "/api/extensions") {

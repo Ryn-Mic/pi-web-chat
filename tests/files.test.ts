@@ -13,10 +13,13 @@ import { afterEach, test } from "node:test";
 import { listDir, PathEscapeError, searchFiles, walkProject } from "../server/files.ts";
 
 let root = "";
+let outsideRoot = "";
 
 afterEach(() => {
   if (root) rmSync(root, { recursive: true, force: true });
+  if (outsideRoot) rmSync(outsideRoot, { recursive: true, force: true });
   root = "";
+  outsideRoot = "";
 });
 
 function fixture() {
@@ -81,6 +84,17 @@ test("listDir: path escape and absolute rel are rejected", () => {
   fixture();
   assert.throws(() => listDir(root, "../outside"), PathEscapeError);
   assert.throws(() => listDir(root, "/etc"), PathEscapeError);
+});
+
+test("listDir: symlinked directory path is rejected before traversal", () => {
+  fixture();
+  outsideRoot = mkdtempSync(join(tmpdir(), "pi-files-outside-"));
+  writeFileSync(join(outsideRoot, "outside.txt"), "");
+  symlinkSync(outsideRoot, join(root, "linkout"));
+
+  assert.throws(() => listDir(root, "linkout"), PathEscapeError);
+  assert.throws(() => listDir(root, "linkout/nested"), PathEscapeError);
+  assert.throws(() => listDir(root, "missing/../linkout"), PathEscapeError);
 });
 
 test("listDir: truncates at 1000 entries", () => {

@@ -1,6 +1,6 @@
 /** Project directory listing & file search with shared ignore filtering. */
-import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { readdirSync, readFileSync, existsSync, lstatSync, statSync } from "node:fs";
+import { join, normalize, resolve, sep } from "node:path";
 import ignore, { type Ignore } from "ignore";
 import type { UIFileMatch, UITreeNode } from "../shared/protocol.ts";
 
@@ -13,11 +13,40 @@ const IGNORE_TTL_MS = 10_000;
 
 export class PathEscapeError extends Error {}
 
-/** Resolve rel against root, rejecting escapes and absolute paths. Returns abs. */
+/** Reject any existing rel segment that is a symlink resolving to a directory. */
+function assertNoSymlinkedDirectorySegment(root: string, rel: string): void {
+  const normalizedRel = normalize(rel).replaceAll(sep, "/");
+  let cur = root;
+  for (const segment of normalizedRel.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      cur = join(cur, segment);
+      continue;
+    }
+    cur = join(cur, segment);
+    let lst;
+    try {
+      lst = lstatSync(cur);
+    } catch {
+      return; // Only existing path segments can be symlink-checked.
+    }
+    if (!lst.isSymbolicLink()) continue;
+    try {
+      if (statSync(cur).isDirectory()) throw new PathEscapeError(rel);
+    } catch (err) {
+      if (err instanceof PathEscapeError) throw err;
+      return; // Broken/unreadable symlink: let the caller's fs operation map the error.
+    }
+  }
+}
+
+/** Resolve rel against root, rejecting escapes, absolute paths, and symlinked-dir traversal. Returns abs. */
 export function assertInsideRoot(root: string, rel: string): string {
   if (rel.startsWith("/") || /^[A-Za-z]:[\\/]/.test(rel)) throw new PathEscapeError(rel);
-  const abs = resolve(root, rel);
-  if (abs !== root && !abs.startsWith(root + sep)) throw new PathEscapeError(rel);
+  const rootAbs = resolve(root);
+  const abs = resolve(rootAbs, rel);
+  if (abs !== rootAbs && !abs.startsWith(rootAbs + sep)) throw new PathEscapeError(rel);
+  assertNoSymlinkedDirectorySegment(rootAbs, rel);
   return abs;
 }
 
