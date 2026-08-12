@@ -232,10 +232,17 @@ export function Composer({
   }, [mention?.query]);
 
   const { data: mentionData } = useFileSearch(snapshot?.cwd, debouncedMentionQuery, mentionMode);
+  // placeholderData keeps the previous query's results in flight. Only use
+  // them when they resolve the query currently being edited, otherwise a fast
+  // Enter/Tab could commit a path from a stale query.
   const mentionMatches = useMemo(
-    () => (mentionMode ? (mentionData?.matches ?? []) : []),
-    [mentionMode, mentionData],
+    () => (mentionMode && mentionData?.query === mention?.query ? (mentionData?.matches ?? []) : []),
+    [mentionMode, mentionData, mention?.query],
   );
+  // Render and keyboard completion must agree on the selected item; clamp to
+  // the visible range so a shrinking result set can never select a stale index.
+  const safeMentionIndex =
+    mentionMatches.length > 0 ? Math.min(activeMentionIndex, mentionMatches.length - 1) : 0;
 
   useEffect(() => {
     setActiveMentionIndex(0);
@@ -247,7 +254,7 @@ export function Composer({
 
   const completeMention = (match: { path: string; type: "dir" | "file" }) => {
     const currentCaret = textareaRef.current?.selectionStart ?? caret;
-    const currentMention = extractMentionQuery(text, currentCaret) ?? mention;
+    const currentMention = extractMentionQuery(text, currentCaret);
     if (!currentMention) return;
     const insert = `@${match.path}${match.type === "dir" ? "/" : ""} `;
     const { next, caret: nextCaret } = replaceMentionToken(text, currentMention.start, currentCaret, insert);
@@ -324,7 +331,7 @@ export function Composer({
         {mentionMode && (
           <FileMentionPalette
             matches={mentionMatches}
-            activeIndex={Math.min(activeMentionIndex, Math.max(0, mentionMatches.length - 1))}
+            activeIndex={safeMentionIndex}
             partial={mentionData?.partial}
             onSelect={completeMention}
           />
@@ -393,17 +400,17 @@ export function Composer({
               if (mentionMode && !e.nativeEvent.isComposing) {
                 if (e.key === "ArrowDown") {
                   e.preventDefault();
-                  setActiveMentionIndex((index) => Math.min(index + 1, Math.max(0, mentionMatches.length - 1)));
+                  setActiveMentionIndex(Math.min(safeMentionIndex + 1, Math.max(0, mentionMatches.length - 1)));
                   return;
                 }
                 if (e.key === "ArrowUp") {
                   e.preventDefault();
-                  setActiveMentionIndex((index) => Math.max(index - 1, 0));
+                  setActiveMentionIndex(Math.max(safeMentionIndex - 1, 0));
                   return;
                 }
-                if ((e.key === "Tab" || e.key === "Enter") && mentionMatches[activeMentionIndex]) {
+                if ((e.key === "Tab" || e.key === "Enter") && mentionMatches[safeMentionIndex]) {
                   e.preventDefault();
-                  completeMention(mentionMatches[activeMentionIndex]!);
+                  completeMention(mentionMatches[safeMentionIndex]!);
                   return;
                 }
                 if (e.key === "Enter") {
