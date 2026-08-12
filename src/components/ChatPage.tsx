@@ -122,10 +122,13 @@ export function ChatPage() {
     onSwipeRight: requestOpenSessionsDrawer,
   });
 
-  // Right edge → left swipe opens the files drawer (mirrors the sessions gesture)
+  // Right edge → left swipe opens the files drawer (mirrors the sessions gesture).
+  // Always enabled: the gesture is touch-only (mobile), so the desktop docked
+  // panel state must not disable it — otherwise docking on desktop then
+  // shrinking to a mobile width leaves the drawer unreachable by swipe.
   const filesPanelOpen = useFilesPanelOpen();
   const openFilesDrawer = useCallback(() => requestOpenFilesDrawer(), []);
-  useRightEdgeSwipe({ enabled: !filesPanelOpen, onSwipeLeft: openFilesDrawer });
+  useRightEdgeSwipe({ enabled: true, onSwipeLeft: openFilesDrawer });
 
   useEffect(() => {
     if (!commandIntent) return;
@@ -143,6 +146,11 @@ export function ChatPage() {
       chatClient.requestComposerFocus();
     }
   }, [commandIntent, navigate]);
+
+  // The header files button toggles the docked panel on md+ and opens the
+  // overlay drawer below. aria-pressed only describes the desktop toggle, so
+  // on mobile it stays unset (the drawer has no pressed state).
+  const isDesktop = window.matchMedia("(min-width: 768px)").matches;
 
   // #root is the flex/dvh shell; fill it (no position:fixed — iOS 26 safe).
   return (
@@ -185,7 +193,7 @@ export function ChatPage() {
             }}
             aria-label={t("openFiles")}
             title={t("openFiles")}
-            aria-pressed={filesPanelOpen}
+            aria-pressed={isDesktop ? filesPanelOpen : undefined}
             className="flex size-9 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink"
           >
             <svg viewBox="0 0 24 24" className="size-5 fill-none stroke-current stroke-[1.8]" aria-hidden>

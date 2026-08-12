@@ -184,7 +184,16 @@ function TreeDir({
 }
 
 /** Shared tree content (desktop sidebar + mobile drawer), rooted at the active tab's cwd. */
-export function FileTreePanel({ onClose, onPickFile }: { onClose?: () => void; onPickFile?: () => void }) {
+export function FileTreePanel({
+  docked,
+  onClose,
+  onPickFile,
+}: {
+  /** Desktop docked sidebar (renders a plain h2). Drawer renders Dialog.Title. */
+  docked?: boolean;
+  onClose?: () => void;
+  onPickFile?: () => void;
+}) {
   const t = useT();
   const { snapshot } = useChat();
   const cwd = snapshot?.cwd;
@@ -194,9 +203,15 @@ export function FileTreePanel({ onClose, onPickFile }: { onClose?: () => void; o
   return (
     <>
       <div className="flex items-center justify-between gap-1 px-3 py-2.5 pt-[calc(0.75rem+env(safe-area-inset-top))] md:pt-2.5">
-        <h2 className="min-w-0 flex-1 truncate px-1 text-[15px] font-semibold tracking-tight text-ink" title={cwd}>
-          {rootQuery.data?.root ?? t("files")}
-        </h2>
+        {docked ? (
+          <h2 className="min-w-0 flex-1 truncate px-1 text-[15px] font-semibold tracking-tight text-ink" title={cwd}>
+            {rootQuery.data?.root ?? t("files")}
+          </h2>
+        ) : (
+          <Dialog.Title className="min-w-0 flex-1 truncate px-1 text-[15px] font-semibold tracking-tight text-ink" title={cwd}>
+            {rootQuery.data?.root ?? t("files")}
+          </Dialog.Title>
+        )}
         <div className="flex items-center gap-0.5">
           <button
             type="button"
@@ -241,7 +256,7 @@ export function FilesSidebar() {
   if (!open) return null;
   return (
     <aside className="hidden h-full min-h-0 w-64 shrink-0 flex-col overflow-hidden bg-sidebar md:flex">
-      <FileTreePanel onClose={() => setFilesPanelOpen(false)} />
+      <FileTreePanel docked onClose={() => setFilesPanelOpen(false)} />
     </aside>
   );
 }
