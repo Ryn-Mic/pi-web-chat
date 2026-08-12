@@ -145,13 +145,29 @@ export function Composer({
     setComposerDraft(tabKey, { text, images });
   }, [tabKey, text, images]);
 
-  // Inject the forked message text into the composer
+  // Inject text into the composer: "replace" refills (fork, reuse), "insert"
+  // splices at the caret (file reference from the tree panel).
   useEffect(() => {
-    if (injectText !== null) {
-      setText(injectText);
-      chatClient.consumeInjectText();
-      textareaRef.current?.focus();
+    if (injectText === null) return;
+    chatClient.consumeInjectText();
+    const el = textareaRef.current;
+    if (injectText.mode === "replace") {
+      setText(injectText.text);
+      el?.focus();
+      return;
     }
+    if (!el) {
+      setText((prev) => prev + injectText.text);
+      return;
+    }
+    const start = el.selectionStart ?? text.length;
+    const end = el.selectionEnd ?? text.length;
+    setText((prev) => prev.slice(0, start) + injectText.text + prev.slice(end));
+    const caret = start + injectText.text.length;
+    el.focus();
+    requestAnimationFrame(() => {
+      el.selectionStart = el.selectionEnd = caret;
+    });
   }, [injectText]);
 
   // Focus the input on new session etc.
