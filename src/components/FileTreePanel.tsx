@@ -40,27 +40,68 @@ function TreeNodeRow({
   const indent = { paddingLeft: `${depth * 14 + 10}px` };
 
   if (node.type === "dir") {
+    const expandable = node.hasChildren === true;
+
+    if (node.inaccessible) {
+      return (
+        <div>
+          <button
+            type="button"
+            style={indent}
+            aria-disabled="true"
+            onClick={() => {
+              // Inaccessible: no expansion or child fetch; aria-disabled keeps it focusable.
+            }}
+            title={t("inaccessible")}
+            className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] cursor-not-allowed text-faint transition-colors"
+          >
+            <span className="size-3 shrink-0" aria-hidden />
+            {/* nf-fa-folder_o */}
+            <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
+              {"\uf114"}
+            </span>
+            <span className="truncate">{node.name}</span>
+            <span className="sr-only">— {t("inaccessible")}</span>
+          </button>
+        </div>
+      );
+    }
+
+    if (expandable) {
+      return (
+        <div>
+          <button
+            type="button"
+            style={indent}
+            onClick={() => toggleTreeDirExpanded(cwd, node.path)}
+            title={node.path}
+            aria-expanded={expanded}
+            className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] text-muted transition-colors hover:bg-hover hover:text-ink"
+          >
+            <ChevronIcon expanded={expanded} />
+            {/* nf-fa-folder_o / folder_open_o */}
+            <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
+              {expanded ? "\uf115" : "\uf114"}
+            </span>
+            <span className="truncate">{node.name}</span>
+          </button>
+          {expanded && <TreeDir cwd={cwd} path={node.path} depth={depth + 1} onPickFile={onPickFile} />}
+        </div>
+      );
+    }
+
+    // Empty dir (hasChildren === false): folder/name only, not an expandable action.
     return (
-      <div>
-        <button
-          type="button"
-          style={indent}
-          disabled={node.inaccessible}
-          onClick={() => toggleTreeDirExpanded(cwd, node.path)}
-          title={node.inaccessible ? t("inaccessible") : node.path}
-          aria-expanded={node.inaccessible ? undefined : expanded}
-          className={`flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] transition-colors ${
-            node.inaccessible ? "cursor-not-allowed text-faint" : "text-muted hover:bg-hover hover:text-ink"
-          }`}
-        >
-          {node.inaccessible ? <span className="size-3 shrink-0" aria-hidden /> : <ChevronIcon expanded={expanded} />}
-          {/* nf-fa-folder_o / folder_open_o */}
-          <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
-            {expanded ? "\uf115" : "\uf114"}
-          </span>
-          <span className="truncate">{node.name}</span>
-        </button>
-        {expanded && !node.inaccessible && <TreeDir cwd={cwd} path={node.path} depth={depth + 1} onPickFile={onPickFile} />}
+      <div
+        style={indent}
+        className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] text-muted"
+      >
+        <span className="size-3 shrink-0" aria-hidden />
+        {/* nf-fa-folder_o */}
+        <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
+          {"\uf114"}
+        </span>
+        <span className="truncate">{node.name}</span>
       </div>
     );
   }
