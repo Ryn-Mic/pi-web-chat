@@ -103,6 +103,42 @@ export interface UIForkPoint {
   text: string;
 }
 
+/** One entry in a project directory listing (single level). */
+export interface UITreeNode {
+  name: string;
+  /** Path relative to the project root (POSIX separators) */
+  path: string;
+  type: "dir" | "file";
+  /** Whether a dir has displayable children (drives the expand chevron) */
+  hasChildren?: boolean;
+  /** Dir exists but is unreadable (EACCES) */
+  inaccessible?: boolean;
+}
+
+export interface UITreeResponse {
+  /** Project root, ~-shortened for display */
+  root: string;
+  /** The listed directory, relative ("" = root) */
+  path: string;
+  nodes: UITreeNode[];
+  truncated?: boolean;
+}
+
+/** A file/dir hit from project-wide search. */
+export interface UIFileMatch {
+  name: string;
+  path: string;
+  type: "dir" | "file";
+}
+
+export interface UIFileSearchResponse {
+  root: string;
+  query: string;
+  matches: UIFileMatch[];
+  /** Walk hit its safety cap — results may be incomplete */
+  partial?: boolean;
+}
+
 export interface UIExtensionInfo {
   /** Display name (filename or in-package path) */
   name: string;

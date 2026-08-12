@@ -50,6 +50,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "*",
+    "ignore": "^7.0.6",
     "qrcode": "^1.5.4",
     "shiki": "^3.23.0",
     "streamdown": "^2.5.0",
