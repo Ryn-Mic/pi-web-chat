@@ -41,6 +41,15 @@ export const ja: Messages = {
   closeSidebar: "サイドバーを閉じる",
   closeSessionTab: "セッションタブを閉じる",
 
+  files: "ファイル",
+  openFiles: "ファイルパネルを開く",
+  closeFiles: "ファイルパネルを閉じる",
+  refreshTree: "更新",
+  emptyDirectory: "空のディレクトリ",
+  treeLoadError: "読み込み失敗 — タップで再試行",
+  treeTruncated: "最初の1000件を表示中",
+  inaccessible: "アクセス権なし",
+
   sendMessage: "メッセージを送信",
   streamingPlaceholder: "ストリーミング中…（送信でステアリング）",
   attachImage: "画像を添付",

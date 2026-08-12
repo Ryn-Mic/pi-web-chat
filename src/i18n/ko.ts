@@ -41,6 +41,15 @@ export const ko: Messages = {
   closeSidebar: "사이드바 닫기",
   closeSessionTab: "세션 탭 닫기",
 
+  files: "파일",
+  openFiles: "파일 패널 열기",
+  closeFiles: "파일 패널 닫기",
+  refreshTree: "새로고침",
+  emptyDirectory: "빈 디렉터리",
+  treeLoadError: "불러오기 실패 — 탭하여 재시도",
+  treeTruncated: "처음 1000개만 표시 중",
+  inaccessible: "접근 권한 없음",
+
   sendMessage: "메시지 보내기",
   streamingPlaceholder: "스트리밍 중… (보내면 steering 됩니다)",
   attachImage: "이미지 첨부",

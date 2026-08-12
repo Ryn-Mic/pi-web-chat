@@ -42,6 +42,15 @@ export const zh: Messages = {
   closeSidebar: "关闭侧边栏",
   closeSessionTab: "关闭会话标签",
 
+  files: "文件",
+  openFiles: "打开文件面板",
+  closeFiles: "关闭文件面板",
+  refreshTree: "刷新",
+  emptyDirectory: "空目录",
+  treeLoadError: "加载失败，点击重试",
+  treeTruncated: "仅显示前 1000 条",
+  inaccessible: "无访问权限",
+
   sendMessage: "发送消息",
   streamingPlaceholder: "流式输出中…（发送可进行引导）",
   attachImage: "附加图片",

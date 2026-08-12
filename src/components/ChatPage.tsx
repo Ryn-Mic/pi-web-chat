@@ -1,7 +1,8 @@
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { chatClient, useChat } from "../lib/chat";
-import { requestOpenSessionsDrawer } from "../lib/drawer";
+import { requestOpenFilesDrawer, requestOpenSessionsDrawer } from "../lib/drawer";
+import { setFilesPanelOpen, useFilesPanelOpen } from "../lib/filetree";
 import { useT } from "../lib/i18n";
 import {
   getLastSessionId,
@@ -10,9 +11,10 @@ import {
   useResumeEnabled,
 } from "../lib/resume";
 import { useSidebarPinned } from "../lib/sidebar";
-import { useLeftEdgeSwipe } from "../lib/useEdgeSwipe";
+import { useLeftEdgeSwipe, useRightEdgeSwipe } from "../lib/useEdgeSwipe";
 import { Composer } from "./Composer";
 import { ExtensionUIHost } from "./ExtensionUIHost";
+import { FilesDrawer, FilesSidebar } from "./FileTreePanel";
 import { ProjectBadge } from "./ProjectBadge";
 import { MessageList } from "./MessageList";
 import { SessionTabs } from "./SessionTabs";
@@ -120,6 +122,11 @@ export function ChatPage() {
     onSwipeRight: requestOpenSessionsDrawer,
   });
 
+  // Right edge → left swipe opens the files drawer (mirrors the sessions gesture)
+  const filesPanelOpen = useFilesPanelOpen();
+  const openFilesDrawer = useCallback(() => requestOpenFilesDrawer(), []);
+  useRightEdgeSwipe({ enabled: !filesPanelOpen, onSwipeLeft: openFilesDrawer });
+
   useEffect(() => {
     if (!commandIntent) return;
     if (commandIntent.action === "open_settings") {
@@ -166,6 +173,29 @@ export function ChatPage() {
             />
             <ProjectBadge cwd={snapshot?.cwd} />
           </div>
+          <button
+            type="button"
+            onClick={() => {
+              // Desktop toggles the docked panel; mobile opens the overlay drawer
+              if (window.matchMedia("(min-width: 768px)").matches) {
+                setFilesPanelOpen(!filesPanelOpen);
+              } else {
+                requestOpenFilesDrawer();
+              }
+            }}
+            aria-label={t("openFiles")}
+            title={t("openFiles")}
+            aria-pressed={filesPanelOpen}
+            className="flex size-9 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink"
+          >
+            <svg viewBox="0 0 24 24" className="size-5 fill-none stroke-current stroke-[1.8]" aria-hidden>
+              <path
+                d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6Z"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
           <button
             type="button"
             onClick={() => {
@@ -279,6 +309,8 @@ export function ChatPage() {
         )}
         <ExtensionUIHost />
       </div>
+      <FilesSidebar />
+      <FilesDrawer />
     </div>
   );
 }
