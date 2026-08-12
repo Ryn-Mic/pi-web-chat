@@ -14,7 +14,9 @@
 
 ## 前置条件（执行前必读）
 
-- **工作区在途改动（WIP）**：执行开始时若 `git status` 仍有未提交改动（0.1.64–0.1.66 断线修复系列，涉及 `src/lib/chat.ts`、`src/components/Composer.tsx`、`server/index.ts`、`shared/protocol.ts` 等——与本计划修改同一批文件），**必须先由用户确认：提交 WIP 或 stash**，再开始任务 1。本计划所有"修改现有文件"的锚点代码块基于已提交状态书写；行号可能漂移，以代码块内容定位。
+- **工作区在途改动（WIP）**：0.1.64–0.1.66 断线修复系列已提交为 `0ca152c`；本计划在隔离分支 `feature/session-project-tree` 执行。
+- **起飞前审查裁定（2026-08-13，已由用户批准）**：下列裁定优先于任务内旧示例：测试必须用 `mkdtempSync(tmpdir())` 隔离目录并清理；API 冒烟先用 access token 登录取得 session token；insert 模式无 textarea 时追加而非替换；`expandedByCwd` 显式声明 `Record<string, string[]>`；`FilesSidebar` 是最外层 flex 的直接子级；Query data 先做空值保护；mention 优先于 command palette，点击完成时以 textarea 最新 selection 为准；i18n 增加 `openFiles`；发布 commit 使用实际版本号。
+- `.gitignore` 已包含 `.worktrees/`，实现工作区为 `/Users/ryn/Documents/tmp/pi-web-chat/.worktrees/session-project-tree`。
 - 全程遵守仓库规则（AGENTS.md）：任务 9 统一做 patch 版本 +1 与 `release-notes.json`。
 - commit 信息沿用仓库中文 Conventional Commits 风格（如 `feat(文件树): …`）。
 - 每任务结束后运行 `npm run typecheck`（涉及 TS 改动时）。
@@ -67,18 +69,25 @@ import assert from "node:assert/strict";
 import {
   chmodSync,
   mkdirSync,
+  mkdtempSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import { listDir, PathEscapeError } from "../server/files.ts";
 
-const root = "/tmp/pi-files-test";
+let root = "";
+
+afterEach(() => {
+  if (root) rmSync(root, { recursive: true, force: true });
+  root = "";
+});
 
 function fixture() {
-  rmSync(root, { recursive: true, force: true });
+  root = mkdtempSync(join(tmpdir(), "pi-files-test-"));
   mkdirSync(join(root, ".git"), { recursive: true });
   mkdirSync(join(root, "node_modules", "dep"), { recursive: true });
   mkdirSync(join(root, "dist"), { recursive: true });
@@ -316,7 +325,7 @@ test("walkProject: cap marks partial", () => {
 test("searchFiles: ranking tiers — basename prefix > basename substring > path substring", () => {
   fixture();
   const { matches } = searchFiles(root, "utils", 50);
-  // tier 0: dir "utils" (path shorter) then file "utils.ts"; tier 2: "src/utils.ts"? no — name hit already tier 0
+  // tier 0: root dir "utils" (shorter path) then file "src/utils.ts" (same basename-prefix tier)
   assert.deepEqual(matches.map((m) => m.path), ["utils", "src/utils.ts"]);
 });
 
@@ -606,14 +615,16 @@ d) `protocol.ts` 的类型 import 补充到 `server/index.ts` 顶部既有 impor
 - [ ] **步骤 4：手动冒烟（curl）**
 
 ```bash
-npm run dev:server   # 另开终端；token 见 ~/.pi/web-chat/token
-TOKEN=$(cat ~/.pi/web-chat/token)
+npm run dev:server   # 另开终端
+ACCESS_TOKEN=$(cat ~/.pi/web-chat/token)
+LOGIN_BODY=$(node -e 'console.log(JSON.stringify({token: process.argv[1]}))' "$ACCESS_TOKEN")
+SESSION_TOKEN=$(curl -s -X POST -H 'content-type: application/json' --data "$LOGIN_BODY" http://127.0.0.1:3141/api/auth/login | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).sessionToken')
 # 已知项目（用本仓库或 ~/.pi/web-chat）：
-curl -s "http://127.0.0.1:3141/api/tree?cwd=$(pwd)&path=&token=$TOKEN" | head -c 400
-curl -s "http://127.0.0.1:3141/api/files/search?cwd=$(pwd)&q=chat&token=$TOKEN" | head -c 400
+curl -s "http://127.0.0.1:3141/api/tree?cwd=$(pwd)&path=&token=$SESSION_TOKEN" | head -c 400
+curl -s "http://127.0.0.1:3141/api/files/search?cwd=$(pwd)&q=chat&token=$SESSION_TOKEN" | head -c 400
 # 反例：
-curl -s -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:3141/api/tree?cwd=/etc&token=$TOKEN"   # 预期 403
-curl -s -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:3141/api/tree?cwd=$(pwd)&path=../..&token=$TOKEN"  # 预期 400
+curl -s -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:3141/api/tree?cwd=/etc&token=$SESSION_TOKEN"   # 预期 403
+curl -s -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:3141/api/tree?cwd=$(pwd)&path=../..&token=$SESSION_TOKEN"  # 预期 400
 ```
 
 预期：两个正向请求返回 JSON（`root` 为 `~` 缩写）；反例分别为 403/400。
@@ -674,9 +685,13 @@ d) `ChatWorkspaceClient`（`refillComposer` 透传旁）新增：
     if (injectText === null) return;
     chatClient.consumeInjectText();
     const el = textareaRef.current;
-    if (injectText.mode === "replace" || !el) {
+    if (injectText.mode === "replace") {
       setText(injectText.text);
       el?.focus();
+      return;
+    }
+    if (!el) {
+      setText((prev) => prev + injectText.text);
       return;
     }
     const start = el.selectionStart ?? text.length;
@@ -764,7 +779,8 @@ function readExpanded(): Record<string, string[]> {
 }
 
 let panelOpen = typeof window !== "undefined" ? readPanelOpen() : false;
-let expandedByCwd = typeof window !== "undefined" ? readExpanded() : {};
+let expandedByCwd: Record<string, string[]> =
+  typeof window !== "undefined" ? readExpanded() : {};
 
 function emit() {
   for (const l of listeners) l();
@@ -933,6 +949,7 @@ git commit -m "feat(文件树): 客户端基础设施（tree hooks/面板状态/
 | key | en | zh | ko | ja |
 |-----|----|----|----|----|
 | `files` | Files | 文件 | 파일 | ファイル |
+| `openFiles` | Open files | 打开文件面板 | 파일 패널 열기 | ファイルパネルを開く |
 | `closeFiles` | Close files | 关闭文件面板 | 파일 패널 닫기 | ファイルパネルを閉じる |
 | `refreshTree` | Refresh | 刷新 | 새로고침 | 更新 |
 | `emptyDirectory` | Empty directory | 空目录 | 빈 디렉터리 | 空のディレクトリ |
@@ -1065,7 +1082,8 @@ function TreeDir({
       </button>
     );
   }
-  if (data.nodes.length === 0) {
+  const nodes = data?.nodes ?? [];
+  if (nodes.length === 0) {
     return (
       <div style={indent} className="py-1.5 text-[12px] text-faint">
         {t("emptyDirectory")}
@@ -1074,10 +1092,10 @@ function TreeDir({
   }
   return (
     <>
-      {data.nodes.map((node) => (
+      {nodes.map((node) => (
         <TreeNodeRow key={node.path} cwd={cwd} node={node} depth={depth} onPickFile={onPickFile} />
       ))}
-      {data.truncated && (
+      {data?.truncated && (
         <div style={indent} className="py-1.5 text-[11px] text-faint">
           {t("treeTruncated")}
         </div>
@@ -1198,8 +1216,8 @@ c) 头部 "+" 按钮**左侧**插入切换按钮（folder 图标样式对齐 "+"
                 requestOpenFilesDrawer();
               }
             }}
-            aria-label={t("files")}
-            title={t("files")}
+            aria-label={t("openFiles")}
+            title={t("openFiles")}
             aria-pressed={filesPanelOpen}
             className="flex size-9 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink"
           >
@@ -1213,7 +1231,7 @@ c) 头部 "+" 按钮**左侧**插入切换按钮（folder 图标样式对齐 "+"
           </button>
 ```
 
-d) 根布局挂载宿主（主聊天 `div` 之后）：
+d) 根布局挂载宿主：`FilesSidebar` 必须是最外层 flex 容器的直接子级，位于主聊天容器关闭标签之后、外层 root 关闭标签之前；`FilesDrawer` 同样放在外层直接子级：
 
 ```tsx
       <FilesSidebar />
@@ -1443,8 +1461,9 @@ c) mention 派生态（`commandPaletteOpen` 计算之后）：
 
 ```tsx
   const mention = useMemo(() => extractMentionQuery(text, caret), [text, caret]);
-  // Mention wins over the command palette: caret context beats whole-text context
-  const mentionMode = mention !== null && !mentionDismissed && !commandPaletteOpen;
+  // Mention wins over the command palette: derive it independently, then gate commandPaletteOpen with !mentionMode.
+  const mentionMode = mention !== null && !mentionDismissed;
+  // Move the existing commandPaletteOpen derivation below this line and append `&& !mentionMode`.
 
   useEffect(() => {
     const id = window.setTimeout(() => setDebouncedMentionQuery(mention?.query ?? ""), 150);
@@ -1462,9 +1481,11 @@ c) mention 派生态（`commandPaletteOpen` 计算之后）：
   }, [mention?.query]);
 
   const completeMention = (match: { path: string; type: "dir" | "file" }) => {
-    if (!mention) return;
+    const currentCaret = textareaRef.current?.selectionStart ?? caret;
+    const currentMention = extractMentionQuery(text, currentCaret) ?? mention;
+    if (!currentMention) return;
     const insert = `@${match.path}${match.type === "dir" ? "/" : ""} `;
-    const { next, caret: nextCaret } = replaceMentionToken(text, mention.start, caret, insert);
+    const { next, caret: nextCaret } = replaceMentionToken(text, currentMention.start, currentCaret, insert);
     setText(next);
     setMentionDismissed(true);
     requestAnimationFrame(() => {
@@ -1565,7 +1586,7 @@ npm version patch --no-git-tag-version
 
 ```bash
 git add package.json package-lock.json release-notes.json
-git commit -m "chore(发布): 0.1.67 文件树与 @ 文件引用"
+git commit -m "chore(发布): <实际版本号> 文件树与 @ 文件引用"
 ```
 
 ---
