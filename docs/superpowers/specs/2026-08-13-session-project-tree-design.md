@@ -2,14 +2,14 @@
 
 ## 目标
 
-1. **目录树**：在 Web UI 中展示当前打开会话所处项目的目录树——侧栏新增"文件"标签页，懒加载浏览项目目录，点击文件把 `@相对路径` 插入输入框（Composer）。
+1. **目录树**：在 Web UI 中展示当前打开会话所处项目的目录树——入口在会话页右上角"+"左侧（桌面为右侧 docked 面板、移动为右侧抽屉），懒加载浏览项目目录，点击文件把 `@相对路径` 插入输入框（Composer）。
 2. **@ 文件引用**：Composer 中输入 `@` 触发文件选择器，`@` 后继续输入即为模糊搜索（对齐 pi TUI 的官方约定："Type `@` to fuzzy-search project files"），选中后插入 `@相对路径`。
 
 ## 决策（默认值，用户反馈已纳入）
 
 | 决策点 | 选择 | 备选（未采用原因） |
 |--------|------|---------------------|
-| 树布局 | 侧栏 `会话 \| 文件` 标签页（桌面 pinned 侧栏与移动抽屉共用 `SessionsPanel`） | 右侧独立面板（工作量约 2 倍，移动端需单独抽屉）；ProjectBadge 弹出（空间局促） |
+| 树布局 | **头部入口 + 右侧树面板**：会话页右上角"+"左侧放切换按钮；桌面（≥md）切换右侧 docked 面板，移动（<md）打开右侧 overlay 抽屉 | 侧栏标签页（用户否决）；ProjectBadge 弹出（空间局促） |
 | 多 tab 行为 | 树跟随**活跃 tab** 的项目（机制天然支持，见下节） | 同时展示所有 tab 的树（信息过载，YAGNI） |
 | 点击文件 / @ 选中 | 插入 `@相对路径` 到 Composer 光标处并聚焦 | 纯浏览（价值低）；附带文件内容（后续迭代，见"明确不做"） |
 | 目录过滤 | 硬排除 `.git`/`node_modules` + 根 `.gitignore`（新增 `ignore` 依赖） | 仅硬编码（误显被忽略文件）；不解析嵌套 .gitignore（YAGNI） |
@@ -108,15 +108,19 @@ export interface UIFileSearchResponse {
 
 ### 前端
 
-**侧栏标签切换（`SessionsDrawer.tsx` 内 `SessionsPanel`）**
-- 头部标题区改为 `会话 | 文件` 分段切换；选中态存 localStorage（沿用 `src/lib/sidebar.ts` 的 useSyncExternalStore 模式）。
-- 桌面 docked 侧栏与移动抽屉共用此面板 → 两端自动获得能力；移动端行高沿用现有 ≥40px 触摸目标。
+**头部入口 + 双宿主面板**
+- `ChatPage` 头部：在"+"（新建会话）按钮**左侧**新增文件树按钮（folder 图标，`size-9` 圆角按钮，样式对齐"+"按钮）。
+- 桌面（≥md）：按钮切换右侧 docked 面板 `FilesSidebar`——`<aside class="hidden md:flex w-64 bg-sidebar">` 作为 flex 兄弟挤压聊天区（镜像左侧 `SessionsSidebar` 的布局位）；开关状态持久化 localStorage（`pi-web-chat:files-panel-open`），按钮 `aria-pressed` 反映状态。
+- 移动（<md）：按钮打开右侧 overlay 抽屉 `FilesDrawer`——base-ui Dialog，镜像 `SessionsDrawer`（`inset-y-0 right-0`、`w-[82vw] max-w-xs`、translate-x 进出场动画、safe-area 处理）。另加**右缘左滑手势**打开抽屉：`useEdgeSwipe` 泛化出右缘变体（参数化 edge），经 `src/lib/drawer.ts` 同模式的事件总线（新增 `requestOpenFilesDrawer`/`onRequestOpenFilesDrawer`）触发。
+- 桌面面板开关与移动抽屉是两个独立状态，互斥于 md 断点两侧；跨断点 resize 不做状态迁移（各自保持，无碍）。
+- 与会话侧栏的 pin/dock 流程**有意不同**：文件面板无中间态（桌面点按钮直接 dock/关闭，一次点击到位），不为桌面提供 overlay 形态（YAGNI）。
+- `SessionsPanel` 不加标签切换，侧栏保持纯会话列表。
 
-**`src/components/FileTreePanel.tsx`（新，~200 行）**
-- 根行：项目路径（`snapshot.cwd`，~-缩写展示）+ 刷新按钮（按 cwd 前缀失效全部 tree query）。
+**`src/components/FileTreePanel.tsx`（新，~200 行）** —— 树内容组件，被 `FilesSidebar` 与 `FilesDrawer` 两种宿主复用（同 `SessionsPanel` 被 Sidebar/Drawer 复用的模式）
+- 顶部 chrome：标题"文件" + 项目路径（`snapshot.cwd`，~-缩写，title 显示全路径）+ 刷新按钮（按 cwd 前缀失效全部 tree query）+ 关闭按钮。
 - 目录行：chevron + 名称；点击展开/折叠；展开时拉取 `["tree", cwd, path]`（`staleTime: 0`）。
 - 展开集合按 cwd 持久化到 localStorage（新 `src/lib/filetree.ts`，沿用 sidebar.ts 模式）。
-- 文件行点击 → 把 `@相对路径` 插入 Composer 光标处（经下述 inject 机制，insert 模式）并聚焦。
+- 文件行点击 → 把 `@相对路径` 插入 Composer 光标处（经下述 inject 机制，insert 模式）并聚焦；移动端点击后顺带关闭抽屉。
 - 内联状态：加载中骨架行、空目录提示、加载失败可重试、`truncated` 末尾提示、`inaccessible` 目录置灰。
 
 **Composer @ 文件引用（`Composer.tsx` + 新 `FileMentionPalette.tsx`）**
@@ -135,11 +139,11 @@ export interface UIFileSearchResponse {
 **`src/lib/api.ts`**
 - `useTree(cwd, path, enabled)`、`useFileSearch(cwd, query, enabled)`、`useInvalidateTree(cwd)`。
 
-**i18n**：`en/zh/ko/ja` 四语言新增键：`files`（文件标签）、`refreshTree`、`emptyDirectory`、`treeLoadError`、`treeTruncated`、`inaccessible`、`mentionNoFiles`（无匹配文件）等。
+**i18n**：`en/zh/ko/ja` 四语言新增键：`files`（文件）、`openFiles`/`closeFiles`、`refreshTree`、`emptyDirectory`、`treeLoadError`、`treeTruncated`、`inaccessible`、`mentionNoFiles`（无匹配文件）等。
 
 ## 数据流
 
-**树**：ChatPage 已有 `snapshot.cwd`（WS 连接即推送，草稿会话也有）→ 切到"文件"标签 → 拉根层 → 展开目录 → `GET /api/tree?cwd&path` → 校验 cwd → `listDir` 返回单层。tab 切换 → `snapshot.cwd` 变 → query key 变 → 自动换根。
+**树**：ChatPage 已有 `snapshot.cwd`（WS 连接即推送，草稿会话也有）→ 头部按钮打开文件面板 → 拉根层 → 展开目录 → `GET /api/tree?cwd&path` → 校验 cwd → `listDir` 返回单层。tab 切换 → `snapshot.cwd` 变 → query key 变 → 自动换根。
 
 **@ 引用**：Composer 光标进入 `@` token → `extractMentionQuery` 命中 → 弹层 → 输入经 debounce → `GET /api/files/search?cwd&q` → 选中 → 本地替换文本（纯前端，无额外往返）。
 
