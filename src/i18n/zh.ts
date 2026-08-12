@@ -50,6 +50,8 @@ export const zh: Messages = {
   treeLoadError: "加载失败，点击重试",
   treeTruncated: "仅显示前 1000 条",
   inaccessible: "无访问权限",
+  mentionNoFiles: "无匹配文件",
+  mentionPartial: "结果可能不全，请继续输入",
 
   sendMessage: "发送消息",
   streamingPlaceholder: "流式输出中…（发送可进行引导）",

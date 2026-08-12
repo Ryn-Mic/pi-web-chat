@@ -49,6 +49,8 @@ export const ja: Messages = {
   treeLoadError: "読み込み失敗 — タップで再試行",
   treeTruncated: "最初の1000件を表示中",
   inaccessible: "アクセス権なし",
+  mentionNoFiles: "一致するファイルなし",
+  mentionPartial: "結果が不完全な可能性があります — 続けて入力",
 
   sendMessage: "メッセージを送信",
   streamingPlaceholder: "ストリーミング中…（送信でステアリング）",

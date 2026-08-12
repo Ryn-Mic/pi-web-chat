@@ -5,6 +5,7 @@ import type {
   UIModelDiscoveryRequest,
   UIModelDiscoveryResponse,
   UIExtensionsResponse,
+  UIFileSearchResponse,
   UIForkPoint,
   UIModel,
   UISessionInfo,
@@ -50,6 +51,20 @@ export function useTree(cwd: string | undefined, path: string, enabled = true) {
       ),
     enabled: enabled && !!cwd,
     staleTime: 0,
+  });
+}
+
+export function useFileSearch(cwd: string | undefined, query: string, enabled = true) {
+  return useQuery({
+    queryKey: ["file-search", cwd, query],
+    queryFn: () =>
+      fetchJson<UIFileSearchResponse>(
+        `/api/files/search?cwd=${encodeURIComponent(cwd ?? "")}&q=${encodeURIComponent(query)}`,
+      ),
+    enabled: enabled && !!cwd,
+    staleTime: 2_000,
+    // Keep previous results while the next keystroke's request is in flight
+    placeholderData: (prev) => prev,
   });
 }
 

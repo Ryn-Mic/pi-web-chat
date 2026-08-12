@@ -49,6 +49,8 @@ export const ko: Messages = {
   treeLoadError: "불러오기 실패 — 탭하여 재시도",
   treeTruncated: "처음 1000개만 표시 중",
   inaccessible: "접근 권한 없음",
+  mentionNoFiles: "일치하는 파일 없음",
+  mentionPartial: "결과가 불완전할 수 있음 — 계속 입력",
 
   sendMessage: "메시지 보내기",
   streamingPlaceholder: "스트리밍 중… (보내면 steering 됩니다)",

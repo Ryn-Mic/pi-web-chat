@@ -50,6 +50,8 @@ export type Messages = {
   treeLoadError: string;
   treeTruncated: string;
   inaccessible: string;
+  mentionNoFiles: string;
+  mentionPartial: string;
 
   // composer
   sendMessage: string;
@@ -200,6 +202,8 @@ export const en: Messages = {
   treeLoadError: "Failed to load — tap to retry",
   treeTruncated: "Showing the first 1000 entries",
   inaccessible: "No access",
+  mentionNoFiles: "No matching files",
+  mentionPartial: "Results may be incomplete — keep typing",
 
   sendMessage: "Send a message",
   streamingPlaceholder: "Streaming… (send to steer)",
