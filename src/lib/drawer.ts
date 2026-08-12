@@ -1,10 +1,11 @@
 /**
- * Session drawer open-request event bus.
+ * Drawer open-request event buses (sessions + files).
  *
- * SessionsDrawer manages the base-ui Dialog open state internally, so external
+ * Each drawer manages the base-ui Dialog open state internally, so external
  * triggers (like the edge-swipe gesture) request opening via this event.
  */
 const listeners = new Set<() => void>();
+const filesListeners = new Set<() => void>();
 
 /** Request the drawer to open (the subscribing SessionsDrawer opens) */
 export function requestOpenSessionsDrawer() {
@@ -16,5 +17,18 @@ export function onRequestOpenSessionsDrawer(listener: () => void) {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
+  };
+}
+
+/** Request the files drawer to open (header button on mobile, right-edge swipe) */
+export function requestOpenFilesDrawer() {
+  for (const l of filesListeners) l();
+}
+
+/** Subscribe to files-drawer open requests. Returns a cleanup function. */
+export function onRequestOpenFilesDrawer(listener: () => void) {
+  filesListeners.add(listener);
+  return () => {
+    filesListeners.delete(listener);
   };
 }

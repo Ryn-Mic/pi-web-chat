@@ -8,6 +8,7 @@ import type {
   UIForkPoint,
   UIModel,
   UISessionInfo,
+  UITreeResponse,
 } from "../../shared/protocol";
 import { authHeaders, setAuthStatus } from "./auth";
 
@@ -38,6 +39,24 @@ export function useSessions(enabled = true) {
 export function useInvalidateSessions() {
   const qc = useQueryClient();
   return () => qc.invalidateQueries({ queryKey: SESSIONS_QUERY_KEY });
+}
+
+export function useTree(cwd: string | undefined, path: string, enabled = true) {
+  return useQuery({
+    queryKey: ["tree", cwd, path],
+    queryFn: () =>
+      fetchJson<UITreeResponse>(
+        `/api/tree?cwd=${encodeURIComponent(cwd ?? "")}&path=${encodeURIComponent(path)}`,
+      ),
+    enabled: enabled && !!cwd,
+    staleTime: 0,
+  });
+}
+
+/** Refresh every fetched level of a project's tree (refresh button) */
+export function useInvalidateTree() {
+  const qc = useQueryClient();
+  return (cwd: string) => qc.invalidateQueries({ queryKey: ["tree", cwd] });
 }
 
 /** Delete a session (removes the file) */
