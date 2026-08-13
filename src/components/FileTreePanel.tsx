@@ -257,7 +257,7 @@ export function FileTreePanel({
 
   return (
     <>
-      <div className="flex items-center justify-between gap-1 px-3 py-2.5 pt-[calc(0.75rem+env(safe-area-inset-top))] md:pt-2.5">
+      <div className="flex items-center justify-between gap-1 px-3 py-2.5">
         {docked ? (
           <h2 className="min-w-0 flex-1 truncate px-1 text-[15px] font-semibold tracking-tight text-ink" title={cwd}>
             {rootQuery.data?.root ?? t("files")}
