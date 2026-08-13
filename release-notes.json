@@ -1,4 +1,8 @@
 {
+  "0.1.69": [
+    "新增受保护的桌面文件内容接口 /api/files/content，支持 HEAD 元数据与 If-Match 条件 GET。",
+    "收紧静态资源分发：/file-viewer/** 直接 404，非 API/viewer 导航回退 SPA，静态文件使用流式响应。"
+  ],
   "0.1.68": [
     "修复移动端文件抽屉：右缘滑动手势、Dialog.Title 可访问性标题与 aria-pressed 状态。"
   ],

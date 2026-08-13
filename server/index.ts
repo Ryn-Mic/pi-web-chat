@@ -32,6 +32,7 @@ import type {
   UITreeResponse,
 } from "../shared/protocol.ts";
 import { auth, authStartupInfo } from "./auth.ts";
+import { handleDesktopFileContent, streamStaticFile } from "./file-content.ts";
 import { listDir, PathEscapeError, searchFiles } from "./files.ts";
 import { readCustomModels, resolveIncomingApiKey, validateProviders, writeCustomModels } from "./models-config.ts";
 import { getActiveTodo, serializeMessages } from "./serialize.ts";
@@ -1396,6 +1397,10 @@ const httpServer = createServer(async (req, res) => {
     }
 
     // Project file browsing (tree + @-mention search). cwd must be a known project root.
+    if (await handleDesktopFileContent(req, res, url, { knownProjectRoots, expandHome })) {
+      return;
+    }
+
     if (url.pathname === "/api/tree" || url.pathname === "/api/files/search") {
       const root = expandHome(url.searchParams.get("cwd") ?? "");
       if (!root || !(await knownProjectRoots()).has(root)) {
@@ -1499,15 +1504,51 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
+    // Unmatched API routes
+    if (url.pathname.startsWith("/api/")) {
+      const status = req.method === "GET" || req.method === "HEAD" ? 404 : 405;
+      res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+
     // Static files (production build)
     if (existsSync(DIST_DIR)) {
-      let filePath = join(DIST_DIR, url.pathname === "/" ? "index.html" : url.pathname);
-      if (!filePath.startsWith(DIST_DIR) || !existsSync(filePath)) {
-        filePath = join(DIST_DIR, "index.html"); // SPA fallback
+      const pathname = decodeURIComponent(url.pathname);
+      const viewerPrefix = "/file-viewer/";
+      const isViewer = pathname.startsWith(viewerPrefix);
+
+      const filePath = resolve(DIST_DIR, "." + pathname);
+      if (!filePath.startsWith(resolve(DIST_DIR) + "/")) {
+        res.writeHead(403, { "content-type": "text/plain" });
+        res.end("Forbidden");
+        return;
       }
-      const ext = extname(filePath);
-      res.writeHead(200, { "content-type": MIME[ext] ?? "application/octet-stream" });
-      res.end(readFileSync(filePath));
+
+      if (isViewer) {
+        if (existsSync(filePath) && statSync(filePath).isFile()) {
+          streamStaticFile(req, res, filePath, { cacheControl: "max-age=3600, must-revalidate" });
+        } else {
+          res.writeHead(404, { "content-type": "text/plain" });
+          res.end("Not found");
+        }
+        return;
+      }
+
+      if (existsSync(filePath) && statSync(filePath).isFile()) {
+        const ext = extname(filePath).toLowerCase();
+        const cacheControl = ext === ".html" ? "no-cache" : undefined;
+        streamStaticFile(req, res, filePath, cacheControl ? { cacheControl } : undefined);
+        return;
+      }
+
+      // SPA fallback for non-API, non-viewer navigation
+      const indexHtml = join(DIST_DIR, "index.html");
+      res.writeHead(200, {
+        "content-type": "text/html",
+        "cache-control": "no-cache",
+      });
+      res.end(readFileSync(indexHtml));
       return;
     }
 

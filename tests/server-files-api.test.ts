@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  ftruncateSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -112,6 +122,84 @@ test("file APIs require a session token, authorize known cwd, and reject unsafe 
   assert.equal(unauthorized.status, 401);
 
   const sessionToken = await login(baseUrl);
+
+  const contentUrl = `${baseUrl}/api/files/content?cwd=${encodeURIComponent(root)}&path=${encodeURIComponent("README.md")}`;
+  const head = await fetch(contentUrl, {
+    method: "HEAD",
+    headers: { authorization: `Bearer ${sessionToken}` },
+  });
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), "");
+  assert.equal(head.headers.get("content-length"), "5");
+  assert.equal(head.headers.get("cache-control"), "private, no-store");
+  const etag = head.headers.get("etag");
+  assert.ok(etag);
+
+  const body = await fetch(contentUrl, {
+    headers: { authorization: `Bearer ${sessionToken}`, "if-match": etag },
+  });
+  assert.equal(body.status, 200);
+  assert.equal(await body.text(), "hello");
+
+  writeFileSync(join(root, "README.md"), "changed");
+  const changed = await fetch(contentUrl, {
+    headers: { authorization: `Bearer ${sessionToken}`, "if-match": etag },
+  });
+  assert.equal(changed.status, 409);
+
+  const getNoIfMatch = await fetch(contentUrl, {
+    headers: { authorization: `Bearer ${sessionToken}` },
+  });
+  assert.equal(getNoIfMatch.status, 409);
+
+  const postContent = await fetch(contentUrl, {
+    method: "POST",
+    headers: { authorization: `Bearer ${sessionToken}` },
+  });
+  assert.equal(postContent.status, 405);
+
+  const unknownCwd = await fetch(
+    `${baseUrl}/api/files/content?cwd=${encodeURIComponent("/etc")}&path=${encodeURIComponent("passwd")}`,
+    { headers: { authorization: `Bearer ${sessionToken}` } },
+  );
+  assert.equal(unknownCwd.status, 403);
+
+  const missingFile = await fetch(
+    `${baseUrl}/api/files/content?cwd=${encodeURIComponent(root)}&path=${encodeURIComponent("missing.txt")}`,
+    { headers: { authorization: `Bearer ${sessionToken}`, "if-match": '"x"' } },
+  );
+  assert.equal(missingFile.status, 404);
+
+  const hardExcludedFile = await fetch(
+    `${baseUrl}/api/files/content?cwd=${encodeURIComponent(root)}&path=${encodeURIComponent(".git/config")}`,
+    { headers: { authorization: `Bearer ${sessionToken}`, "if-match": '"x"' } },
+  );
+  assert.equal(hardExcludedFile.status, 404);
+
+  const bigPath = join(root, "big.bin");
+  const bigFd = openSync(bigPath, "w");
+  try {
+    ftruncateSync(bigFd, 101 * 1024 * 1024);
+  } finally {
+    closeSync(bigFd);
+  }
+  const tooLarge = await fetch(
+    `${baseUrl}/api/files/content?cwd=${encodeURIComponent(root)}&path=${encodeURIComponent("big.bin")}`,
+    { headers: { authorization: `Bearer ${sessionToken}`, "if-match": '"x"' } },
+  );
+  assert.equal(tooLarge.status, 413);
+  rmSync(bigPath, { force: true });
+
+  const unknownApi = await fetch(`${baseUrl}/api/nope`, {
+    headers: { authorization: `Bearer ${sessionToken}` },
+  });
+  assert.equal(unknownApi.status, 404);
+  assert.equal(unknownApi.headers.get("content-type"), "application/json");
+
+  const missingViewerAsset = await fetch(`${baseUrl}/file-viewer/nope.wasm`);
+  assert.equal(missingViewerAsset.status, 404);
+  assert.notEqual(await missingViewerAsset.text(), "fallback");
+
   const tree = await getJson(baseUrl, `/api/tree?cwd=${encodeURIComponent(root)}&path=`, sessionToken);
   assert.equal(tree.status, 200);
   assert.deepEqual(tree.body, {
