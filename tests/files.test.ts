@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   openSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -16,6 +17,7 @@ import { afterEach, test } from "node:test";
 import {
   listDir,
   openResolvedPreviewFile,
+  type OpenResolvedPreviewFileResult,
   PathEscapeError,
   PreviewTooLargeError,
   resolvePreviewFile,
@@ -237,4 +239,27 @@ test("openResolvedPreviewFile: rejects a file replaced after metadata resolution
   const meta = resolvePreviewFile(root, "race.txt");
   writeFileSync(join(root, "race.txt"), "after-change");
   assert.throws(() => openResolvedPreviewFile(meta), { code: "ESTALE" });
+});
+
+test("openResolvedPreviewFile: rejects a directory even when stat quadruplet matches", () => {
+  fixture();
+  const dirPath = join(root, "preview-dir");
+  mkdirSync(dirPath);
+  const st = statSync(dirPath);
+  const meta = {
+    abs: dirPath,
+    realAbs: dirPath,
+    path: "preview-dir",
+    name: "preview-dir",
+    size: st.size,
+    mimeType: "application/octet-stream",
+    mtimeMs: st.mtimeMs,
+    dev: st.dev,
+    ino: st.ino,
+    etag: "",
+  };
+  assert.throws(() => {
+    const result = openResolvedPreviewFile(meta);
+    result.stream.destroy();
+  }, { code: "ESTALE" });
 });

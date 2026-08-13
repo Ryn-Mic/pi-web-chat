@@ -139,6 +139,7 @@ export function openResolvedPreviewFile(meta: ResolvedPreviewFile): OpenResolved
   try {
     const st = fstatSync(fd);
     if (
+      !st.isFile() ||
       st.dev !== meta.dev ||
       st.ino !== meta.ino ||
       st.size !== meta.size ||
