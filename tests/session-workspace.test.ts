@@ -63,6 +63,24 @@ function createWorkspace() {
   return { workspace, clients };
 }
 
+function createWorkspaceWithLifecycle(events: string[]) {
+  const clients: FakeClient[] = [];
+  const workspace = new SessionWorkspace<FakeState, FakeClient>(
+    (_, onBound) => {
+      const client = new FakeClient(onBound);
+      clients.push(client);
+      return client;
+    },
+    undefined,
+    {
+      onTabClosed: (key) => events.push(`closed:${key}`),
+      onTabsMerged: (losing, surviving) =>
+        events.push(`merged:${losing}->${surviving}`),
+    },
+  );
+  return { workspace, clients };
+}
+
 test("clears a background tab's pending focus when switching tabs", () => {
   const { workspace, clients } = createWorkspace();
 
@@ -154,4 +172,46 @@ test("only clears a composer draft when it still matches the submitted prompt", 
 
   assert.equal(getComposerDraft("tab-match").text, "");
   assert.equal(getComposerDraft("tab-changed").text, "new input");
+});
+
+test("lifecycle: regular close triggers onTabClosed", () => {
+  const events: string[] = [];
+  const { workspace } = createWorkspaceWithLifecycle(events);
+
+  workspace.open("session-a");
+  workspace.close("session-a");
+
+  assert.deepEqual(events, ["closed:session-a"]);
+});
+
+test("lifecycle: regular draft close triggers onTabClosed with the stable draft key", () => {
+  const events: string[] = [];
+  const { workspace } = createWorkspaceWithLifecycle(events);
+
+  workspace.open(null);
+  const draftKey = workspace.activeKey;
+  workspace.close(draftKey!);
+
+  assert.equal(draftKey?.startsWith("draft:"), true);
+  assert.deepEqual(events, [`closed:${draftKey}`]);
+});
+
+test("lifecycle: binding a draft to an existing session merges and removes the losing tab without onTabClosed", () => {
+  const events: string[] = [];
+  const { workspace, clients } = createWorkspaceWithLifecycle(events);
+
+  workspace.open("session-a");
+  workspace.open(null);
+  const draftKey = workspace.activeKey;
+  assert.ok(draftKey?.startsWith("draft:"));
+
+  clients[1].bind("session-a");
+
+  assert.deepEqual(events, [`merged:${draftKey}->session-a`]);
+  assert.equal(clients[1].disposed, true);
+  assert.equal(workspace.activeKey, "session-a");
+  assert.deepEqual(
+    workspace.getTabsSnapshot().map((tab) => ({ key: tab.key, sessionId: tab.sessionId })),
+    [{ key: "session-a", sessionId: "session-a" }],
+  );
 });

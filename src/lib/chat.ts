@@ -17,6 +17,10 @@ import {
 import { notifyTaskComplete } from "./browserNotifications";
 import { rememberSessionId } from "./resume";
 import {
+  clearPreviewWorkspace,
+  mergePreviewWorkspace,
+} from "./file-preview";
+import {
   SessionWorkspace,
   type WorkspaceClient,
   type WorkspaceTab,
@@ -698,6 +702,11 @@ class ChatWorkspaceClient {
       // Only the visible session should become the resume target. A background
       // draft may publish while another tab is active.
       if (active) rememberSessionId(sessionId);
+    },
+    {
+      onTabClosed: (key) => clearPreviewWorkspace(key),
+      onTabsMerged: (losing, surviving) =>
+        mergePreviewWorkspace(losing, surviving),
     },
   );
 
