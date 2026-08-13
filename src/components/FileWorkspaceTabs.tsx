@@ -8,7 +8,8 @@ import {
 import { previewIdentity, type PreviewWorkspaceState } from "../lib/file-preview";
 import { useT } from "../lib/i18n";
 
-const FILES_TAB_ID = "files";
+export const FILES_TAB_ID = "files";
+export const GIT_TAB_ID = "git";
 
 export function workspacePanelId(tabKey: string, identity: string): string {
   return `file-workspace-panel-${encodeURIComponent(tabKey)}-${encodeURIComponent(identity)}`;
@@ -35,6 +36,7 @@ export function FileWorkspaceTabs({
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
   const tabs = [
     { identity: FILES_TAB_ID, name: t("files"), title: t("files"), closeable: false },
+    { identity: GIT_TAB_ID, name: t("git"), title: t("git"), closeable: false },
     ...workspace.tabs.map((tab) => ({
       identity: previewIdentity(tab.cwd, tab.path),
       name: tab.name,
@@ -60,7 +62,7 @@ export function FileWorkspaceTabs({
   return (
     <div
       role="tablist"
-      aria-label={t("files")}
+      aria-label={t("workspace")}
       className="thin-scroll flex shrink-0 gap-1 overflow-x-auto border-b border-line bg-sidebar px-2 py-1.5"
     >
       {tabs.map((tab) => {

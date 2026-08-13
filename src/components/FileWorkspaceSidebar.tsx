@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useInvalidateGit } from "../lib/api";
 import { chatClient, useChat } from "../lib/chat";
 import {
   activatePreview,
@@ -18,7 +19,10 @@ import {
   FileWorkspaceTabs,
   workspacePanelId,
   workspaceTabId,
+  FILES_TAB_ID,
+  GIT_TAB_ID,
 } from "./FileWorkspaceTabs";
+import { GitWorkspacePanel } from "./GitWorkspacePanel";
 
 export function openWorkspacePreview(file: PreviewFileSelection): void {
   const tabKey = chatClient.activeTabKey;
@@ -32,6 +36,7 @@ export function FileWorkspaceSidebar() {
   const { snapshot } = useChat();
   const tabKey = chatClient.activeTabKey ?? "unbound";
   const workspace = usePreviewWorkspace(tabKey);
+  const invalidateGit = useInvalidateGit();
   const [refreshByIdentity, setRefreshByIdentity] = useState<Record<string, number>>({});
   const activeTab = workspace.tabs.find(
     (tab) => previewIdentity(tab.cwd, tab.path) === workspace.active,
@@ -50,6 +55,10 @@ export function FileWorkspaceSidebar() {
     ? previewIdentity(activeTab.cwd, activeTab.path)
     : "files";
   const refresh = () => {
+    if (workspace.active === GIT_TAB_ID) {
+      if (snapshot?.cwd) invalidateGit(snapshot.cwd);
+      return;
+    }
     if (!activeTab) return;
     setRefreshByIdentity((current) => ({
       ...current,
@@ -60,14 +69,15 @@ export function FileWorkspaceSidebar() {
   return (
     <aside
       className={`hidden h-full min-h-0 shrink-0 flex-col overflow-hidden border-l border-line bg-sidebar md:flex ${
-        activeTab ? "md:w-[22rem] lg:w-[min(46vw,48rem)]" : "md:w-64"
+        activeTab || workspace.active === GIT_TAB_ID ? "md:w-[22rem] lg:w-[min(46vw,48rem)]" : "md:w-64"
       }`}
     >
       <FileWorkspaceTabs
         tabKey={tabKey}
         workspace={workspace}
         onActivate={(identity) => {
-          if (identity === "files") showFilesTab(tabKey);
+          if (identity === FILES_TAB_ID) showFilesTab(tabKey);
+          else if (identity === GIT_TAB_ID) activatePreview(tabKey, GIT_TAB_ID);
           else activatePreview(tabKey, identity);
         }}
         onClose={(identity) => closePreview(tabKey, identity)}
@@ -75,14 +85,14 @@ export function FileWorkspaceSidebar() {
       />
 
       <div
-        id={workspacePanelId(tabKey, "files")}
+        id={workspacePanelId(tabKey, FILES_TAB_ID)}
         role="tabpanel"
-        aria-labelledby={workspaceTabId(tabKey, "files")}
-        hidden={workspace.active !== "files"}
+        aria-labelledby={workspaceTabId(tabKey, FILES_TAB_ID)}
+        hidden={workspace.active !== FILES_TAB_ID}
         className="min-h-0 flex-1 flex-col data-[active=true]:flex"
-        data-active={workspace.active === "files"}
+        data-active={workspace.active === FILES_TAB_ID}
       >
-        {workspace.active === "files" && (
+        {workspace.active === FILES_TAB_ID && (
           <FileTreePanel
             docked
             onClose={() => setFilesPanelOpen(false)}
@@ -90,6 +100,18 @@ export function FileWorkspaceSidebar() {
             selectedFileIdentity={selectedFileIdentity}
             cwd={snapshot?.cwd}
           />
+        )}
+      </div>
+
+      <div
+        id={workspacePanelId(tabKey, GIT_TAB_ID)}
+        role="tabpanel"
+        aria-labelledby={workspaceTabId(tabKey, GIT_TAB_ID)}
+        hidden={workspace.active !== GIT_TAB_ID}
+        className="min-h-0 flex-1"
+      >
+        {workspace.active === GIT_TAB_ID && (
+          <GitWorkspacePanel cwd={snapshot?.cwd} onPreviewFile={(file) => openWorkspacePreview({ ...file, cwd: file.cwd || snapshot?.cwd || "" })} onClose={() => setFilesPanelOpen(false)} />
         )}
       </div>
 

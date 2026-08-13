@@ -31,7 +31,11 @@ export function nextWorkspaceFocusAfterClose(
   closing: string,
 ): string {
   if (closing !== active) return active;
-  const index = ids.indexOf(closing);
+  // Fixed workspace tabs (Files and Git) are never preview reducer entries.
+  // Mirror the reducer's neighbor selection over preview tabs only.
+  const previews = ids.filter((id) => id !== "files" && id !== "git");
+  const index = previews.indexOf(closing);
   if (index === -1) return active;
-  return ids[index === 1 ? 2 : Math.max(index - 1, 0)] ?? "files";
+  const remaining = previews.filter((id) => id !== closing);
+  return remaining[Math.max(index - 1, 0)] ?? "files";
 }

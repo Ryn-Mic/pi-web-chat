@@ -30,6 +30,11 @@ import type {
   UISnapshot,
   UIThinkingLevel,
   UITreeResponse,
+  UIGitStatus,
+  UIGitBranch,
+  UIGitCommit,
+  UIGitCommitDetail,
+  UIGitDiff,
 } from "../shared/protocol.ts";
 import { auth, authStartupInfo } from "./auth.ts";
 import { handleDesktopFileContent, streamStaticFile } from "./file-content.ts";
@@ -41,6 +46,15 @@ import {
 } from "./preview-context.ts";
 import { readCustomModels, resolveIncomingApiKey, validateProviders, writeCustomModels } from "./models-config.ts";
 import { getActiveTodo, serializeMessages } from "./serialize.ts";
+import {
+  checkoutGitBranch,
+  getGitBranches,
+  getGitCommit,
+  getGitDiff,
+  getGitLog,
+  getGitStatus,
+  GitCommandError,
+} from "./git.ts";
 
 const PORT = Number(process.env.PORT ?? 3141);
 // Default to loopback — this server has no auth and can drive a coding agent.
@@ -1105,6 +1119,82 @@ function sessionTokenFromRequest(req: IncomingMessage): string {
   }
 }
 
+function sendGitError(res: import("node:http").ServerResponse, error: unknown): void {
+  const gitError = error instanceof GitCommandError ? error : null;
+  const status = gitError?.code === "not-repository" ? 422 : gitError?.code === "invalid" ? 409 : 500;
+  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+  res.end(JSON.stringify({ error: gitError?.message ?? "git operation failed", code: gitError?.code ?? "failed" }));
+}
+
+async function handleGitRequest(
+  req: IncomingMessage,
+  res: import("node:http").ServerResponse,
+  url: URL,
+  deps: { knownProjectRoots: () => Promise<Set<string>>; expandHome: (path: string) => string },
+): Promise<boolean> {
+  if (!url.pathname.startsWith("/api/git/")) return false;
+  const cwd = deps.expandHome(url.searchParams.get("cwd") ?? "");
+  if (!cwd || !(await deps.knownProjectRoots()).has(cwd)) {
+    res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify({ error: "unknown project cwd", code: "forbidden" }));
+    return true;
+  }
+  const send = (body: unknown) => {
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify(body));
+  };
+  try {
+    if (req.method === "GET" && url.pathname === "/api/git/status") {
+      send(getGitStatus(cwd) satisfies UIGitStatus);
+      return true;
+    }
+    if (req.method === "GET" && url.pathname === "/api/git/branches") {
+      send(getGitBranches(cwd) satisfies UIGitBranch[]);
+      return true;
+    }
+    if (req.method === "GET" && url.pathname === "/api/git/log") {
+      send(getGitLog(cwd, Number(url.searchParams.get("limit") ?? "50")) satisfies UIGitCommit[]);
+      return true;
+    }
+    if (req.method === "GET" && url.pathname === "/api/git/commit") {
+      send(getGitCommit(cwd, url.searchParams.get("hash") ?? "") satisfies UIGitCommitDetail);
+      return true;
+    }
+    if (req.method === "GET" && url.pathname === "/api/git/diff") {
+      send(getGitDiff(cwd, url.searchParams.get("path") ?? "", url.searchParams.get("staged") === "1") satisfies UIGitDiff);
+      return true;
+    }
+    if (req.method === "POST" && url.pathname === "/api/git/checkout") {
+      let body: { branch?: unknown };
+      try {
+        body = JSON.parse(await readBody(req, 10_000)) as { branch?: unknown };
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid JSON body", code: "invalid" }));
+        return true;
+      }
+      if (typeof body.branch !== "string") {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "branch is required", code: "invalid" }));
+        return true;
+      }
+      const status = checkoutGitBranch(cwd, body.branch) satisfies UIGitStatus;
+      gitBranchCache.delete(cwd);
+      gitBranchCache.delete(status.root);
+      for (const entry of entries.values()) {
+        if (resolve(entry.runtime.cwd) === resolve(cwd)) broadcastSnapshot(entry);
+      }
+      send(status);
+      return true;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "not found", code: "invalid" }));
+  } catch (error) {
+    sendGitError(res, error);
+  }
+  return true;
+}
+
 async function handleAuthRequest(
   req: IncomingMessage,
   res: import("node:http").ServerResponse,
@@ -1225,6 +1315,10 @@ const httpServer = createServer(async (req, res) => {
         "cache-control": "no-store",
       });
       res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+
+    if (await handleGitRequest(req, res, url, { knownProjectRoots, expandHome })) {
       return;
     }
 

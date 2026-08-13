@@ -124,6 +124,62 @@ export interface UITreeResponse {
   truncated?: boolean;
 }
 
+/** Git working tree file status. */
+export interface UIGitFile {
+  path: string;
+  oldPath?: string;
+  index: string;
+  worktree: string;
+  kind: "modified" | "added" | "deleted" | "renamed" | "untracked" | "conflicted";
+}
+
+export interface UIGitStatus {
+  root: string;
+  branch: string | null;
+  head: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  staged: UIGitFile[];
+  unstaged: UIGitFile[];
+  untracked: UIGitFile[];
+  conflicted: UIGitFile[];
+  isDirty: boolean;
+}
+
+export interface UIGitBranch {
+  name: string;
+  commit: string;
+  upstream: string | null;
+  current: boolean;
+}
+
+export interface UIGitCommit {
+  hash: string;
+  shortHash: string;
+  author: string;
+  email: string;
+  date: string;
+  subject: string;
+  body: string;
+}
+
+export interface UIGitCommitFile {
+  path: string;
+  oldPath?: string;
+  status: string;
+}
+
+export interface UIGitCommitDetail extends UIGitCommit {
+  files: UIGitCommitFile[];
+  diff: string;
+}
+
+export interface UIGitDiff {
+  path: string;
+  diff: string;
+}
+
 /** A file/dir hit from project-wide search. */
 export interface UIFileMatch {
   name: string;

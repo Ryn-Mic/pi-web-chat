@@ -24,6 +24,19 @@ test("desktop file preview and @ reference are independent", async ({ page }) =>
   await expect(page.getByRole("tab", { name: "notes.txt" })).toHaveCount(0);
 });
 
+test("Git workspace shows changes and opens changed files in preview", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await login(page);
+  await page.getByRole("button", { name: "Open files" }).click();
+  await page.getByRole("tab", { name: "Git" }).click();
+
+  await expect(page.getByText("seed preview files")).toBeVisible();
+  await expect(page.getByTitle("README.md", { exact: true }).first()).toBeVisible();
+  await expect(page.getByTitle("active.html", { exact: true })).toBeVisible();
+  await page.getByTitle("README.md", { exact: true }).first().click();
+  await expect(page.getByRole("tab", { name: "README.md" })).toHaveAttribute("aria-selected", "true");
+});
+
 test("mobile preview uses an isolated capability iframe and browser history", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 667 });
   await login(page);

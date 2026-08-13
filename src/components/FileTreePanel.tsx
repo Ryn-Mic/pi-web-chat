@@ -7,6 +7,7 @@ import { onRequestOpenFilesDrawer } from "../lib/drawer";
 import { previewIdentity } from "../lib/file-preview";
 import { toggleTreeDirExpanded, useTreeDirExpanded } from "../lib/filetree";
 import { useT } from "../lib/i18n";
+import { GitWorkspacePanel } from "./GitWorkspacePanel";
 
 export interface PreviewFileSelection {
   cwd: string;
@@ -317,18 +318,48 @@ export function FilesDrawer({
 }: {
   onPreviewFile?: (file: PreviewFileSelection) => void;
 }) {
+  const t = useT();
+  const { snapshot } = useChat();
   const [open, setOpen] = useState(false);
+  const [view, setView] = useState<"files" | "git">("files");
   useEffect(() => onRequestOpenFilesDrawer(() => setOpen(true)), []);
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 bg-black/40 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
         <Dialog.Popup className="fixed inset-y-0 right-0 flex w-[82vw] max-w-xs flex-col bg-sidebar shadow-2xl outline-none transition-transform data-[starting-style]:translate-x-full data-[ending-style]:translate-x-full">
-          <FileTreePanel
-            onClose={() => setOpen(false)}
-            onPickFile={() => setOpen(false)}
-            onPreviewFile={onPreviewFile}
-          />
+          <Dialog.Title className="sr-only">{t("workspace")}</Dialog.Title>
+          <div role="tablist" aria-label={t("workspace")} className="flex shrink-0 gap-1 border-b border-line px-2 pt-[calc(0.5rem+env(safe-area-inset-top))] pb-1.5">
+            {(["files", "git"] as const).map((item) => (
+              <button
+                key={item}
+                type="button"
+                role="tab"
+                aria-selected={view === item}
+                onClick={() => setView(item)}
+                className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium ${view === item ? "bg-card text-ink shadow-sm" : "text-muted hover:bg-hover hover:text-ink"}`}
+              >
+                {t(item)}
+              </button>
+            ))}
+          </div>
+          {view === "files" ? (
+            <FileTreePanel
+              onClose={() => setOpen(false)}
+              onPickFile={() => setOpen(false)}
+              onPreviewFile={onPreviewFile}
+            />
+          ) : (
+            <GitWorkspacePanel
+              cwd={snapshot?.cwd}
+              docked={false}
+              onClose={() => setOpen(false)}
+              onPreviewFile={(file) => {
+                setOpen(false);
+                onPreviewFile?.({ ...file, cwd: file.cwd || snapshot?.cwd || "" });
+              }}
+            />
+          )}
         </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>

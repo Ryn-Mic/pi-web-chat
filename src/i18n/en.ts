@@ -40,6 +40,7 @@ export type Messages = {
   unpinSidebar: string;
   closeSidebar: string;
   closeSessionTab: string;
+  workspace: string;
 
   // files
   files: string;
@@ -70,6 +71,25 @@ export type Messages = {
   refreshPreview: string;
   backToFiles: string;
   closePreview: string;
+
+  // git
+  git: string;
+  gitDirty: string;
+  gitClean: string;
+  gitStaged: string;
+  gitChanged: string;
+  gitUntracked: string;
+  gitConflicted: string;
+  gitStagedFiles: string;
+  gitChangedFiles: string;
+  gitUntrackedFiles: string;
+  gitBranches: string;
+  gitRecentCommits: string;
+  gitNoChanges: string;
+  gitNotRepository: string;
+  gitOperationFailed: string;
+  gitConfirmDiscard: string;
+  gitBackToLog: string;
 
   // composer
   sendMessage: string;
@@ -211,6 +231,7 @@ export const en: Messages = {
   unpinSidebar: "Unpin sidebar",
   closeSidebar: "Close sidebar",
   closeSessionTab: "Close session tab",
+  workspace: "Workspace",
 
   files: "Files",
   openFiles: "Open files",
@@ -239,6 +260,24 @@ export const en: Messages = {
   refreshPreview: "Refresh preview",
   backToFiles: "Back to files",
   closePreview: "Close preview",
+
+  git: "Git",
+  gitDirty: "Changes",
+  gitClean: "Clean",
+  gitStaged: "staged",
+  gitChanged: "changed",
+  gitUntracked: "untracked",
+  gitConflicted: "conflicted",
+  gitStagedFiles: "Staged",
+  gitChangedFiles: "Changed",
+  gitUntrackedFiles: "Untracked",
+  gitBranches: "Branches",
+  gitRecentCommits: "Recent commits",
+  gitNoChanges: "Working tree is clean.",
+  gitNotRepository: "This project is not a Git repository.",
+  gitOperationFailed: "Git operation failed.",
+  gitConfirmDiscard: "The working tree has uncommitted changes. Switch branches anyway?",
+  gitBackToLog: "Back to commits",
 
   sendMessage: "Send a message",
   streamingPlaceholder: "Streaming… (send to steer)",

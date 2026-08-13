@@ -123,6 +123,12 @@ test("closing the last preview falls back to the Files tab", () => {
   assert.deepEqual(state.tabs, []);
 });
 
+test("the fixed Git tab can be activated and cannot be closed", () => {
+  const state = reducePreviewWorkspace(createPreviewWorkspaceState(), { type: "activate", identity: "git" });
+  assert.equal(state.active, "git");
+  assert.deepEqual(reducePreviewWorkspace(state, { type: "close", identity: "git" }), state);
+});
+
 test("the Files tab cannot be closed", () => {
   let state = stateAfter(
     createPreviewWorkspaceState(),

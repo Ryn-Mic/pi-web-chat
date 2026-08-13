@@ -37,3 +37,9 @@ test("nextWorkspaceFocusAfterClose follows preview reducer activation rules", ()
   assert.equal(nextWorkspaceFocusAfterClose(["files", "one"], "one", "one"), "files");
   assert.equal(nextWorkspaceFocusAfterClose(ids, "three", "one"), "three");
 });
+
+test("Git fixed tab does not change preview close focus", () => {
+  const withGit = ["files", "git", "one", "two"];
+  assert.equal(nextWorkspaceFocusAfterClose(withGit, "one", "one"), "two");
+  assert.equal(nextWorkspaceFocusAfterClose(withGit, "two", "two"), "one");
+});

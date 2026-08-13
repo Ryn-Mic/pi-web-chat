@@ -7,8 +7,10 @@ export interface PreviewTab {
   lastActiveAt: number;
 }
 
+export const GIT_WORKSPACE_ID = "git";
+
 export interface PreviewWorkspaceState {
-  active: "files" | string;
+  active: "files" | typeof GIT_WORKSPACE_ID | string;
   tabs: PreviewTab[];
 }
 
@@ -97,6 +99,7 @@ export function reducePreviewWorkspace(
     case "activate": {
       if (
         action.identity === "files" ||
+        action.identity === GIT_WORKSPACE_ID ||
         state.tabs.some((tab) => identityOf(tab) === action.identity)
       ) {
         return { ...state, active: action.identity };
@@ -105,7 +108,7 @@ export function reducePreviewWorkspace(
     }
 
     case "close": {
-      if (action.identity === "files") return state;
+      if (action.identity === "files" || action.identity === GIT_WORKSPACE_ID) return state;
       const index = state.tabs.findIndex(
         (tab) => identityOf(tab) === action.identity,
       );
@@ -164,6 +167,8 @@ export function reducePreviewWorkspace(
         active = source.active;
       } else if (state.active !== "files" && retained.has(state.active)) {
         active = state.active;
+      } else if (state.active === GIT_WORKSPACE_ID || source.active === GIT_WORKSPACE_ID) {
+        active = GIT_WORKSPACE_ID;
       } else {
         active = "files";
       }

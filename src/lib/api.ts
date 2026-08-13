@@ -10,6 +10,11 @@ import type {
   UIModel,
   UISessionInfo,
   UITreeResponse,
+  UIGitStatus,
+  UIGitBranch,
+  UIGitCommit,
+  UIGitCommitDetail,
+  UIGitDiff,
 } from "../../shared/protocol";
 import { authHeaders, setAuthStatus } from "./auth";
 
@@ -52,6 +57,71 @@ export function useTree(cwd: string | undefined, path: string, enabled = true) {
     enabled: enabled && !!cwd,
     staleTime: 0,
   });
+}
+
+export function useGitStatus(cwd: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ["git-status", cwd],
+    queryFn: () => fetchJson<UIGitStatus>(`/api/git/status?cwd=${encodeURIComponent(cwd ?? "")}`),
+    enabled: enabled && !!cwd,
+    staleTime: 2_000,
+    refetchInterval: enabled && cwd ? 5_000 : false,
+  });
+}
+
+export function useGitBranches(cwd: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ["git-branches", cwd],
+    queryFn: () => fetchJson<UIGitBranch[]>(`/api/git/branches?cwd=${encodeURIComponent(cwd ?? "")}`),
+    enabled: enabled && !!cwd,
+    staleTime: 5_000,
+  });
+}
+
+export function useGitLog(cwd: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ["git-log", cwd],
+    queryFn: () => fetchJson<UIGitCommit[]>(`/api/git/log?cwd=${encodeURIComponent(cwd ?? "")}&limit=50`),
+    enabled: enabled && !!cwd,
+    staleTime: 5_000,
+  });
+}
+
+export function useGitCommit(cwd: string | undefined, hash: string | null, enabled = true) {
+  return useQuery({
+    queryKey: ["git-commit", cwd, hash],
+    queryFn: () => fetchJson<UIGitCommitDetail>(`/api/git/commit?cwd=${encodeURIComponent(cwd ?? "")}&hash=${encodeURIComponent(hash ?? "")}`),
+    enabled: enabled && !!cwd && !!hash,
+    staleTime: 30_000,
+  });
+}
+
+export function useGitDiff(cwd: string | undefined, path: string | null, staged = false, enabled = true) {
+  return useQuery({
+    queryKey: ["git-diff", cwd, path, staged],
+    queryFn: () => fetchJson<UIGitDiff>(`/api/git/diff?cwd=${encodeURIComponent(cwd ?? "")}&path=${encodeURIComponent(path ?? "")}&staged=${staged ? "1" : "0"}`),
+    enabled: enabled && !!cwd && !!path,
+    staleTime: 2_000,
+  });
+}
+
+export async function checkoutGitBranch(cwd: string, branch: string): Promise<UIGitStatus> {
+  return fetchJson<UIGitStatus>(`/api/git/checkout?cwd=${encodeURIComponent(cwd)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cwd, branch }),
+  });
+}
+
+export function useInvalidateGit() {
+  const qc = useQueryClient();
+  return (cwd: string) => {
+    void qc.invalidateQueries({ queryKey: ["git-status", cwd] });
+    void qc.invalidateQueries({ queryKey: ["git-branches", cwd] });
+    void qc.invalidateQueries({ queryKey: ["git-log", cwd] });
+    void qc.invalidateQueries({ queryKey: ["tree", cwd] });
+    void qc.invalidateQueries({ queryKey: ["file-search", cwd] });
+  };
 }
 
 export function useFileSearch(cwd: string | undefined, query: string, enabled = true) {
