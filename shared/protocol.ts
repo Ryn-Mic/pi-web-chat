@@ -310,6 +310,8 @@ export interface UIImageAttachment {
 
 export type ServerEvent =
   | { type: "snapshot"; snapshot: UISnapshot }
+  /** The server accepted a prompt command before starting the agent run. */
+  | { type: "prompt_received"; requestId: string }
   /** Sent after a client abort command has been processed by the session. */
   | { type: "abort_complete" }
   | {
@@ -338,10 +340,10 @@ export type ServerEvent =
   | { type: "command_result"; message: string }
   | { type: "client_action"; action: UIClientAction }
   | { type: "extension_ui_request"; request: UIExtensionUIRequest }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; requestId?: string };
 
 export type ClientCommand =
-  | { type: "prompt"; text: string; images?: UIImageAttachment[] }
+  | { type: "prompt"; text: string; images?: UIImageAttachment[]; requestId?: string }
   | { type: "abort" }
   | { type: "set_model"; provider: string; id: string }
   | { type: "set_thinking_level"; level: UIThinkingLevel }

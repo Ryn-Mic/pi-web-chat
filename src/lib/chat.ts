@@ -6,12 +6,12 @@ import type {
   UICommandInfo,
   UIExtensionUIRequest,
   UIExtensionUIResponse,
+  UIMessage,
   UISnapshot,
 } from "../../shared/protocol";
 import { authHeaders, checkAuth } from "./auth";
 import {
   clearComposerDraft,
-  clearComposerDraftIfMatches,
   type SubmittedComposerPrompt,
 } from "./composer-drafts";
 import { notifyTaskComplete } from "./browserNotifications";
@@ -33,8 +33,7 @@ export interface ActiveTool {
 
 /** WS lifecycle for chrome status (avoid red flash on first paint). */
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
-export type PromptStatus = "idle" | "waiting" | "responding" | "timeout" | "error";
-export const PROMPT_RESPONSE_TIMEOUT_MS = 10_000;
+export type PromptStatus = "idle" | "sending" | "accepted" | "running";
 
 export interface ChatState {
   connection: ConnectionStatus;
@@ -59,12 +58,14 @@ export interface ChatState {
   updateNotes: string[];
   /** Error event from the server (failed prompt etc.) — shown as a banner */
   lastError: string | null;
-  /** Lifecycle of the most recently submitted prompt. */
+  /** User input rendered locally until the server snapshot persists it. */
+  optimisticMessages: UIMessage[];
+  /** Prompt restored after the server explicitly rejects processing it. */
+  restorePrompt: SubmittedComposerPrompt | null;
+  /** Transport and agent lifecycle of the current prompt. */
   promptStatus: PromptStatus;
-  /** Incremented when a pending prompt receives its first response. */
-  promptResponseToken: number;
-  /** Incremented when a pending prompt errors or times out before responding. */
-  promptFailureToken: number;
+  /** Incremented when the server accepts or persists the current prompt. */
+  promptAcceptedToken: number;
   /** Low-priority confirmation from a slash command. */
   lastNotice: string | null;
   /** A slash command that opens an existing Web UI surface. */
@@ -90,9 +91,10 @@ function createInitialState(): ChatState {
     updateVersion: null,
     updateNotes: [],
     lastError: null,
+    optimisticMessages: [],
+    restorePrompt: null,
     promptStatus: "idle",
-    promptResponseToken: 0,
-    promptFailureToken: 0,
+    promptAcceptedToken: 0,
     lastNotice: null,
     commandIntent: null,
     commands: [],
@@ -103,8 +105,6 @@ function createInitialState(): ChatState {
 export class ChatClient implements WorkspaceClient<ChatState> {
   constructor(
     private readonly onSessionBound?: (sessionId: string) => void,
-    private readonly promptResponseTimeoutMs = PROMPT_RESPONSE_TIMEOUT_MS,
-    private readonly onPromptResponse?: (prompt: SubmittedComposerPrompt) => void,
     private readonly onDispose?: () => void,
   ) {}
 
@@ -127,16 +127,16 @@ export class ChatClient implements WorkspaceClient<ChatState> {
    * instead of silently falling back to the default cwd.
    */
   private cwd: string | null = null;
-  private promptTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
-  private promptAssistantCountAtSend = 0;
-  private submittedPrompt: SubmittedComposerPrompt | null = null;
-  /** Ignore late events until a timed-out run has fully aborted. */
-  private promptRecoveryPending = false;
-  private recoveryAgentEnded = false;
-  private recoverySnapshotSettled = false;
-  private recoveryAbortAcknowledged = false;
-  /** Ignore one late agent_end from the run that timed out before a retry. */
-  private ignoreLateRecoveryAgentEnd = false;
+  private pendingPrompt: {
+    requestId: string;
+    command: Extract<ClientCommand, { type: "prompt" }>;
+    submitted: SubmittedComposerPrompt;
+    userCountAtSend: number;
+    awaitingReceipt: boolean;
+  } | null = null;
+  /** Kept after agent_end until the authoritative snapshot contains it. */
+  private optimisticSubmitted: SubmittedComposerPrompt | null = null;
+  private optimisticUserCountAtSend = 0;
 
   /**
    * Stream deltas coalesced here and flushed on a fixed cadence. Fast models
@@ -188,77 +188,77 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     this.streamBuf = null;
   }
 
-  private clearPromptTimeout() {
-    if (this.promptTimeoutTimer !== null) {
-      clearTimeout(this.promptTimeoutTimer);
-      this.promptTimeoutTimer = null;
+  private createRequestId(): string {
+    return crypto.randomUUID();
+  }
+
+  private markPromptRunning() {
+    if (!this.pendingPrompt || this.state.promptStatus === "idle") return;
+    this.update({ promptStatus: "running" });
+  }
+
+  private settlePrompt() {
+    if (this.state.promptStatus !== "idle") this.update({ promptStatus: "idle" });
+  }
+
+  private reconcileOptimisticMessage(snapshot: UISnapshot) {
+    const pending = this.pendingPrompt;
+    const submitted = pending?.submitted ?? this.optimisticSubmitted;
+    if (!submitted) return;
+    const userMessages = snapshot.messages.filter((message) => message.role === "user");
+    const newMessages = userMessages.slice(pending?.userCountAtSend ?? this.optimisticUserCountAtSend);
+    const matches = newMessages.some((message) => {
+      const text = message.content
+        .filter((block): block is Extract<UIMessage["content"][number], { type: "text" }> => block.type === "text")
+        .map((block) => block.text)
+        .join("\n");
+      const images = message.content.filter(
+        (block): block is Extract<UIMessage["content"][number], { type: "image" }> => block.type === "image",
+      );
+      return (
+        text === submitted.text &&
+        images.length === submitted.images.length &&
+        images.every(
+          (image, index) =>
+            image.dataUrl ===
+            `data:${submitted.images[index]?.mimeType};base64,${submitted.images[index]?.data}`,
+        )
+      );
+    });
+    if (!matches) return;
+    this.pendingPrompt = null;
+    this.optimisticSubmitted = null;
+    this.update({
+      optimisticMessages: [],
+      restorePrompt: null,
+      promptAcceptedToken: this.state.promptAcceptedToken + 1,
+      ...(snapshot.isStreaming ? {} : { promptStatus: "idle" as const }),
+    });
+  }
+
+  private discardOptimisticMessage() {
+    this.pendingPrompt = null;
+    this.optimisticSubmitted = null;
+    if (this.state.optimisticMessages.length > 0) this.update({ optimisticMessages: [] });
+  }
+
+  private markPromptFailed(message: string, requestId?: string) {
+    if (requestId && this.pendingPrompt?.requestId !== requestId) {
+      this.update({ lastError: message });
+      return;
     }
-  }
-
-  private notifyPromptResponse() {
-    const submittedPrompt = this.submittedPrompt;
-    this.submittedPrompt = null;
-    if (submittedPrompt) this.onPromptResponse?.(submittedPrompt);
-  }
-
-  private markPromptResponseStarted() {
-    if (this.state.promptStatus !== "waiting") return;
-    this.ignoreLateRecoveryAgentEnd = false;
-    this.clearPromptTimeout();
+    const submitted = this.pendingPrompt?.submitted ?? this.optimisticSubmitted;
+    this.pendingPrompt = null;
+    this.optimisticSubmitted = null;
+    this.settlePrompt();
     this.update({
-      promptStatus: "responding",
-      promptResponseToken: this.state.promptResponseToken + 1,
+      lastError: message,
+      restorePrompt: submitted,
+      optimisticMessages: this.state.optimisticMessages.map((optimistic) => ({
+        ...optimistic,
+        errorMessage: message,
+      })),
     });
-    this.notifyPromptResponse();
-  }
-
-  private markPromptResponseCompleted() {
-    if (this.state.promptStatus !== "waiting") return;
-    this.clearPromptTimeout();
-    this.update({
-      promptStatus: "idle",
-      promptResponseToken: this.state.promptResponseToken + 1,
-    });
-    this.notifyPromptResponse();
-  }
-
-  private markPromptFailure(status: "timeout" | "error") {
-    if (this.state.promptStatus !== "waiting") return;
-    this.clearPromptTimeout();
-    this.submittedPrompt = null;
-    this.update({
-      promptStatus: status,
-      promptFailureToken: this.state.promptFailureToken + 1,
-    });
-  }
-
-  private maybeFinishPromptRecovery() {
-    if (
-      this.promptRecoveryPending &&
-      (this.recoveryAbortAcknowledged ||
-        (this.recoveryAgentEnded && this.recoverySnapshotSettled))
-    ) {
-      this.promptRecoveryPending = false;
-      // If the old agent_end was not delivered, ignore one late copy so it
-      // cannot complete the retry that follows.
-      this.ignoreLateRecoveryAgentEnd = !this.recoveryAgentEnded;
-    }
-  }
-
-  private startPromptTimeout() {
-    this.clearPromptTimeout();
-    this.promptTimeoutTimer = setTimeout(() => {
-      this.promptTimeoutTimer = null;
-      this.promptRecoveryPending = true;
-      this.recoveryAgentEnded = false;
-      this.recoverySnapshotSettled = false;
-      this.recoveryAbortAcknowledged = false;
-      this.ignoreLateRecoveryAgentEnd = false;
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: "abort" } satisfies ClientCommand));
-      }
-      this.markPromptFailure("timeout");
-    }, this.promptResponseTimeoutMs);
   }
 
   state: ChatState = createInitialState();
@@ -290,14 +290,8 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       // its sessionId lets the connection -> URL effect navigate a fresh
       // draft straight back to that stale session.
       this.clearStreamBuffer();
-      this.clearPromptTimeout();
-      this.promptAssistantCountAtSend = 0;
-      this.submittedPrompt = null;
-      this.promptRecoveryPending = false;
-      this.recoveryAgentEnded = false;
-      this.recoverySnapshotSettled = false;
-      this.recoveryAbortAcknowledged = false;
-      this.ignoreLateRecoveryAgentEnd = false;
+      this.pendingPrompt = null;
+      this.optimisticSubmitted = null;
       this.update({
         connection: "connecting",
         snapshot: null,
@@ -306,6 +300,8 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         streamThinking: "",
         streamThinkingComplete: false,
         activeTools: [],
+        optimisticMessages: [],
+        restorePrompt: null,
         promptStatus: "idle",
         commands: [],
         commandIntent: null,
@@ -341,10 +337,12 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       this.clearDisconnectTimer();
       this.reconnectDelay = 400;
       this.everConnected = true;
-      if (this.promptRecoveryPending) {
-        ws.send(JSON.stringify({ type: "abort" } satisfies ClientCommand));
-      }
       this.update({ connection: "connected" });
+      // A dropped WebSocket has no delivery acknowledgement. Replaying the
+      // same request id is safe because the server deduplicates it.
+      if (this.pendingPrompt?.awaitingReceipt) {
+        ws.send(JSON.stringify(this.pendingPrompt.command));
+      }
     };
     ws.onmessage = (e) => {
       if (!this.isCurrentSocket(ws, version)) return;
@@ -418,42 +416,72 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     this.clearReconnectTimer();
     this.clearDisconnectTimer();
     this.clearStreamBuffer();
-    this.clearPromptTimeout();
-    this.submittedPrompt = null;
-    this.promptRecoveryPending = false;
-    this.recoveryAgentEnded = false;
-    this.recoverySnapshotSettled = false;
-    this.recoveryAbortAcknowledged = false;
-    this.ignoreLateRecoveryAgentEnd = false;
+    this.pendingPrompt = null;
+    this.optimisticSubmitted = null;
+    this.update({ restorePrompt: null });
     this.closeSocket();
     this.onDispose?.();
   }
 
-  send(cmd: ClientCommand) {
+  send(cmd: ClientCommand): boolean {
     const socketOpen = this.ws?.readyState === WebSocket.OPEN;
     if (cmd.type === "prompt") {
-      if (!socketOpen || this.promptRecoveryPending) {
+      if (!socketOpen || this.pendingPrompt) {
         this.update({
-          promptStatus: "error",
-          promptFailureToken: this.state.promptFailureToken + 1,
+          lastError: socketOpen
+            ? "A prompt is already being sent."
+            : "Reconnecting. Please wait before sending.",
         });
-        return;
+        return false;
       }
-      this.promptAssistantCountAtSend =
-        this.state.snapshot?.messages.filter((message) => message.role === "assistant").length ?? 0;
-      this.submittedPrompt = {
-        text: cmd.text.trim(),
-        images: [...(cmd.images ?? [])],
+      const requestId = cmd.requestId ?? this.createRequestId();
+      const command = { ...cmd, requestId };
+      const submitted: SubmittedComposerPrompt = {
+        text: command.text.trim(),
+        images: [...(command.images ?? [])],
+      };
+      const optimisticMessage: UIMessage = {
+        role: "user",
+        content: [
+          ...(submitted.text ? [{ type: "text" as const, text: submitted.text }] : []),
+          ...submitted.images.map((image) => ({
+            type: "image" as const,
+            dataUrl: `data:${image.mimeType};base64,${image.data}`,
+          })),
+        ],
+        timestamp: Date.now(),
+      };
+      const userCountAtSend =
+        this.state.snapshot?.messages.filter((message) => message.role === "user").length ?? 0;
+      this.optimisticSubmitted = submitted;
+      this.optimisticUserCountAtSend = userCountAtSend;
+      this.pendingPrompt = {
+        requestId,
+        command,
+        submitted,
+        userCountAtSend,
+        awaitingReceipt: true,
       };
       this.update({
         lastError: null,
-        promptStatus: "waiting",
+        optimisticMessages: [optimisticMessage],
+        restorePrompt: null,
+        promptStatus: "sending",
       });
-      this.startPromptTimeout();
+      try {
+        this.ws!.send(JSON.stringify(command));
+        return true;
+      } catch {
+        this.discardOptimisticMessage();
+        this.update({
+          lastError: "The connection closed before the prompt could be sent.",
+          promptStatus: "idle",
+        });
+        return false;
+      }
     }
-    if (socketOpen) {
-      this.ws!.send(JSON.stringify(cmd));
-    }
+    if (socketOpen) this.ws!.send(JSON.stringify(cmd));
+    return socketOpen;
   }
 
   private scheduleDisconnected() {
@@ -497,25 +525,9 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         this.onSessionBound?.(event.sessionId);
         break;
       case "snapshot":
-        if (this.promptRecoveryPending) {
-          // Keep the snapshot as evidence for the compatibility fallback;
-          // the explicit abort acknowledgement is the reconnect-safe barrier.
-          if (!event.snapshot.isStreaming) {
-            this.recoverySnapshotSettled = true;
-            this.maybeFinishPromptRecovery();
-          }
-        } else if (event.snapshot.isStreaming) {
-          // A reconnect can deliver an active snapshot before agent_start.
-          this.markPromptResponseStarted();
-        } else if (
-          this.state.promptStatus === "waiting" &&
-          event.snapshot.messages.filter((message) => message.role === "assistant").length >
-            this.promptAssistantCountAtSend
-        ) {
-          // The run may have finished while the socket was disconnected.
-          this.markPromptResponseCompleted();
-        }
-        // Completed messages are reflected in the snapshot, so clear the stream buffers
+        if (event.snapshot.isStreaming) this.markPromptRunning();
+        this.reconcileOptimisticMessage(event.snapshot);
+        // Completed messages are reflected in the snapshot, so clear the stream buffers.
         this.update({
           snapshot: event.snapshot,
           streamText: "",
@@ -523,8 +535,17 @@ export class ChatClient implements WorkspaceClient<ChatState> {
           streamThinkingComplete: false,
         });
         break;
+      case "prompt_received":
+        if (this.pendingPrompt?.requestId === event.requestId) {
+          this.pendingPrompt.awaitingReceipt = false;
+          this.update({
+            promptAcceptedToken: this.state.promptAcceptedToken + 1,
+            ...(this.state.promptStatus === "sending" ? { promptStatus: "accepted" } : {}),
+          });
+        }
+        break;
       case "delta": {
-        this.markPromptResponseStarted();
+        this.markPromptRunning();
         // Coalesce per-token deltas into one React update per flush window
         // (see DELTA_FLUSH_MS) — rendering once per token is a sustained CPU
         // load on phones (each render re-parses the accumulated markdown).
@@ -535,13 +556,13 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         break;
       }
       case "thinking_end":
-        this.markPromptResponseStarted();
+        this.markPromptRunning();
         // The agent gives us an explicit end marker, so there is no reason to
         // keep the expanded streaming card around while the response continues.
         this.update({ streamThinkingComplete: true });
         break;
       case "tool_start":
-        this.markPromptResponseStarted();
+        this.markPromptRunning();
         this.update({
           activeTools: [
             ...this.state.activeTools,
@@ -555,40 +576,33 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         });
         break;
       case "agent_start":
-        this.markPromptResponseStarted();
+        this.markPromptRunning();
         this.update({
           snapshot: this.state.snapshot ? { ...this.state.snapshot, isStreaming: true } : null,
         });
         break;
       case "agent_end":
-        if (this.ignoreLateRecoveryAgentEnd) {
-          this.ignoreLateRecoveryAgentEnd = false;
-          break;
-        }
         notifyTaskComplete();
-        // Treat agent_end as a response even when agent_start was lost during a
-        // reconnect. This is idempotent when the prompt already responded.
-        if (this.promptRecoveryPending) {
-          this.recoveryAgentEnded = true;
-          this.maybeFinishPromptRecovery();
-        } else {
-          this.markPromptResponseCompleted();
-        }
-        // Drop isStreaming before the snapshot arrives so no loading dots linger
+        // agent_end is the runtime's definitive turn boundary. Release the
+        // composer immediately; keep optimisticSubmitted until the following
+        // snapshot reconciles the local user message without duplication.
+        this.pendingPrompt = null;
+        this.settlePrompt();
+        // Drop isStreaming before the snapshot arrives so no loading dots linger.
         this.update({
           activeTools: [],
           streamText: "",
           streamThinking: "",
           streamThinkingComplete: false,
-          promptStatus: this.state.promptStatus === "responding" ? "idle" : this.state.promptStatus,
           snapshot: this.state.snapshot
             ? { ...this.state.snapshot, isStreaming: false }
             : null,
         });
         break;
       case "abort_complete":
-        this.recoveryAbortAcknowledged = true;
-        this.maybeFinishPromptRecovery();
+        this.pendingPrompt = null;
+        this.discardOptimisticMessage();
+        this.settlePrompt();
         break;
       case "forked":
         if (event.selectedText)
@@ -598,26 +612,30 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         this.update({ commands: event.commands });
         break;
       case "command_result":
-        this.markPromptResponseCompleted();
+        this.pendingPrompt = null;
+        this.discardOptimisticMessage();
+        this.settlePrompt();
         this.update({ lastNotice: event.message });
         break;
       case "client_action":
-        this.markPromptResponseCompleted();
+        this.pendingPrompt = null;
+        this.discardOptimisticMessage();
+        this.settlePrompt();
         this.update({ commandIntent: event.action });
         break;
       case "extension_ui_request":
-        this.markPromptResponseCompleted();
+        this.pendingPrompt = null;
+        this.discardOptimisticMessage();
+        this.settlePrompt();
         this.update({ extensionUIRequest: event.request });
         break;
       case "error":
-        if (this.promptRecoveryPending) {
-          this.recoveryAgentEnded = true;
-          this.maybeFinishPromptRecovery();
-        } else {
-          this.markPromptFailure("error");
-        }
         console.error("[pi-web-chat]", event.message);
-        this.update({ lastError: event.message });
+        if (!event.requestId && this.pendingPrompt) {
+          this.update({ lastError: event.message });
+        } else {
+          this.markPromptFailed(event.message, event.requestId);
+        }
         break;
     }
   }
@@ -694,8 +712,6 @@ class ChatWorkspaceClient {
     (_sessionId, onBound, tabKey) =>
       new ChatClient(
         onBound,
-        undefined,
-        (prompt) => clearComposerDraftIfMatches(tabKey, prompt),
         () => clearComposerDraft(tabKey),
       ),
     (sessionId, active) => {
@@ -741,8 +757,8 @@ class ChatWorkspaceClient {
 
   // The remaining methods intentionally target the active tab so existing
   // components can keep using the same imperative chatClient surface.
-  send(cmd: ClientCommand) {
-    this.workspace.getActiveClient()?.send(cmd);
+  send(cmd: ClientCommand): boolean {
+    return this.workspace.getActiveClient()?.send(cmd) ?? false;
   }
 
   refillComposer(text: string) {

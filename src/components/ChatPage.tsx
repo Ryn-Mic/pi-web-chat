@@ -74,6 +74,7 @@ export function ChatPage() {
     activeTools,
     updateAvailable,
     lastError,
+    optimisticMessages,
     lastNotice,
     commandIntent,
     updateVersion,
@@ -245,7 +246,7 @@ export function ChatPage() {
         ) : (
           <>
             <MessageList
-              messages={snapshot?.messages ?? []}
+              messages={[...(snapshot?.messages ?? []), ...optimisticMessages]}
               streamText={streamText}
               streamThinking={streamThinking}
               streamThinkingComplete={streamThinkingComplete}

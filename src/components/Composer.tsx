@@ -84,10 +84,7 @@ export function Composer({
   const [forkOpen, setForkOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const pendingPromptRef = useRef(false);
-  const submittedPromptRef = useRef<{ text: string; images: PendingImage[] } | null>(null);
-  const responseTokenRef = useRef(0);
-  const failureTokenRef = useRef(0);
+  const restoredPromptRef = useRef<unknown>(null);
   const {
     injectText,
     focusToken,
@@ -95,8 +92,7 @@ export function Composer({
     commands,
     commandIntent,
     promptStatus,
-    promptResponseToken,
-    promptFailureToken,
+    restorePrompt,
   } = useChat();
   const chatFontSize = useChatFontSize();
   const context = snapshot?.context;
@@ -109,41 +105,23 @@ export function Composer({
       : hasContext
         ? `${Math.round(contextPercent)}%`
         : undefined;
-  const waitingForPromptResponse = promptStatus === "waiting";
-  const promptResponseStarted = promptStatus === "responding";
+  const promptInFlight = promptStatus !== "idle";
 
   useEffect(() => {
-    if (promptResponseToken === responseTokenRef.current) return;
-    responseTokenRef.current = promptResponseToken;
-    if (!pendingPromptRef.current) return;
+    if (!restorePrompt || restorePrompt === restoredPromptRef.current) return;
+    restoredPromptRef.current = restorePrompt;
+    // Do not overwrite text the user started composing while the request was
+    // in flight. The failed optimistic bubble remains visible either way.
+    if (text || images.length > 0) return;
+    setText(restorePrompt.text);
+    setImages(
+      restorePrompt.images.map((image) => ({
+        ...image,
+        previewUrl: `data:${image.mimeType};base64,${image.data}`,
+      })),
+    );
+  }, [images.length, restorePrompt, text]);
 
-    pendingPromptRef.current = false;
-    const submittedPrompt = submittedPromptRef.current;
-    submittedPromptRef.current = null;
-    const sameImages =
-      submittedPrompt !== null &&
-      images.length === submittedPrompt.images.length &&
-      images.every(
-        (image, index) =>
-          image.data === submittedPrompt.images[index]?.data &&
-          image.mimeType === submittedPrompt.images[index]?.mimeType,
-      );
-    if (!submittedPrompt || text.trim() !== submittedPrompt.text || !sameImages) return;
-
-    setText("");
-    setImages([]);
-    if (textareaRef.current) textareaRef.current.style.height = "auto";
-  }, [promptResponseToken]);
-
-  useEffect(() => {
-    if (promptFailureToken === failureTokenRef.current) return;
-    failureTokenRef.current = promptFailureToken;
-    // Keep the submitted prompt in the composer so it can be retried after a
-    // timeout or server error. The ChatClient status makes the send button
-    // available again.
-    pendingPromptRef.current = false;
-    submittedPromptRef.current = null;
-  }, [promptFailureToken]);
 
   // Keep unsent text and attachments isolated to the active session tab. The
   // component is keyed by tab in ChatPage, so switching tabs restores that
@@ -276,17 +254,18 @@ export function Composer({
 
   const send = () => {
     const trimmed = text.trim();
-    if ((!trimmed && images.length === 0) || waitingForPromptResponse) return;
+    if ((!trimmed && images.length === 0) || promptInFlight) return;
 
-    pendingPromptRef.current = true;
-    submittedPromptRef.current = { text: trimmed, images: [...images] };
-    responseTokenRef.current = promptResponseToken;
-    failureTokenRef.current = promptFailureToken;
-    chatClient.send({
+    const submittedImages = [...images];
+    const sent = chatClient.send({
       type: "prompt",
       text: trimmed,
-      images: images.length > 0 ? images.map(({ data, mimeType }) => ({ data, mimeType })) : undefined,
+      images: submittedImages.length > 0 ? submittedImages.map(({ data, mimeType }) => ({ data, mimeType })) : undefined,
     });
+    if (!sent) return;
+    setText("");
+    setImages([]);
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
   };
 
   const completeCommand = (name: string, argumentHint?: string) => {
@@ -486,7 +465,7 @@ export function Composer({
               containerRef={containerRef}
               compact
             />
-            {isStreaming || promptResponseStarted ? (
+            {isStreaming || promptStatus === "running" ? (
               <button
                 onClick={() => chatClient.send({ type: "abort" })}
                 className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink text-canvas transition-opacity hover:opacity-85"
@@ -496,7 +475,7 @@ export function Composer({
                   <rect x="6" y="6" width="12" height="12" rx="2" />
                 </svg>
               </button>
-            ) : waitingForPromptResponse ? (
+            ) : promptInFlight ? (
               <button
                 type="button"
                 disabled

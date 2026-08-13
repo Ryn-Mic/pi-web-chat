@@ -167,6 +167,8 @@ interface SessionEntry {
   lastFileStat?: { size: number; mtimeMs: number };
   /** Browser that initiated the current extension command, if any. */
   extensionUIClient?: WebSocket;
+  /** Recently accepted browser prompt IDs, used to deduplicate reconnect replays. */
+  receivedPromptIds: Map<string, number>;
   pendingExtensionUI: Map<string, (response: { cancelled?: boolean; value?: string; confirmed?: boolean }) => void>;
 }
 
@@ -254,6 +256,7 @@ async function createEntry(id: string | null, cwd?: string): Promise<SessionEntr
     // Only sessions opened with an explicit id are published immediately.
     // A null connect is a blank draft.
     published: id !== null,
+    receivedPromptIds: new Map(),
     pendingExtensionUI: new Map(),
   };
   entries.set(entry.id, entry);
@@ -666,6 +669,20 @@ function bindSession(entry: SessionEntry) {
 // Client command handling
 // ---------------------------------------------------------------------------
 
+function rememberReceivedPrompt(entry: SessionEntry, requestId: string): boolean {
+  const now = Date.now();
+  const previous = entry.receivedPromptIds.get(requestId);
+  if (previous !== undefined) return false;
+  entry.receivedPromptIds.set(requestId, now);
+  // Retain a bounded replay window across temporary mobile/frp disconnects.
+  const cutoff = now - 5 * 60_000;
+  for (const [id, receivedAt] of entry.receivedPromptIds) {
+    if (receivedAt >= cutoff && entry.receivedPromptIds.size <= 256) break;
+    entry.receivedPromptIds.delete(id);
+  }
+  return true;
+}
+
 async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
   const entry = wsEntry.get(ws);
   if (!entry) return;
@@ -680,7 +697,14 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
         data: img.data,
         mimeType: img.mimeType,
       }));
-      if (!text && images.length === 0) return;
+      if (!text && images.length === 0) {
+        sendTo(ws, { type: "error", message: "Prompt text or an image is required.", requestId: cmd.requestId });
+        return;
+      }
+      if (cmd.requestId && !rememberReceivedPrompt(entry, cmd.requestId)) {
+        sendTo(ws, { type: "prompt_received", requestId: cmd.requestId });
+        return;
+      }
       // Publish the session to the URL at first input → client switches to /s/:id
       if (!entry.published) publishEntry(entry, ws);
       const slashCommand = parseSlashCommand(text);
@@ -688,14 +712,33 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
         return;
       }
       entry.extensionUIClient = ws;
-      // prompt() doesn't resolve until the whole run ends, so don't await it
-      session
-        .prompt(text, {
+      // Calling prompt() starts the run but the returned promise resolves only
+      // after the whole run ends. Confirm only after the runtime accepted the
+      // call, without making the client wait for agent lifecycle events.
+      let promptRun: Promise<unknown>;
+      try {
+        promptRun = session.prompt(text, {
           images: images.length > 0 ? images : undefined,
           ...(session.isStreaming ? { streamingBehavior: "steer" as const } : {}),
-        })
+        });
+      } catch (err) {
+        if (cmd.requestId) entry.receivedPromptIds.delete(cmd.requestId);
+        sendTo(ws, {
+          type: "error",
+          message: String(err instanceof Error ? err.message : err),
+          requestId: cmd.requestId,
+        });
+        if (entry.extensionUIClient === ws) entry.extensionUIClient = undefined;
+        return;
+      }
+      if (cmd.requestId) sendTo(ws, { type: "prompt_received", requestId: cmd.requestId });
+      promptRun
         .catch((err) => {
-          sendTo(ws, { type: "error", message: String(err instanceof Error ? err.message : err) });
+          sendTo(ws, {
+            type: "error",
+            message: String(err instanceof Error ? err.message : err),
+            requestId: cmd.requestId,
+          });
         })
         .finally(() => {
           if (entry.extensionUIClient === ws) entry.extensionUIClient = undefined;
@@ -1735,7 +1778,11 @@ wss.on("connection", (ws, req) => {
       return;
     }
     handleCommand(cmd, ws).catch((err) => {
-      sendTo(ws, { type: "error", message: String(err instanceof Error ? err.message : err) });
+      sendTo(ws, {
+        type: "error",
+        message: String(err instanceof Error ? err.message : err),
+        requestId: cmd.type === "prompt" ? cmd.requestId : undefined,
+      });
     });
   });
 
@@ -1756,7 +1803,11 @@ wss.on("connection", (ws, req) => {
       ready = true;
       for (const cmd of queue.splice(0)) {
         handleCommand(cmd, ws).catch((err) => {
-          sendTo(ws, { type: "error", message: String(err instanceof Error ? err.message : err) });
+          sendTo(ws, {
+            type: "error",
+            message: String(err instanceof Error ? err.message : err),
+            requestId: cmd.type === "prompt" ? cmd.requestId : undefined,
+          });
         });
       }
     })
