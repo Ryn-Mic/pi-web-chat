@@ -183,7 +183,7 @@ test("releases the composer as soon as agent_end arrives", () => {
     (client as unknown as { handle(event: unknown): void }).handle({ type: "agent_end" });
 
     assert.equal(client.state.promptStatus, "idle");
-    assert.equal(client.state.optimisticMessages.length, 1);
+    assert.equal(client.state.optimisticMessages.length, 0);
 
     (client as unknown as { handle(event: unknown): void }).handle({
       type: "snapshot",
@@ -193,6 +193,7 @@ test("releases the composer as soon as agent_end arrives", () => {
       },
     });
 
+    assert.equal(client.state.snapshot?.messages.length, 1);
     assert.equal(client.state.optimisticMessages.length, 0);
   } finally {
     restore();

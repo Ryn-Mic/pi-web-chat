@@ -134,7 +134,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     userCountAtSend: number;
     awaitingReceipt: boolean;
   } | null = null;
-  /** Kept after agent_end until the authoritative snapshot contains it. */
+  /** Prompt metadata used to reconcile the optimistic message with snapshots. */
   private optimisticSubmitted: SubmittedComposerPrompt | null = null;
   private optimisticUserCountAtSend = 0;
 
@@ -587,6 +587,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         // composer immediately; keep optimisticSubmitted until the following
         // snapshot reconciles the local user message without duplication.
         this.pendingPrompt = null;
+        this.discardOptimisticMessage();
         this.settlePrompt();
         // Drop isStreaming before the snapshot arrives so no loading dots linger.
         this.update({
