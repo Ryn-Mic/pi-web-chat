@@ -173,8 +173,8 @@ export class SessionWorkspace<
     const existingKey =
       this.tabsSnapshot.find((tab) => tab.sessionId === boundId)?.key ?? boundId;
     const existing = this.clients.get(existingKey);
-    if (existing && existing !== client) {
-      this.lifecycle?.onTabsMerged?.(tabKey, existingKey);
+    const merged = existing && existing !== client;
+    if (merged) {
       this.unsubscriptions.get(tabKey)?.();
       this.unsubscriptions.delete(tabKey);
       this.clients.delete(tabKey);
@@ -187,6 +187,10 @@ export class SessionWorkspace<
     // server's draft -> session transition.
     this.refresh();
     this.onSessionBound?.(boundId, this.activeKeyValue === tabKey);
+
+    if (merged) {
+      this.lifecycle?.onTabsMerged?.(tabKey, existingKey);
+    }
   }
 
   private refresh() {

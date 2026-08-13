@@ -226,7 +226,6 @@ export function clearPreviewWorkspace(tabKey: string): void {
 export function mergePreviewWorkspace(
   losingKey: string,
   survivingKey: string,
-  at?: number,
 ): void {
   if (losingKey === survivingKey) return;
   const losing = workspaces.get(losingKey);

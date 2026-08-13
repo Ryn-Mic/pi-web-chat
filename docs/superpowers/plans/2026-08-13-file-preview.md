@@ -478,7 +478,6 @@ export function clearPreviewWorkspace(tabKey: string): void;
 export function mergePreviewWorkspace(
   losingKey: string,
   survivingKey: string,
-  at?: number,
 ): void;
 export function usePreviewWorkspace(tabKey: string): PreviewWorkspaceState;
 ```

@@ -6,6 +6,7 @@ import {
   getComposerDraft,
   setComposerDraft,
 } from "../src/lib/composer-drafts.ts";
+import { mergePreviewWorkspace } from "../src/lib/file-preview.ts";
 
 type FakeState = {
   sessionId: string | null;
@@ -213,5 +214,48 @@ test("lifecycle: binding a draft to an existing session merges and removes the l
   assert.deepEqual(
     workspace.getTabsSnapshot().map((tab) => ({ key: tab.key, sessionId: tab.sessionId })),
     [{ key: "session-a", sessionId: "session-a" }],
+  );
+});
+
+test("lifecycle: mergePreviewWorkspace signature compiles with two arguments", () => {
+  // Compile-time coverage only; keys are chosen so no real workspace state changes.
+  mergePreviewWorkspace("losing-compile-key", "surviving-compile-key");
+  assert.equal(typeof mergePreviewWorkspace, "function");
+});
+
+test("lifecycle: onTabsMerged exception leaves workspace consistent and disposed losing client", () => {
+  const events: string[] = [];
+  const clients: FakeClient[] = [];
+  const workspace = new SessionWorkspace<FakeState, FakeClient>(
+    (_, onBound) => {
+      const client = new FakeClient(onBound);
+      clients.push(client);
+      return client;
+    },
+    (sessionId, active) => events.push(`bound:${sessionId}:${active}`),
+    {
+      onTabsMerged: (losing, surviving) => {
+        events.push(`merged:${losing}->${surviving}`);
+        throw new Error("merge callback failure");
+      },
+    },
+  );
+
+  workspace.open("session-a");
+  workspace.open(null);
+  const draftKey = workspace.activeKey;
+  assert.ok(draftKey?.startsWith("draft:"));
+
+  assert.throws(() => clients[1].bind("session-a"), /merge callback failure/);
+
+  assert.equal(clients[1].disposed, true);
+  assert.equal(workspace.activeKey, "session-a");
+  assert.deepEqual(
+    workspace.getTabsSnapshot().map((tab) => ({ key: tab.key, sessionId: tab.sessionId })),
+    [{ key: "session-a", sessionId: "session-a" }],
+  );
+  assert.deepEqual(
+    events.filter((e) => e.startsWith("bound:")),
+    ["bound:session-a:false"],
   );
 });
