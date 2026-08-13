@@ -116,7 +116,7 @@ interface PreviewWorkspaceState {
 - `FilePreviewPane`：fetch metadata/content、构造 `File`、调用 precheck、挂载 viewer、管理 abort/loading/error/retry。
 - `MobileFilePreview`：创建 preview context、管理全屏 shell 与 iframe，不直接挂载 viewer。
 - `src/file-preview-main.tsx`：专用 Vite 第二入口，不导入 `ChatPage`、`ChatClient`、AuthGate 或聊天 router；读取 opaque context ID，兑换 metadata/content，构造 `File`，以 compact options 挂载同一 `FileViewerSurface`。
-- `FileViewerSurface`：唯一第三方适配层，收敛主题、locale、toolbar、density、事件和错误转换。通过 `React.lazy(() => import("@file-viewer/react-full"))` 或等价动态 import 只在首次预览时加载；聊天初始 bundle 不得静态包含 full preset。业务组件不得散落第三方 options。
+- `FileViewerSurface`：唯一第三方适配层，收敛主题、locale、toolbar、density、事件和错误转换。通过 `React.lazy(() => import("@file-viewer/react-full"))` 或等价动态 import 只在首次预览时加载；lazy import resolve 后先调用模块导出的 `setDefaultFullAssetBaseUrl("/file-viewer/")` 再返回组件。聊天初始 bundle 不得静态包含 full preset。业务组件不得散落第三方 options。
 
 ## 服务端文件边界
 
@@ -175,7 +175,7 @@ Authorization: Preview <opaque-id>
 - 现有认证只有 Authorization bearer，没有 HttpOnly cookie；iframe 不读取父页 localStorage。因此 opaque ID 本身是短时 bearer capability。token 指纹用于 logout 清理和审计，不要求 iframe 重新提交长期 token。
 - 首次 `HEAD` 或 `GET` 必须在创建后 5 分钟内发生；首次成功后 context 可重复读取至首次使用后 10 分钟，支持慢网加载 frame bundle、viewer metadata/content 重试和 iframe 刷新。并发 HEAD/GET 对首次使用使用同一原子状态转换，不能因竞态互相失效。
 - 每次读取都重新运行 `resolvePreviewFile`，并要求 size/mtime 与创建时一致；变化则返回 409 “file changed”。
-- context 到期、logout 或进程重启后返回 410；定时清理过期 Map 项。现有 Auth 不暴露 session-revocation 事件，因此本期只保证 logout HTTP handler 清理：handler 在 `auth.logout(token)` 前计算 token 指纹并调用 preview context store 删除对应项。30 天自然 session 过期不会主动扫描 contexts，但 context 自身最长 10 分钟，边界可接受。
+- context 到期、logout 或进程重启后返回 410；定时清理过期 Map 项。现有 Auth 不暴露 session-revocation 事件，因此本期只保证 logout HTTP handler 清理：前端 logout 必须先捕获旧 session token并用它发送 `Authorization: Bearer`，再清本地状态；服务端 handler 在 `auth.logout(token)` 前计算 token 指纹并调用 preview context store 删除对应项。30 天自然 session 过期不会主动扫描 contexts，但 context 自身最长 10 分钟，边界可接受。
 - 单个认证 session 指纹最多 16 个活动 context；创建第 17 个时淘汰 `createdAt` 最早项，时间相同按 Map 插入顺序，防止无界增长。移动 UI 一次只存在一个 iframe，打开下一个文件前会卸载旧 iframe，因此 FIFO 不会淘汰仍在屏幕中使用的 context。
 - content endpoint 只接受 Preview Authorization scheme，不接受 query/path ID 或 cwd/path override；capability 不出现在 HTTP path 和常规访问日志中。
 - 返回文件 headers 与桌面 API 相同，并在 HEAD/GET 增加 `X-Preview-Theme: light|dark`、`X-Preview-Locale: en-US|zh-CN|ja-JP`。创建时 ko 已归一化为 `en-US`；frame 只接受这些枚举，未知值回退 `light`/`en-US`。
@@ -225,6 +225,14 @@ function createFileViewerOptions(input: {
       print: false,
       exportHtml: false,
       zoom: true,
+      permissions: {
+        download: false,
+        print: false,
+        "export-html": false,
+      },
+    },
+    archive: {
+      entryActions: { download: false },
     },
   };
 }
@@ -233,20 +241,20 @@ function createFileViewerOptions(input: {
 - 桌面不传 `ui.density`，保留 `comfortable` 默认。
 - 移动显式 `compact`。
 - 不传 `fit: "auto"`；各 renderer 根据初次布局与 ResizeObserver 自动适配。
-- viewer 内下载/打印/export 禁用，避免绕过应用权限与把私有文件产生额外副本；本期不在外层新增下载按钮。
+- viewer 内下载/打印/export 同时通过可见按钮选项与 `toolbar.permissions` 硬禁用，archive entry download 通过 `archive.entryActions.download: false` 禁用，避免公开 controller API 或压缩包子项绕过应用权限并产生私有文件副本；本期不在外层新增下载按钮。
 - theme/locale 映射以本项目状态为源：en→`en-US`、zh→`zh-CN`、ja→`ja-JP`、ko→`en-US`。外围 loading/error/toolbar 继续使用本项目四语言文案。
 
 ## 入口、构建与静态资产
 
 - 保持 `src/main.tsx` 和聊天 router 不变。新增根 `file-preview.html` 与 `src/file-preview-main.tsx`，通过 Vite `build.rollupOptions.input` 构建为 `dist/public/file-preview.html`。
 - frame entry 不使用 `AuthGate`，不读取长期 token；只用 context capability 鉴权。共享的 `FileViewerSurface`/options 可进入 Vite 公共 chunk，但聊天 client/router 不得进入 frame entry 的静态依赖图。
-- `vite.config.ts` 注册 `fileViewerRenderers({ copyAssets: true })`，输出到 `dist/public/file-viewer/`。
+- `vite.config.ts` 注册 `fileViewerRenderers({ copyAssets: true, inject: false })`，只复制运行资产，不向两个 HTML 入口注入 `virtual:file-viewer-renderers`；full package 自带 `preset-all`，并由 lazy 适配层显式设置 `/file-viewer/` asset base。资产输出到 `dist/public/file-viewer/`。
 - Workbox 显式设置 `globIgnores: ["file-viewer/**"]`，整个 viewer 资产树均不进入 precache，包括其中的 `.js/.css/.svg/.woff2/.png`；保留按需网络加载和浏览器普通 HTTP cache。通用 `file-preview.html` 可以随 app shell precache，因为它不含 capability 或文件数据。
 - `server/index.ts` 的静态 MIME 表补充至少：`.mjs`、`.json`、`.wasm`、`.map`、`.woff`、`.ttf`、`.otf`、`.data`、常见媒体和文档 MIME。未知静态后缀保持 `application/octet-stream`。
 - static handler 改为 `createReadStream`，避免大 WASM/data 资产整文件读入 Node 内存。viewer copy-assets 使用稳定路径而非 content hash，升级可能覆盖同名 Worker/WASM；因此 `file-viewer/**` 设置可重验证缓存（`Cache-Control: public, max-age=3600, must-revalidate` + ETag），不能设置一年 immutable。HTML 设置 `Cache-Control: no-cache`。
 - 缺失的 `/file-viewer/**` 资产必须直接 404，不能 fallback 到 app `index.html`。所有 API 分发结束后，仍未匹配的 `/api/*` 根据方法返回 404/405 JSON，不能落到 SPA fallback 200。
 - 其他静态路径的 fallback 仍限制在 `DIST_DIR` 内，不能因新增资产路径放宽。
-- `scripts/build.mjs` 继续调用 Vite；build 验证必须检查 manifest 和代表性的 PDF/Office/CAD/WASM 资产存在，并检查聊天入口 chunk 不静态依赖 full preset chunk。
+- Vite 显式开启 `build.manifest: true`。`scripts/build.mjs` 继续调用 Vite；build 验证必须检查 manifest 和代表性的 PDF/Office/CAD/WASM 资产存在，并沿 manifest 静态 import graph 检查聊天入口 chunk 不静态依赖 full preset chunk。
 - `package.json` dependencies 加同版本范围的 `@file-viewer/react-full` 和 `@file-viewer/core`；devDependencies 加 `@file-viewer/vite-plugin`。不单独安装 `preset-all`。
 - 新增 `THIRD_PARTY_NOTICES.md`，包含 File Viewer 名称、来源、版本、Apache-2.0 说明和许可证路径；`package.json.files` 加入该文件及 `third-party-licenses/`，保存上游 Apache-2.0 文本。
 - `file-viewer-copy-assets@2.2.8` 官方 unpacked payload 约 160 MB，full assets 会显著扩大 `dist`。新增 `scripts/check-pack-size.mjs` 运行 `npm pack --dry-run --json`，记录压缩与 unpacked size并强制压缩 tarball ≤ 150 MiB、unpacked ≤ 500 MiB；`pack:check` 改为 `npm run build && node scripts/check-pack-size.mjs`。超过门限则停止交付并改用标准 package + 明确 presets，而不是静默发布超大包。
