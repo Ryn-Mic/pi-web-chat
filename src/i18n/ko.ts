@@ -87,6 +87,9 @@ export const ko: Messages = {
   gitOperationFailed: "Git 작업에 실패했습니다.",
   gitConfirmDiscard: "커밋되지 않은 변경 사항이 있습니다. 그래도 브랜치를 전환할까요?",
   gitBackToLog: "커밋 목록으로 돌아가기",
+  backToGit: "Git으로 돌아가기",
+  closeCommit: "커밋 상세 닫기",
+  gitNoDiff: "표시할 diff가 없습니다",
 
   sendMessage: "메시지 보내기",
   streamingPlaceholder: "스트리밍 중… (보내면 steering 됩니다)",

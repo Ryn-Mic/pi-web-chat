@@ -87,6 +87,9 @@ export const ja: Messages = {
   gitOperationFailed: "Git 操作に失敗しました。",
   gitConfirmDiscard: "未コミットの変更があります。ブランチを切り替えますか？",
   gitBackToLog: "コミット一覧に戻る",
+  backToGit: "Git に戻る",
+  closeCommit: "コミット詳細を閉じる",
+  gitNoDiff: "表示できる diff はありません",
 
   sendMessage: "メッセージを送信",
   streamingPlaceholder: "ストリーミング中…（送信でステアリング）",

@@ -19,4 +19,8 @@ execFileSync("git", ["-C", project, "config", "user.name", "E2E Test"]);
 execFileSync("git", ["-C", project, "add", "README.md", "notes.txt"]);
 execFileSync("git", ["-C", project, "commit", "-qm", "seed preview files"]);
 writeFileSync(join(project, "README.md"), "# Preview fixture\n\nChanged in the working tree.\n");
+writeFileSync(join(project, "notes.txt"), "plain text changed\n");
+execFileSync("git", ["-C", project, "add", "README.md", "notes.txt"]);
+execFileSync("git", ["-C", project, "commit", "-qm", "update preview files"]);
+writeFileSync(join(project, "README.md"), "# Preview fixture\n\nChanged after the commit.\n");
 console.log(JSON.stringify({ base, home, project }));

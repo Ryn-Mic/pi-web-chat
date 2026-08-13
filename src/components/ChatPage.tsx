@@ -16,6 +16,7 @@ import { useLeftEdgeSwipe, useRightEdgeSwipe } from "../lib/useEdgeSwipe";
 import { Composer } from "./Composer";
 import { ExtensionUIHost } from "./ExtensionUIHost";
 import { FilesDrawer } from "./FileTreePanel";
+import { MobileGitCommitDetail, type MobileGitCommitSelection } from "./MobileGitCommitDetail";
 import { FileWorkspaceSidebar } from "./FileWorkspaceSidebar";
 import { ProjectBadge } from "./ProjectBadge";
 import { MessageList } from "./MessageList";
@@ -90,6 +91,7 @@ export function ChatPage() {
   const messageListRef = useRef<HTMLDivElement>(null);
   const [settingsOpenToken, setSettingsOpenToken] = useState(0);
   const [mobilePreview, setMobilePreview] = useState<MobilePreviewSelection | null>(null);
+  const [mobileGitCommit, setMobileGitCommit] = useState<MobileGitCommitSelection | null>(null);
 
   // URL → connection ("/" is a draft without an id yet; the server sends
   // session_bound on the first input)
@@ -327,13 +329,19 @@ export function ChatPage() {
         <ExtensionUIHost />
       </div>
       <FileWorkspaceSidebar />
-      <FilesDrawer onPreviewFile={setMobilePreview} />
+      <FilesDrawer onPreviewFile={setMobilePreview} onSelectCommit={setMobileGitCommit} />
       {mobilePreview && (
         <MobileFilePreview
           selection={mobilePreview}
           theme={theme}
           locale={locale}
           onClose={() => setMobilePreview(null)}
+        />
+      )}
+      {mobileGitCommit && (
+        <MobileGitCommitDetail
+          selection={mobileGitCommit}
+          onClose={() => setMobileGitCommit(null)}
         />
       )}
     </div>

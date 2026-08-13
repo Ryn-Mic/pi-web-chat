@@ -90,6 +90,9 @@ export type Messages = {
   gitOperationFailed: string;
   gitConfirmDiscard: string;
   gitBackToLog: string;
+  backToGit: string;
+  closeCommit: string;
+  gitNoDiff: string;
 
   // composer
   sendMessage: string;
@@ -278,6 +281,9 @@ export const en: Messages = {
   gitOperationFailed: "Git operation failed.",
   gitConfirmDiscard: "The working tree has uncommitted changes. Switch branches anyway?",
   gitBackToLog: "Back to commits",
+  backToGit: "Back to Git",
+  closeCommit: "Close commit",
+  gitNoDiff: "No diff available",
 
   sendMessage: "Send a message",
   streamingPlaceholder: "Streaming… (send to steer)",

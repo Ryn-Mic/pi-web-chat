@@ -315,14 +315,19 @@ export function FileTreePanel({
 /** Mobile right-edge overlay drawer. */
 export function FilesDrawer({
   onPreviewFile,
+  onSelectCommit,
 }: {
   onPreviewFile?: (file: PreviewFileSelection) => void;
+  onSelectCommit?: (commit: { cwd: string; hash: string; subject: string; trigger?: HTMLElement | null }) => void;
 }) {
   const t = useT();
   const { snapshot } = useChat();
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<"files" | "git">("files");
-  useEffect(() => onRequestOpenFilesDrawer(() => setOpen(true)), []);
+  useEffect(() => onRequestOpenFilesDrawer((nextView) => {
+    if (nextView) setView(nextView);
+    setOpen(true);
+  }), []);
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Portal>
@@ -354,6 +359,10 @@ export function FilesDrawer({
               cwd={snapshot?.cwd}
               docked={false}
               onClose={() => setOpen(false)}
+              onSelectCommit={(commit, trigger) => {
+                setOpen(false);
+                onSelectCommit?.({ cwd: snapshot?.cwd ?? "", hash: commit.hash, subject: commit.subject, trigger });
+              }}
               onPreviewFile={(file) => {
                 setOpen(false);
                 onPreviewFile?.({ ...file, cwd: file.cwd || snapshot?.cwd || "" });

@@ -1,5 +1,5 @@
 import { useMemo, useState, type MouseEvent } from "react";
-import type { UIGitBranch, UIGitCommit, UIGitFile, UIGitStatus } from "../../shared/protocol";
+import type { UIGitBranch, UIGitCommit, UIGitCommitDetail, UIGitFile, UIGitStatus } from "../../shared/protocol";
 import {
   checkoutGitBranch,
   useGitBranches,
@@ -8,6 +8,7 @@ import {
   useGitStatus,
 } from "../lib/api";
 import { chatClient } from "../lib/chat";
+import { formatGitTimestamp, splitCommitDiffByFile } from "../lib/git";
 import { useT } from "../lib/i18n";
 import { DiffView } from "./DiffView";
 import type { PreviewFileSelection } from "./FileTreePanel";
@@ -27,12 +28,6 @@ function statusClass(file: UIGitFile): string {
   if (file.kind === "added") return "text-emerald-500";
   if (file.kind === "deleted") return "text-red-500";
   return "text-accent";
-}
-
-function formatDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
 }
 
 function GitFileRow({
@@ -130,23 +125,73 @@ function BranchSection({ cwd, status, branches }: { cwd: string; status: UIGitSt
   );
 }
 
-function CommitSection({ cwd, commits, onSelect }: { cwd: string; commits: UIGitCommit[]; onSelect: (hash: string) => void }) {
+function CommitSection({ commits, onSelect }: { commits: UIGitCommit[]; onSelect: (commit: UIGitCommit, trigger?: HTMLElement | null) => void }) {
   const t = useT();
   return (
     <section className="space-y-1">
       <h3 className="px-2 text-[10px] font-semibold uppercase tracking-wider text-faint">{t("gitRecentCommits")}</h3>
       <div className="space-y-0.5">
         {commits.map((commit) => (
-          <button key={commit.hash} type="button" onClick={() => onSelect(commit.hash)} className="flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-hover" title={`${commit.hash} ${commit.subject}`}>
+          <button key={commit.hash} type="button" onClick={(event) => onSelect(commit, event.currentTarget)} className="flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-hover" title={`${commit.hash} ${commit.subject}`}>
             <span className="flex min-w-0 items-center gap-2 text-[11px]">
               <span className="shrink-0 font-mono text-accent">{commit.shortHash}</span>
               <span className="truncate text-muted">{commit.subject}</span>
             </span>
-            <span className="pl-12 text-[10px] text-faint">{commit.author} · {formatDate(commit.date)}</span>
+            <span className="pl-12 text-[10px] text-faint">{commit.author} · {formatGitTimestamp(commit.date)}</span>
           </button>
         ))}
       </div>
     </section>
+  );
+}
+
+export function CommitDiffFiles({ data }: { data: UIGitCommitDetail }) {
+  const t = useT();
+  const patches = useMemo(() => splitCommitDiffByFile(data.diff), [data.diff]);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  return (
+    <div className="space-y-1">
+      {data.files.map((file, index) => {
+        const isOpen = expanded.has(index);
+        const patch = patches[index] ?? "";
+        const label = file.oldPath ? `${file.oldPath} -> ${file.path}` : file.path;
+        return (
+          <div key={`${label}-${index}`} className="overflow-hidden rounded-md border border-line">
+            <button
+              type="button"
+              aria-expanded={isOpen}
+              onClick={() => setExpanded((current) => {
+                const next = new Set(current);
+                if (next.has(index)) next.delete(index);
+                else next.add(index);
+                return next;
+              })}
+              className="flex w-full min-w-0 items-center gap-2 px-2.5 py-2 text-left text-xs text-muted hover:bg-hover hover:text-ink"
+            >
+              <span className="w-3 shrink-0 text-center text-faint" aria-hidden>{isOpen ? "⌄" : "›"}</span>
+              <span className="shrink-0 font-mono text-accent">{file.status}</span>
+              <span className="min-w-0 flex-1 break-all">{label}</span>
+            </button>
+            {isOpen && (patch ? <DiffView text={patch} maxHeight="max-h-80" /> : <p className="border-t border-line px-3 py-2 text-xs text-faint">{t("gitNoDiff")}</p>)}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export function GitCommitContent({ data }: { data: UIGitCommitDetail }) {
+  const t = useT();
+  return (
+    <div className="space-y-3 text-xs text-muted">
+      <div>
+        <p>{data.author} · {formatGitTimestamp(data.date)}</p>
+        <p className="mt-1 break-all font-mono text-[10px] text-faint">{data.hash}</p>
+      </div>
+      {data.body && <pre className="whitespace-pre-wrap font-sans">{data.body}</pre>}
+      <h4 className="pt-1 text-[10px] font-semibold uppercase tracking-wider text-faint">{t("gitChangedFiles")}</h4>
+      <CommitDiffFiles data={data} />
+    </div>
   );
 }
 
@@ -161,23 +206,17 @@ function CommitDetail({ cwd, hash, onClose }: { cwd: string; hash: string; onClo
         <button type="button" onClick={onClose} aria-label={t("gitBackToLog")} title={t("gitBackToLog")} className="flex size-7 items-center justify-center rounded text-muted hover:bg-hover hover:text-ink">←</button>
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-sm font-semibold text-ink">{data.subject}</h3>
-          <p className="truncate font-mono text-[10px] text-faint">{data.hash}</p>
+          <p className="truncate font-mono text-[10px] text-faint">{formatGitTimestamp(data.date)}</p>
         </div>
       </div>
-      <div className="thin-scroll flex-1 overflow-y-auto p-3 text-xs text-muted">
-        <p>{data.author} · {formatDate(data.date)}</p>
-        {data.body && <pre className="mt-3 whitespace-pre-wrap font-sans">{data.body}</pre>}
-        <h4 className="mt-5 mb-1 text-[10px] font-semibold uppercase tracking-wider text-faint">{t("gitChangedFiles")}</h4>
-        {data.diff && <DiffView text={data.diff} maxHeight="max-h-80" />}
-        <div className="space-y-1">
-          {data.files.map((file) => <div key={`${file.path}-${file.oldPath ?? ""}`} className="flex gap-2"><span className="font-mono text-accent">{file.status}</span><span className="break-all">{file.path}</span></div>)}
-        </div>
+      <div className="thin-scroll flex-1 overflow-y-auto p-3">
+        <GitCommitContent data={data} />
       </div>
     </div>
   );
 }
 
-export function GitWorkspacePanel({ cwd, onPreviewFile, docked = true, onClose }: { cwd?: string; onPreviewFile?: (file: PreviewFileSelection) => void; docked?: boolean; onClose?: () => void }) {
+export function GitWorkspacePanel({ cwd, onPreviewFile, docked = true, onClose, onSelectCommit }: { cwd?: string; onPreviewFile?: (file: PreviewFileSelection) => void; docked?: boolean; onClose?: () => void; onSelectCommit?: (commit: UIGitCommit, trigger?: HTMLElement | null) => void }) {
   const t = useT();
   const [selectedCommit, setSelectedCommit] = useState<string | null>(null);
   const { data: status, isPending: statusPending, isError: statusError } = useGitStatus(cwd);
@@ -188,10 +227,10 @@ export function GitWorkspacePanel({ cwd, onPreviewFile, docked = true, onClose }
     return [...status.staged, ...status.unstaged, ...status.untracked.filter((file) => !status.staged.some((item) => item.path === file.path))];
   }, [status]);
 
-  if (selectedCommit && cwd) return <CommitDetail cwd={cwd} hash={selectedCommit} onClose={() => setSelectedCommit(null)} />;
+  if (selectedCommit && cwd && !onSelectCommit) return <CommitDetail cwd={cwd} hash={selectedCommit} onClose={() => setSelectedCommit(null)} />;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-1 border-b border-line px-3 py-2.5 pt-[calc(0.75rem+env(safe-area-inset-top))] md:pt-2.5">
+      <div className={`flex items-center gap-1 border-b border-line px-3 ${docked ? "py-2.5" : "py-2"}`}>
         <h2 className="min-w-0 flex-1 truncate px-1 text-[15px] font-semibold text-ink" title={cwd}>{t("git")}{status?.branch ? <span className="ml-2 font-mono text-xs font-normal text-muted">{status.branch}</span> : null}</h2>
         {onClose && <button type="button" onClick={onClose} aria-label={t("closeFiles")} title={t("closeFiles")} className="flex size-8 items-center justify-center rounded-lg text-faint hover:bg-hover hover:text-ink">×</button>}
       </div>
@@ -212,7 +251,7 @@ export function GitWorkspacePanel({ cwd, onPreviewFile, docked = true, onClose }
             <FileGroup title={t("gitChangedFiles")} files={status.unstaged} onPreviewFile={onPreviewFile} />
             <FileGroup title={t("gitUntrackedFiles")} files={status.untracked} onPreviewFile={onPreviewFile} />
             <BranchSection cwd={cwd!} status={status} branches={branches} />
-            <CommitSection cwd={cwd!} commits={commits} onSelect={setSelectedCommit} />
+            <CommitSection commits={commits} onSelect={(commit, trigger) => onSelectCommit ? onSelectCommit(commit, trigger) : setSelectedCommit(commit.hash)} />
             {files.length === 0 && <p className="px-2 text-sm text-faint">{t("gitNoChanges")}</p>}
           </div>
         </>

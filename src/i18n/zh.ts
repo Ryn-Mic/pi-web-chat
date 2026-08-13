@@ -88,6 +88,9 @@ export const zh: Messages = {
   gitOperationFailed: "Git 操作失败。",
   gitConfirmDiscard: "工作区有未提交改动，仍要切换分支吗？",
   gitBackToLog: "返回提交记录",
+  backToGit: "返回 Git",
+  closeCommit: "关闭提交详情",
+  gitNoDiff: "没有可显示的 diff",
 
   sendMessage: "发送消息",
   streamingPlaceholder: "流式输出中…（发送可进行引导）",

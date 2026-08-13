@@ -37,6 +37,25 @@ test("Git workspace shows changes and opens changed files in preview", async ({ 
   await expect(page.getByRole("tab", { name: "README.md" })).toHaveAttribute("aria-selected", "true");
 });
 
+test("mobile commit detail is full-screen and expands one file diff at a time", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 667 });
+  await login(page);
+  await page.getByRole("button", { name: "Open files" }).click();
+  await page.getByRole("tab", { name: "Git" }).click();
+  await page.getByText("update preview files").click();
+
+  await expect(page.getByRole("heading", { name: "update preview files" })).toBeVisible();
+  await expect(page.getByText("README.md", { exact: true })).toBeVisible();
+  await expect(page.getByText("notes.txt", { exact: true })).toBeVisible();
+  await expect(page.locator("[aria-expanded=true]")).toHaveCount(0);
+  await page.locator('button[aria-expanded="false"]').filter({ hasText: "README.md" }).last().click();
+  await expect(page.locator("[aria-expanded=true]")).toHaveCount(1);
+  await expect(page.getByText("Changed in the working tree.", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Back to Git" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Git" })).toHaveAttribute("aria-selected", "true");
+});
+
 test("mobile preview uses an isolated capability iframe and browser history", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 667 });
   await login(page);
