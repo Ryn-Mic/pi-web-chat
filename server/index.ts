@@ -1084,17 +1084,6 @@ let knownCustomProviderKeys = new Set(readCustomModels().providers.map((p) => p.
 // HTTP server (API + static files)
 // ---------------------------------------------------------------------------
 
-const MIME: Record<string, string> = {
-  ".html": "text/html",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".ico": "image/x-icon",
-  ".woff2": "font/woff2",
-  ".webmanifest": "application/manifest+json",
-};
-
 /** Extract the session token from Authorization: Bearer <t> or ?token=<t> */
 function sessionTokenFromRequest(req: IncomingMessage): string {
   const header = req.headers.authorization;
@@ -1174,7 +1163,11 @@ async function handleAuthRequest(req: IncomingMessage, res: import("node:http").
     return;
   }
 
-  sendJson(404, { error: "not found" });
+  if (req.method === "GET" || req.method === "HEAD") {
+    sendJson(404, { error: "not found" });
+  } else {
+    sendJson(405, { error: "method not allowed" });
+  }
 }
 
 
@@ -1433,7 +1426,7 @@ const httpServer = createServer(async (req, res) => {
           : code === "EACCES" ? 403
           : 500;
         res.writeHead(status, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        res.end(JSON.stringify({ error: status === 500 ? "internal server error" : err instanceof Error ? err.message : String(err) }));
         return;
       }
     }
@@ -1506,15 +1499,26 @@ const httpServer = createServer(async (req, res) => {
 
     // Unmatched API routes
     if (url.pathname.startsWith("/api/")) {
-      const status = req.method === "GET" || req.method === "HEAD" ? 404 : 405;
-      res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
-      res.end(JSON.stringify({ error: "not found" }));
+      if (req.method === "GET" || req.method === "HEAD") {
+        res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "not found" }));
+      } else {
+        res.writeHead(405, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "method not allowed" }));
+      }
       return;
     }
 
     // Static files (production build)
     if (existsSync(DIST_DIR)) {
-      const pathname = decodeURIComponent(url.pathname);
+      let pathname: string;
+      try {
+        pathname = decodeURIComponent(url.pathname);
+      } catch {
+        res.writeHead(400, { "content-type": "text/plain" });
+        res.end("Bad request");
+        return;
+      }
       const viewerPrefix = "/file-viewer/";
       const isViewer = pathname.startsWith(viewerPrefix);
 
@@ -1527,7 +1531,9 @@ const httpServer = createServer(async (req, res) => {
 
       if (isViewer) {
         if (existsSync(filePath) && statSync(filePath).isFile()) {
-          streamStaticFile(req, res, filePath, { cacheControl: "max-age=3600, must-revalidate" });
+          streamStaticFile(req, res, filePath, {
+            cacheControl: "public, max-age=3600, must-revalidate",
+          });
         } else {
           res.writeHead(404, { "content-type": "text/plain" });
           res.end("Not found");
@@ -1554,9 +1560,9 @@ const httpServer = createServer(async (req, res) => {
 
     res.writeHead(404);
     res.end("Not found. Run `npm run build` first, or use `npm run dev`.");
-  } catch (err) {
+  } catch {
     res.writeHead(500, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: String(err instanceof Error ? err.message : err) }));
+    res.end(JSON.stringify({ error: "internal server error" }));
   }
 });
 

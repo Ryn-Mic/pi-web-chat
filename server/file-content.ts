@@ -15,11 +15,36 @@ export interface PreviewRequestDeps {
 }
 
 const STATIC_MIME: Record<string, string> = {
-  ".wasm": "application/wasm",
+  ".html": "text/html",
+  ".js": "text/javascript",
   ".mjs": "text/javascript",
+  ".css": "text/css",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".ico": "image/x-icon",
+  ".json": "application/json",
+  ".map": "application/json",
+  ".wasm": "application/wasm",
   ".woff": "font/woff",
+  ".woff2": "font/woff2",
   ".ttf": "font/ttf",
+  ".otf": "font/otf",
   ".data": "application/octet-stream",
+  ".webmanifest": "application/manifest+json",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".pdf": "application/pdf",
+  ".doc": "application/msword",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".ppt": "application/vnd.ms-powerpoint",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 };
 
 export function staticMimeType(pathname: string): string {
@@ -29,6 +54,9 @@ export function staticMimeType(pathname: string): string {
 interface StaticOptions {
   cacheControl?: string;
 }
+
+const INTERNAL_ERROR_TEXT = "internal server error";
+const INTERNAL_ERROR_JSON = { error: INTERNAL_ERROR_TEXT };
 
 export function streamStaticFile(
   req: IncomingMessage,
@@ -54,7 +82,8 @@ export function streamStaticFile(
     const headers: Record<string, string> = {
       "content-type": staticMimeType(filePath),
       "content-length": String(st.size),
-      "accept-ranges": "bytes",
+      "x-content-type-options": "nosniff",
+      "cross-origin-resource-policy": "same-origin",
       "last-modified": new Date(st.mtimeMs).toUTCString(),
       etag: `W/"${st.size}-${st.mtimeMs}"`,
     };
@@ -62,9 +91,9 @@ export function streamStaticFile(
 
     res.writeHead(200, headers);
     stream = createReadStream(filePath);
-    stream.on("error", (err) => {
+    stream.on("error", () => {
       cleanup();
-      if (!res.writableEnded) res.end(`stream error: ${err.message}`);
+      res.destroy();
     });
     stream.pipe(res);
   } catch (err) {
@@ -75,7 +104,7 @@ export function streamStaticFile(
     } else if (code === "EACCES") {
       sendPlain(res, 403, "Forbidden");
     } else {
-      sendPlain(res, 500, "Internal server error");
+      sendPlain(res, 500, INTERNAL_ERROR_TEXT);
     }
   }
 }
@@ -92,7 +121,9 @@ function setContentHeaders(res: ServerResponse, meta: ResolvedPreviewFile): void
   res.setHeader("content-length", String(meta.size));
   res.setHeader("etag", meta.etag);
   res.setHeader("cache-control", "private, no-store");
-  res.setHeader("accept-ranges", "bytes");
+  res.setHeader("content-disposition", `inline; filename*=UTF-8''${encodeURIComponent(meta.name)}`);
+  res.setHeader("x-content-type-options", "nosniff");
+  res.setHeader("cross-origin-resource-policy", "same-origin");
   res.setHeader("last-modified", new Date(meta.mtimeMs).toUTCString());
 }
 
@@ -115,8 +146,8 @@ export async function handleDesktopFileContent(
   }
 
   const rawCwd = url.searchParams.get("cwd") ?? "";
-  const rawPath = url.searchParams.get("path") ?? "";
-  if (!rawCwd || !rawPath) {
+  const rel = url.searchParams.get("path") ?? "";
+  if (!rawCwd || !rel) {
     sendJson(400, { error: "cwd and path are required" });
     return true;
   }
@@ -127,20 +158,12 @@ export async function handleDesktopFileContent(
     return true;
   }
 
-  let rel: string;
-  try {
-    rel = decodeURIComponent(rawPath);
-  } catch {
-    sendJson(400, { error: "invalid path encoding" });
-    return true;
-  }
-
   let meta: ResolvedPreviewFile;
   try {
     meta = resolvePreviewFile(root, rel);
   } catch (err) {
     if (err instanceof PathEscapeError) {
-      sendJson(400, { error: err instanceof Error ? err.message : String(err) });
+      sendJson(400, { error: "invalid path" });
       return true;
     }
     if (err instanceof PreviewTooLargeError) {
@@ -156,7 +179,7 @@ export async function handleDesktopFileContent(
       sendJson(403, { error: "forbidden" });
       return true;
     }
-    sendJson(500, { error: err instanceof Error ? err.message : String(err) });
+    sendJson(500, INTERNAL_ERROR_JSON);
     return true;
   }
 
@@ -190,23 +213,23 @@ export async function handleDesktopFileContent(
       sendJson(403, { error: "forbidden" });
       return true;
     }
-    sendJson(500, { error: err instanceof Error ? err.message : String(err) });
+    sendJson(500, INTERNAL_ERROR_JSON);
     return true;
   }
 
-  let stream = fdResult.stream;
+  const stream = fdResult.stream;
   const cleanup = () => {
     stream.destroy();
     stream.removeAllListeners();
   };
   req.once("aborted", cleanup);
   res.once("close", cleanup);
-  stream.on("error", (err) => {
+  stream.on("error", () => {
     cleanup();
     if (!res.headersSent) {
       res.writeHead(500, { "content-type": "application/json", "cache-control": "no-store" });
     }
-    if (!res.writableEnded) res.end(JSON.stringify({ error: err.message }));
+    res.destroy();
   });
 
   setContentHeaders(res, meta);

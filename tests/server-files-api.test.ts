@@ -3,6 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   chmodSync,
   closeSync,
+  existsSync,
   ftruncateSync,
   mkdirSync,
   mkdtempSync,
@@ -13,7 +14,7 @@ import {
 } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, test } from "node:test";
 
 let child: ChildProcessWithoutNullStreams | undefined;
@@ -132,6 +133,10 @@ test("file APIs require a session token, authorize known cwd, and reject unsafe 
   assert.equal(await head.text(), "");
   assert.equal(head.headers.get("content-length"), "5");
   assert.equal(head.headers.get("cache-control"), "private, no-store");
+  assert.equal(head.headers.get("content-disposition"), "inline; filename*=UTF-8''README.md");
+  assert.equal(head.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(head.headers.get("cross-origin-resource-policy"), "same-origin");
+  assert.equal(head.headers.get("accept-ranges"), null);
   const etag = head.headers.get("etag");
   assert.ok(etag);
 
@@ -195,6 +200,35 @@ test("file APIs require a session token, authorize known cwd, and reject unsafe 
   });
   assert.equal(unknownApi.status, 404);
   assert.equal(unknownApi.headers.get("content-type"), "application/json");
+  const unknownApiBody = (await unknownApi.json()) as { error?: string };
+  assert.equal(unknownApiBody.error, "not found");
+
+  const unknownApiPost = await fetch(`${baseUrl}/api/nope`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${sessionToken}` },
+  });
+  assert.equal(unknownApiPost.status, 405);
+  assert.equal(unknownApiPost.headers.get("content-type"), "application/json");
+  const unknownApiPostBody = (await unknownApiPost.json()) as { error?: string };
+  assert.equal(unknownApiPostBody.error, "method not allowed");
+
+  const malformedPercent = await fetch(`${baseUrl}/file-viewer/%`);
+  assert.equal(malformedPercent.status, 400);
+
+  const distDir = resolve(process.cwd(), "dist", "public");
+  if (existsSync(distDir)) {
+    const viewerDir = join(distDir, "file-viewer");
+    mkdirSync(viewerDir, { recursive: true });
+    const percentFile = join(viewerDir, "%");
+    writeFileSync(percentFile, "ok");
+    try {
+      const percentFileRes = await fetch(`${baseUrl}/file-viewer/%25`);
+      assert.equal(percentFileRes.status, 200);
+      assert.equal(await percentFileRes.text(), "ok");
+    } finally {
+      rmSync(percentFile, { force: true });
+    }
+  }
 
   const missingViewerAsset = await fetch(`${baseUrl}/file-viewer/nope.wasm`);
   assert.equal(missingViewerAsset.status, 404);
