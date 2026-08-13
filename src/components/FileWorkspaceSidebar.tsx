@@ -14,7 +14,11 @@ import {
   FileTreePanel,
   type PreviewFileSelection,
 } from "./FileTreePanel";
-import { FileWorkspaceTabs, workspacePanelId } from "./FileWorkspaceTabs";
+import {
+  FileWorkspaceTabs,
+  workspacePanelId,
+  workspaceTabId,
+} from "./FileWorkspaceTabs";
 
 export function openWorkspacePreview(file: PreviewFileSelection): void {
   const tabKey = chatClient.activeTabKey;
@@ -69,27 +73,16 @@ export function FileWorkspaceSidebar() {
         onClose={(identity) => closePreview(tabKey, identity)}
         onRefresh={refresh}
       />
-      {activeTab ? (
-        <div
-          id={workspacePanelId(tabKey, activeIdentity)}
-          role="tabpanel"
-          aria-labelledby={`file-workspace-tab-${encodeURIComponent(tabKey)}-${encodeURIComponent(activeIdentity)}`}
-          className="min-h-0 flex-1"
-        >
-          <FilePreviewPane
-            cwd={activeTab.cwd}
-            path={activeTab.path}
-            name={activeTab.name}
-            refreshToken={refreshByIdentity[activeIdentity] ?? 0}
-          />
-        </div>
-      ) : (
-        <div
-          id={workspacePanelId(tabKey, "files")}
-          role="tabpanel"
-          aria-labelledby={`file-workspace-tab-${encodeURIComponent(tabKey)}-files`}
-          className="flex min-h-0 flex-1 flex-col"
-        >
+
+      <div
+        id={workspacePanelId(tabKey, "files")}
+        role="tabpanel"
+        aria-labelledby={workspaceTabId(tabKey, "files")}
+        hidden={workspace.active !== "files"}
+        className="min-h-0 flex-1 flex-col data-[active=true]:flex"
+        data-active={workspace.active === "files"}
+      >
+        {workspace.active === "files" && (
           <FileTreePanel
             docked
             onClose={() => setFilesPanelOpen(false)}
@@ -97,8 +90,32 @@ export function FileWorkspaceSidebar() {
             selectedFileIdentity={selectedFileIdentity}
             cwd={snapshot?.cwd}
           />
-        </div>
-      )}
+        )}
+      </div>
+
+      {workspace.tabs.map((tab) => {
+        const identity = previewIdentity(tab.cwd, tab.path);
+        const active = identity === workspace.active;
+        return (
+          <div
+            key={identity}
+            id={workspacePanelId(tabKey, identity)}
+            role="tabpanel"
+            aria-labelledby={workspaceTabId(tabKey, identity)}
+            hidden={!active}
+            className="min-h-0 flex-1"
+          >
+            {active && (
+              <FilePreviewPane
+                cwd={tab.cwd}
+                path={tab.path}
+                name={tab.name}
+                refreshToken={refreshByIdentity[identity] ?? 0}
+              />
+            )}
+          </div>
+        );
+      })}
     </aside>
   );
 }

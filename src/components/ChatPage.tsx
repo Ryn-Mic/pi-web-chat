@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { chatClient, useChat } from "../lib/chat";
 import { requestOpenFilesDrawer, requestOpenSessionsDrawer } from "../lib/drawer";
 import { setFilesPanelOpen, useFilesPanelOpen } from "../lib/filetree";
-import { useT } from "../lib/i18n";
+import { useLocale, useT } from "../lib/i18n";
 import {
   getLastSessionId,
   isFreshDraftRequested,
@@ -11,6 +11,7 @@ import {
   useResumeEnabled,
 } from "../lib/resume";
 import { useSidebarPinned } from "../lib/sidebar";
+import { useTheme } from "../lib/theme";
 import { useLeftEdgeSwipe, useRightEdgeSwipe } from "../lib/useEdgeSwipe";
 import { Composer } from "./Composer";
 import { ExtensionUIHost } from "./ExtensionUIHost";
@@ -18,6 +19,10 @@ import { FilesDrawer } from "./FileTreePanel";
 import { FileWorkspaceSidebar } from "./FileWorkspaceSidebar";
 import { ProjectBadge } from "./ProjectBadge";
 import { MessageList } from "./MessageList";
+import {
+  MobileFilePreview,
+  type MobilePreviewSelection,
+} from "./MobileFilePreview";
 import { SessionTabs } from "./SessionTabs";
 import { SessionsDrawer, SessionsSidebar } from "./SessionsDrawer";
 
@@ -56,6 +61,8 @@ function connectionLabel(
 
 export function ChatPage() {
   const t = useT();
+  const theme = useTheme();
+  const locale = useLocale();
   const {
     connection,
     sessionId,
@@ -82,6 +89,7 @@ export function ChatPage() {
   const resumeEnabled = useResumeEnabled();
   const messageListRef = useRef<HTMLDivElement>(null);
   const [settingsOpenToken, setSettingsOpenToken] = useState(0);
+  const [mobilePreview, setMobilePreview] = useState<MobilePreviewSelection | null>(null);
 
   // URL → connection ("/" is a draft without an id yet; the server sends
   // session_bound on the first input)
@@ -319,7 +327,15 @@ export function ChatPage() {
         <ExtensionUIHost />
       </div>
       <FileWorkspaceSidebar />
-      <FilesDrawer />
+      <FilesDrawer onPreviewFile={setMobilePreview} />
+      {mobilePreview && (
+        <MobileFilePreview
+          selection={mobilePreview}
+          theme={theme}
+          locale={locale}
+          onClose={() => setMobilePreview(null)}
+        />
+      )}
     </div>
   );
 }

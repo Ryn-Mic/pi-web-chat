@@ -62,6 +62,12 @@ export const ja: Messages = {
   filePreviewExpired: "{name} のプレビュー期限が切れました",
   filePreviewFailed: "{name} の読み込みに失敗しました",
   filePreviewRetry: "再試行",
+  previewFile: "{name} をプレビュー",
+  referenceFile: "{name} を参照",
+  closePreviewTab: "プレビュータブを閉じる",
+  refreshPreview: "プレビューを更新",
+  backToFiles: "ファイルに戻る",
+  closePreview: "プレビューを閉じる",
 
   sendMessage: "メッセージを送信",
   streamingPlaceholder: "ストリーミング中…（送信でステアリング）",

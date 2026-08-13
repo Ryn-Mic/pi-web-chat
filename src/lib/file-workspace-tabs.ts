@@ -24,3 +24,14 @@ export function nextWorkspaceTabId(
 export function shouldCloseWorkspaceTab(key: string): boolean {
   return key === "Delete" || key === "Backspace";
 }
+
+export function nextWorkspaceFocusAfterClose(
+  ids: readonly string[],
+  active: string,
+  closing: string,
+): string {
+  if (closing !== active) return active;
+  const index = ids.indexOf(closing);
+  if (index === -1) return active;
+  return ids[index === 1 ? 2 : Math.max(index - 1, 0)] ?? "files";
+}

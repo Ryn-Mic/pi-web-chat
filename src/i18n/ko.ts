@@ -62,6 +62,12 @@ export const ko: Messages = {
   filePreviewExpired: "{name} 미리보기가 만료되었습니다",
   filePreviewFailed: "{name} 로드 실패",
   filePreviewRetry: "다시 시도",
+  previewFile: "{name} 미리보기",
+  referenceFile: "{name} 참조",
+  closePreviewTab: "미리보기 탭 닫기",
+  refreshPreview: "미리보기 새로 고침",
+  backToFiles: "파일로 돌아가기",
+  closePreview: "미리보기 닫기",
 
   sendMessage: "메시지 보내기",
   streamingPlaceholder: "스트리밍 중… (보내면 steering 됩니다)",

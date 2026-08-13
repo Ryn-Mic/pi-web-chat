@@ -26,6 +26,8 @@ export class PathEscapeError extends Error {}
 
 export class PreviewTooLargeError extends Error {}
 
+export class PreviewUnsupportedError extends Error {}
+
 export const MAX_PREVIEW_BYTES = 100 * 1024 * 1024;
 
 export interface ResolvedPreviewFile {
@@ -64,7 +66,8 @@ function lookupMime(rel: string): string {
       return "text/plain";
     case ".html":
     case ".htm":
-      return "text/html";
+    case ".xml":
+      return "text/plain";
     case ".css":
       return "text/css";
     case ".js":
@@ -85,7 +88,7 @@ function lookupMime(rel: string): string {
     case ".gif":
       return "image/gif";
     case ".svg":
-      return "image/svg+xml";
+      throw new PreviewUnsupportedError();
     case ".pdf":
       return "application/pdf";
     default:

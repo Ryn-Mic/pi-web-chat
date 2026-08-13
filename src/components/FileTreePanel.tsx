@@ -1,5 +1,5 @@
 import { Dialog } from "@base-ui-components/react/dialog";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import type { UITreeNode } from "../../shared/protocol";
 import { useInvalidateTree, useTree } from "../lib/api";
 import { chatClient, useChat } from "../lib/chat";
@@ -12,6 +12,7 @@ export interface PreviewFileSelection {
   cwd: string;
   path: string;
   name: string;
+  trigger?: HTMLElement | null;
 }
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
@@ -118,8 +119,8 @@ function TreeNodeRow({
   }
 
   const selected = selectedFileIdentity === previewIdentity(cwd, node.path);
-  const file = { cwd, path: node.path, name: node.name };
-  const previewOrReference = () => {
+  const previewOrReference = (event: MouseEvent<HTMLButtonElement>) => {
+    const file = { cwd, path: node.path, name: node.name, trigger: event.currentTarget };
     if (onPreviewFile) onPreviewFile(file);
     else chatClient.insertComposerText(`@${node.path} `);
     onPickFile?.();
@@ -136,6 +137,7 @@ function TreeNodeRow({
         type="button"
         onClick={previewOrReference}
         title={node.path}
+        aria-label={t("previewFile", { name: node.name })}
         aria-current={selected ? "true" : undefined}
         className="flex min-h-11 min-w-0 flex-1 items-center gap-1.5 py-1.5 pr-1 text-left text-[13px]"
       >
@@ -153,7 +155,7 @@ function TreeNodeRow({
           onPickFile?.();
         }}
         title={`@${node.path}`}
-        aria-label={`@${node.path}`}
+        aria-label={t("referenceFile", { name: node.name })}
         className="flex size-11 shrink-0 items-center justify-center rounded-md text-xs font-medium text-faint transition-colors hover:bg-hover hover:text-ink"
       >
         @
@@ -310,7 +312,11 @@ export function FileTreePanel({
 }
 
 /** Mobile right-edge overlay drawer. */
-export function FilesDrawer() {
+export function FilesDrawer({
+  onPreviewFile,
+}: {
+  onPreviewFile?: (file: PreviewFileSelection) => void;
+}) {
   const [open, setOpen] = useState(false);
   useEffect(() => onRequestOpenFilesDrawer(() => setOpen(true)), []);
   return (
@@ -318,7 +324,11 @@ export function FilesDrawer() {
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 bg-black/40 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
         <Dialog.Popup className="fixed inset-y-0 right-0 flex w-[82vw] max-w-xs flex-col bg-sidebar shadow-2xl outline-none transition-transform data-[starting-style]:translate-x-full data-[ending-style]:translate-x-full">
-          <FileTreePanel onClose={() => setOpen(false)} onPickFile={() => setOpen(false)} />
+          <FileTreePanel
+            onClose={() => setOpen(false)}
+            onPickFile={() => setOpen(false)}
+            onPreviewFile={onPreviewFile}
+          />
         </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import {
+  nextWorkspaceFocusAfterClose,
   nextWorkspaceTabId,
   shouldCloseWorkspaceTab,
   type WorkspaceNavigationKey,
@@ -9,16 +10,12 @@ import { useT } from "../lib/i18n";
 
 const FILES_TAB_ID = "files";
 
-function panelId(tabKey: string, identity: string): string {
+export function workspacePanelId(tabKey: string, identity: string): string {
   return `file-workspace-panel-${encodeURIComponent(tabKey)}-${encodeURIComponent(identity)}`;
 }
 
-function tabId(tabKey: string, identity: string): string {
+export function workspaceTabId(tabKey: string, identity: string): string {
   return `file-workspace-tab-${encodeURIComponent(tabKey)}-${encodeURIComponent(identity)}`;
-}
-
-export function workspacePanelId(tabKey: string, identity: string): string {
-  return panelId(tabKey, identity);
 }
 
 export function FileWorkspaceTabs({
@@ -41,7 +38,7 @@ export function FileWorkspaceTabs({
     ...workspace.tabs.map((tab) => ({
       identity: previewIdentity(tab.cwd, tab.path),
       name: tab.name,
-      title: tab.path,
+      title: `${tab.cwd.replace(/\/$/, "")}/${tab.path.replace(/^\//, "")}`,
       closeable: true,
     })),
   ];
@@ -55,8 +52,7 @@ export function FileWorkspaceTabs({
   }, [workspace.active]);
 
   const closeAndFocusNeighbor = (identity: string) => {
-    const index = ids.indexOf(identity);
-    const next = ids[Math.max(index - 1, 0)] ?? FILES_TAB_ID;
+    const next = nextWorkspaceFocusAfterClose(ids, workspace.active, identity);
     onClose(identity);
     requestAnimationFrame(() => tabRefs.current.get(next)?.focus());
   };
@@ -69,7 +65,7 @@ export function FileWorkspaceTabs({
     >
       {tabs.map((tab) => {
         const selected = workspace.active === tab.identity;
-        const tabElementId = tabId(tabKey, tab.identity);
+        const tabElementId = workspaceTabId(tabKey, tab.identity);
         return (
           <div
             key={tab.identity}
@@ -88,7 +84,7 @@ export function FileWorkspaceTabs({
               type="button"
               role="tab"
               aria-selected={selected}
-              aria-controls={panelId(tabKey, tab.identity)}
+              aria-controls={workspacePanelId(tabKey, tab.identity)}
               tabIndex={selected ? 0 : -1}
               title={tab.title}
               onClick={() => onActivate(tab.identity)}
@@ -118,8 +114,8 @@ export function FileWorkspaceTabs({
                   event.stopPropagation();
                   closeAndFocusNeighbor(tab.identity);
                 }}
-                aria-label={`${t("closeFiles")}: ${tab.name}`}
-                title={t("closeFiles")}
+                aria-label={`${t("closePreviewTab")}: ${tab.name}`}
+                title={t("closePreviewTab")}
                 className="mr-1 flex size-5 shrink-0 items-center justify-center rounded text-faint transition-colors hover:bg-hover hover:text-ink"
               >
                 <span aria-hidden>×</span>
@@ -132,8 +128,8 @@ export function FileWorkspaceTabs({
         <button
           type="button"
           onClick={onRefresh}
-          aria-label={t("refreshTree")}
-          title={t("refreshTree")}
+          aria-label={t("refreshPreview")}
+          title={t("refreshPreview")}
           className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink"
         >
           <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-[1.8]" aria-hidden>

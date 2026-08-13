@@ -69,6 +69,7 @@ import { sendResolvedFile } from "./file-content.ts";
 import {
   PathEscapeError,
   PreviewTooLargeError,
+  PreviewUnsupportedError,
   resolvePreviewFile,
   type ResolvedPreviewFile,
 } from "./files.ts";
@@ -247,6 +248,10 @@ function sendPreviewError(
   }
   if (err instanceof PreviewTooLargeError) {
     sendJson(res, 413, { error: "file too large" });
+    return;
+  }
+  if (err instanceof PreviewUnsupportedError) {
+    sendJson(res, 415, { error: "unsupported file" });
     return;
   }
   const code = (err as NodeJS.ErrnoException).code;

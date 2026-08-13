@@ -169,6 +169,8 @@ function mapHttpError(status: number): PreviewErrorCode {
       return "expired";
     case 413:
       return "too-large";
+    case 415:
+      return "unsupported";
     default:
       return "failed";
   }

@@ -1559,7 +1559,8 @@ const httpServer = createServer(async (req, res) => {
       const isViewer = pathname.startsWith(viewerPrefix);
 
       const filePath = resolve(DIST_DIR, "." + pathname);
-      if (!filePath.startsWith(resolve(DIST_DIR) + "/")) {
+      const distRoot = resolve(DIST_DIR);
+      if (filePath !== distRoot && !filePath.startsWith(distRoot + "/")) {
         res.writeHead(403, { "content-type": "text/plain" });
         res.end("Forbidden");
         return;

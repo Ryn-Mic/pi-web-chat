@@ -20,6 +20,7 @@ import {
   type OpenResolvedPreviewFileResult,
   PathEscapeError,
   PreviewTooLargeError,
+  PreviewUnsupportedError,
   resolvePreviewFile,
   searchFiles,
   walkProject,
@@ -195,6 +196,16 @@ test("resolvePreviewFile: returns normalized metadata and a stable weak ETag", (
   assert.equal(meta.size, 5);
   assert.equal(meta.mimeType, "text/markdown");
   assert.match(meta.etag, /^W\/"[^"]+"$/);
+});
+
+test("resolvePreviewFile: active content is text-only and SVG is denied", () => {
+  fixture();
+  writeFileSync(join(root, "page.html"), "<script>parent.pwned=1</script>");
+  writeFileSync(join(root, "data.xml"), "<root />");
+  writeFileSync(join(root, "image.svg"), "<svg><script>alert(1)</script></svg>");
+  assert.equal(resolvePreviewFile(root, "page.html").mimeType, "text/plain");
+  assert.equal(resolvePreviewFile(root, "data.xml").mimeType, "text/plain");
+  assert.throws(() => resolvePreviewFile(root, "image.svg"), PreviewUnsupportedError);
 });
 
 test("resolvePreviewFile: allows an in-root file symlink but rejects outside and directory targets", () => {

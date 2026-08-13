@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import { fileViewerRenderers } from "@file-viewer/vite-plugin";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 const pkg = JSON.parse(
@@ -10,6 +11,25 @@ const pkg = JSON.parse(
 ) as { version: string };
 
 const DEV_SERVER_PORT = process.env.PI_WEB_DEV_PORT ?? "3141";
+
+const fileViewerInventoryPlugin: Plugin = {
+  name: "file-viewer-build-inventory",
+  apply: "build",
+  generateBundle(_options, bundle) {
+    const chunks = Object.values(bundle)
+      .filter((item) => item.type === "chunk")
+      .map((chunk) => ({
+        file: chunk.fileName,
+        facadeModuleId: chunk.facadeModuleId ?? null,
+        moduleIds: Object.keys(chunk.modules),
+      }));
+    this.emitFile({
+      type: "asset",
+      fileName: ".vite/file-viewer-inventory.json",
+      source: JSON.stringify({ chunks }),
+    });
+  },
+};
 
 export default defineConfig({
   define: {
@@ -20,6 +40,10 @@ export default defineConfig({
     emptyOutDir: true,
     manifest: true,
     rollupOptions: {
+      input: {
+        chat: resolve(import.meta.dirname, "index.html"),
+        filePreview: resolve(import.meta.dirname, "file-preview.html"),
+      },
       output: {
         // Preserve Rollup's natural lazy graph. Only change emitted names so
         // Workbox can exclude every full-viewer chunk without naming a shared
@@ -50,6 +74,7 @@ export default defineConfig({
   },
   plugins: [
     fileViewerRenderers({ copyAssets: true, inject: false }),
+    fileViewerInventoryPlugin,
     react(),
     tailwindcss(),
     VitePWA({

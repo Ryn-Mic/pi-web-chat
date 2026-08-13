@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  nextWorkspaceFocusAfterClose,
   nextWorkspaceTabId,
   shouldCloseWorkspaceTab,
 } from "../src/lib/file-workspace-tabs.ts";
@@ -28,4 +29,11 @@ test("only preview tabs can be closed with Delete or Backspace", () => {
   assert.equal(shouldCloseWorkspaceTab("Delete"), true);
   assert.equal(shouldCloseWorkspaceTab("Backspace"), true);
   assert.equal(shouldCloseWorkspaceTab("ArrowLeft"), false);
+});
+
+test("nextWorkspaceFocusAfterClose follows preview reducer activation rules", () => {
+  assert.equal(nextWorkspaceFocusAfterClose(ids, "one", "one"), "two");
+  assert.equal(nextWorkspaceFocusAfterClose(ids, "two", "two"), "one");
+  assert.equal(nextWorkspaceFocusAfterClose(["files", "one"], "one", "one"), "files");
+  assert.equal(nextWorkspaceFocusAfterClose(ids, "three", "one"), "three");
 });

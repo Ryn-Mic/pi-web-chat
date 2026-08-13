@@ -89,19 +89,6 @@ function loadManifest() {
   return JSON.parse(readFileSync(manifestPath, "utf8"));
 }
 
-function chunkLabel(manifestEntry) {
-  return [
-    manifestEntry?.file,
-    manifestEntry?.src,
-    ...(manifestEntry?.imports ?? []),
-    ...(manifestEntry?.dynamicImports ?? []),
-    ...(manifestEntry?.css ?? []),
-    ...(manifestEntry?.assets ?? []),
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
 function staticChunkLabel(key, manifestEntry) {
   return [key, manifestEntry?.file, manifestEntry?.src]
     .filter(Boolean)
@@ -136,7 +123,7 @@ function assertFileViewerLazy(manifest) {
 
   const [appKey] = appEntries[0];
   const staticGraph = collectManifestGraph(manifest, [appKey], "imports");
-  const forbiddenPattern = /@file-viewer\/(react-full|preset-all)|file-viewer-react-full|preset-all/;
+  const forbiddenPattern = /@file-viewer\/(react-full|preset-all)|file-viewer-(react-full|preset-all)/;
   const forbiddenStatic = [...staticGraph].filter((key) =>
     forbiddenPattern.test(staticChunkLabel(key, manifest[key])),
   );
@@ -159,7 +146,11 @@ function assertFileViewerLazy(manifest) {
     failBuild(`lazy File Viewer chunk has unstable name: ${fullEntry.file}`);
   }
 
-  const dynamicGraph = collectManifestGraph(manifest, [appKey], "dynamicImports");
+  // Vite may hoist FileViewerSurface into a static chunk shared by the chat
+  // and iframe entries. Collect dynamic imports from that whole static closure,
+  // rather than assuming the HTML entry owns the dynamic edge directly.
+  const dynamicRoots = [...staticGraph].flatMap((key) => manifest[key]?.dynamicImports ?? []);
+  const dynamicGraph = collectManifestGraph(manifest, dynamicRoots, "imports");
   if (!dynamicGraph.has(fullKey)) {
     failBuild("File Viewer full package is not reachable through the chat dynamic-import graph");
   }
@@ -167,14 +158,12 @@ function assertFileViewerLazy(manifest) {
   const viewerGraph = collectManifestGraph(manifest, [fullKey], "imports");
   const viewerDynamicGraph = collectManifestGraph(manifest, [fullKey], "dynamicImports");
   const allViewerChunks = new Set([...viewerGraph, ...viewerDynamicGraph]);
-  // Rollup can merge the all-renderer preset into a shared anonymous chunk,
-  // so verify the emitted lazy closure's code marker rather than its chunk key.
-  const hasPresetAll = [...viewerGraph].some((key) => {
-    const file = manifest[key]?.file;
-    if (!file) return false;
-    const filePath = join(publicDist, file);
-    return existsSync(filePath) && readFileSync(filePath, "utf8").includes("preset-all");
-  });
+  const inventoryPath = join(publicDist, ".vite", "file-viewer-inventory.json");
+  if (!existsSync(inventoryPath)) failBuild("File Viewer module inventory missing");
+  const inventory = JSON.parse(readFileSync(inventoryPath, "utf8"));
+  const hasPresetAll = inventory.chunks.some((chunk) =>
+    chunk.moduleIds.some((id) => id.includes("/node_modules/@file-viewer/preset-all/")),
+  );
   if (!hasPresetAll) failBuild("lazy File Viewer graph is missing the full preset");
 
   // A full renderer may import shared app/core chunks. Those chunks are not
@@ -189,6 +178,30 @@ function assertFileViewerLazy(manifest) {
     fullChunk: fullEntry.file,
     viewerChunks: exclusiveViewerChunks,
   };
+}
+
+function assertFrameEntryIsolated(manifest) {
+  const frameEntries = findHtmlEntrypoints(manifest).filter(([key, entry]) =>
+    key.endsWith("file-preview.html") || entry.src?.endsWith("file-preview.html"),
+  );
+  if (frameEntries.length !== 1 || !existsSync(join(publicDist, "file-preview.html"))) {
+    failBuild("file-preview.html build entry missing");
+  }
+  const [frameKey] = frameEntries[0];
+  const frameStatic = collectManifestGraph(manifest, [frameKey], "imports");
+  const inventory = JSON.parse(
+    readFileSync(join(publicDist, ".vite", "file-viewer-inventory.json"), "utf8"),
+  );
+  const moduleIds = inventory.chunks
+    .filter((chunk) => [...frameStatic].some((key) => manifest[key]?.file === chunk.file))
+    .flatMap((chunk) => chunk.moduleIds);
+  const forbidden = moduleIds.filter((id) =>
+    /src\/(main|lib\/auth|lib\/chat|components\/(AuthGate|ChatPage|Composer))|@tanstack\/react-router/.test(id),
+  );
+  if (forbidden.length > 0) {
+    failBuild(`file preview entry imports chat/auth/router code: ${forbidden.join(", ")}`);
+  }
+  console.log("✓ file preview entry isolated from chat/auth/router");
 }
 
 function assertFileViewerNotPrecached({ fullChunk, viewerChunks }) {
@@ -266,7 +279,9 @@ console.log("▸ building frontend (vite)…");
 execSync("npx vite build", { cwd: root, stdio: "inherit" });
 
 assertFileViewerAssets();
-const viewerBuild = assertFileViewerLazy(loadManifest());
+const manifest = loadManifest();
+const viewerBuild = assertFileViewerLazy(manifest);
+assertFrameEntryIsolated(manifest);
 assertFileViewerNotPrecached(viewerBuild);
 assertThirdPartyNotices();
 

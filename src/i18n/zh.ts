@@ -63,6 +63,12 @@ export const zh: Messages = {
   filePreviewExpired: "{name} 预览已过期",
   filePreviewFailed: "加载 {name} 失败",
   filePreviewRetry: "重试",
+  previewFile: "预览 {name}",
+  referenceFile: "引用 {name}",
+  closePreviewTab: "关闭预览标签",
+  refreshPreview: "刷新预览",
+  backToFiles: "返回文件",
+  closePreview: "关闭预览",
 
   sendMessage: "发送消息",
   streamingPlaceholder: "流式输出中…（发送可进行引导）",

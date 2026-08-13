@@ -5,6 +5,7 @@ import {
   openResolvedPreviewFile,
   PathEscapeError,
   PreviewTooLargeError,
+  PreviewUnsupportedError,
   resolvePreviewFile,
   type ResolvedPreviewFile,
 } from "./files.ts";
@@ -266,6 +267,10 @@ export async function handleDesktopFileContent(
     }
     if (err instanceof PreviewTooLargeError) {
       sendJson(413, { error: "file too large" });
+      return true;
+    }
+    if (err instanceof PreviewUnsupportedError) {
+      sendJson(415, { error: "unsupported file" });
       return true;
     }
     const code = (err as NodeJS.ErrnoException).code;

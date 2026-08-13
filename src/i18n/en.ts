@@ -64,6 +64,12 @@ export type Messages = {
   filePreviewExpired: string;
   filePreviewFailed: string;
   filePreviewRetry: string;
+  previewFile: string;
+  referenceFile: string;
+  closePreviewTab: string;
+  refreshPreview: string;
+  backToFiles: string;
+  closePreview: string;
 
   // composer
   sendMessage: string;
@@ -227,6 +233,12 @@ export const en: Messages = {
   filePreviewExpired: "{name} preview expired",
   filePreviewFailed: "Failed to load {name}",
   filePreviewRetry: "Retry",
+  previewFile: "Preview {name}",
+  referenceFile: "Reference {name}",
+  closePreviewTab: "Close preview tab",
+  refreshPreview: "Refresh preview",
+  backToFiles: "Back to files",
+  closePreview: "Close preview",
 
   sendMessage: "Send a message",
   streamingPlaceholder: "Streaming… (send to steer)",
