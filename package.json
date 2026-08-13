@@ -27,7 +27,9 @@
     "bin",
     "dist",
     "extensions",
+    "third-party-licenses",
     "release-notes.json",
+    "THIRD_PARTY_NOTICES.md",
     "LICENSE",
     "README.md"
   ],
@@ -50,6 +52,8 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "*",
+    "@file-viewer/core": "^2.2.8",
+    "@file-viewer/react-full": "^2.2.8",
     "ignore": "^7.0.6",
     "qrcode": "^1.5.4",
     "shiki": "^3.23.0",
@@ -75,6 +79,7 @@
   },
   "devDependencies": {
     "@base-ui-components/react": "^1.0.0-rc.0",
+    "@file-viewer/vite-plugin": "^2.2.8",
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.101.2",

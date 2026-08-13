@@ -633,7 +633,7 @@ export function FileViewerSurface({
 
 - [ ] **步骤 4：配置 assets、PWA 和构建契约**
 
-`vite.config.ts` 注册 `fileViewerRenderers({ copyAssets: true, inject: false })`，只复制 assets，不向聊天或 iframe HTML 注入 virtual renderer module；显式设置 `build.manifest: true`，Workbox 加 `globIgnores: ["file-viewer/**"]`。`scripts/build.mjs` 在 Vite 后检查：`dist/public/file-viewer`、manifest、至少 PDF worker、Office worker、CAD WASM、任一通用 WASM 存在；解析 Vite manifest，确认聊天入口的静态 imports 不包含 `react-full`/`preset-all` chunk。检查必须基于 manifest graph，而不是 grep 源码。
+`vite.config.ts` 注册 `fileViewerRenderers({ copyAssets: true, inject: false })`，只复制 assets，不向聊天或 iframe HTML 注入 virtual renderer module；显式设置 `build.manifest: true`；删除 `build.modulePreload: false`；Workbox `globIgnores` 精确设置为 `["file-viewer/**", "assets/file-viewer-*.js"]`。`scripts/build.mjs` 在 Vite 后检查：`dist/public/file-viewer`、manifest、至少 PDF worker、Office worker、CAD WASM、任一通用 WASM 存在；解析 Vite manifest，确认聊天入口的静态 imports 不含 `react-full`/`preset-all` chunk。任务 5 尚无组件实际消费 `FileViewerSurface`，因此本步骤只验证 static graph clean，不要求 lazy dynamic chunk 中必须发现 full/preset。
 
 - [ ] **步骤 5：加入许可证文件和 package files**
 
@@ -647,7 +647,7 @@ npm run typecheck
 npm run build
 ```
 
-预期：viewer assets 被复制，service worker precache 不包含 `file-viewer/`，两个 HTML 不含 plugin 注入的 virtual renderer script，聊天主入口仍 lazy。
+预期：viewer assets 被复制（40/40 代表四类 asset），service worker precache 不包含 `file-viewer/` 与 `assets/file-viewer-*.js`，HTML 不含 plugin 注入的 virtual renderer script，聊天主入口 static graph 不含 `react-full`/`preset-all`。
 
 - [ ] **步骤 7：提交**
 
@@ -754,6 +754,7 @@ git commit -m "feat(文件预览): 加载并渲染桌面文件内容"
 - 创建：`tests/file-workspace-tabs.test.ts`
 - 修改：`src/components/FileTreePanel.tsx`
 - 修改：`src/components/ChatPage.tsx`
+- 修改：`scripts/build.mjs`
 
 - [ ] **步骤 1：为 tab 键盘纯逻辑写红灯测试**
 
@@ -801,10 +802,12 @@ npm run typecheck
 npm run build
 ```
 
+扩展 `scripts/build.mjs` 验证：解析 Vite manifest，确认 `FilePreviewPane`/`FileViewerSurface` 的 lazy dynamic chunk 中必须存在 `react-full`/`preset-all`，且聊天主入口 static graph 仍不含 `react-full`/`preset-all`；解析生成的 `sw.js`（或 Workbox precache manifest）确认 `file-viewer/` 运行时资产树与 viewer dynamic chunk 均未被 precache。
+
 - [ ] **步骤 6：提交**
 
 ```bash
-git add src/components/FileWorkspaceTabs.tsx src/components/FileWorkspaceSidebar.tsx src/lib/file-workspace-tabs.ts tests/file-workspace-tabs.test.ts src/components/FileTreePanel.tsx src/components/ChatPage.tsx
+git add src/components/FileWorkspaceTabs.tsx src/components/FileWorkspaceSidebar.tsx src/lib/file-workspace-tabs.ts tests/file-workspace-tabs.test.ts src/components/FileTreePanel.tsx src/components/ChatPage.tsx scripts/build.mjs
 git commit -m "feat(文件预览): 构建桌面多文件标签工作区"
 ```
 

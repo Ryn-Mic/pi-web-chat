@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import tailwindcss from "@tailwindcss/vite";
+import { fileViewerRenderers } from "@file-viewer/vite-plugin";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
@@ -17,8 +18,10 @@ export default defineConfig({
   build: {
     outDir: "dist/public",
     emptyOutDir: true,
+    manifest: true,
   },
   plugins: [
+    fileViewerRenderers({ copyAssets: true, inject: false }),
     react(),
     tailwindcss(),
     VitePWA({
@@ -47,6 +50,10 @@ export default defineConfig({
         // API/WS are not cached (only build assets are precached)
         navigateFallbackDenylist: [/^\/api\//, /^\/ws/],
         globPatterns: ["**/*.{js,css,html,woff2,svg,png,webmanifest}"],
+        globIgnores: [
+          "file-viewer/**",
+          "assets/file-viewer-*.js",
+        ],
         // App shell: prefer network so iOS PWAs pick up new deploys
         runtimeCaching: [
           {
