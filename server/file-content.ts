@@ -127,52 +127,100 @@ export function setContentHeaders(res: ServerResponse, meta: ResolvedPreviewFile
   res.setHeader("last-modified", new Date(meta.mtimeMs).toUTCString());
 }
 
+export interface SendResolvedFileOptions {
+  extraHeaders?: Record<string, string>;
+  onReady?: () => void;
+}
+
 export function sendResolvedFile(
   req: IncomingMessage,
   res: ServerResponse,
   meta: ResolvedPreviewFile,
-  extraHeaders?: Record<string, string>,
+  options?: SendResolvedFileOptions,
 ): void {
-  if (req.method === "HEAD") {
-    setContentHeaders(res, meta);
-    if (extraHeaders) {
-      for (const [key, value] of Object.entries(extraHeaders)) {
-        res.setHeader(key, value);
-      }
-    }
-    res.writeHead(200);
-    res.end();
-    return;
-  }
+  const extraHeaders = options?.extraHeaders;
+  const onReady = options?.onReady;
 
   let stream: ReturnType<typeof createReadStream> | undefined;
-  const cleanup = () => {
-    stream?.destroy();
-    stream = undefined;
+  let reqAborted = false;
+
+  const destroyStream = () => {
+    const current = stream;
+    if (!current) return;
+    current.unpipe(res);
+    current.destroy();
+    if (stream === current) {
+      stream = undefined;
+    }
   };
-  req.once("aborted", cleanup);
-  res.once("close", cleanup);
+
+  const onReqAborted = () => {
+    reqAborted = true;
+    detach();
+    destroyStream();
+  };
+  const onResClose = () => {
+    detach();
+    destroyStream();
+  };
+  const onResFinish = () => {
+    detach();
+    destroyStream();
+  };
+  const onStreamError = () => {
+    detach();
+    if (!res.headersSent) {
+      res.writeHead(500, { "content-type": "application/json", "cache-control": "no-store" });
+    }
+    res.end();
+    destroyStream();
+  };
+
+  const detach = () => {
+    req.removeListener("aborted", onReqAborted);
+    req.removeListener("close", onReqAborted);
+    res.removeListener("close", onResClose);
+    res.removeListener("finish", onResFinish);
+    stream?.removeListener("error", onStreamError);
+  };
 
   try {
     const fdResult = openResolvedPreviewFile(meta);
     stream = fdResult.stream;
-    stream.on("error", () => {
-      cleanup();
-      if (!res.headersSent) {
-        res.writeHead(500, { "content-type": "application/json", "cache-control": "no-store" });
-      }
-      res.destroy();
-    });
+
     setContentHeaders(res, meta);
     if (extraHeaders) {
       for (const [key, value] of Object.entries(extraHeaders)) {
         res.setHeader(key, value);
       }
     }
+    onReady?.();
+
+    if (req.method === "HEAD") {
+      res.writeHead(200);
+      res.end();
+      destroyStream();
+      return;
+    }
+
+    // Only register listeners after the file descriptor is open; if open fails,
+    // the function throws and no listeners are left behind.
+    req.once("aborted", onReqAborted);
+    req.once("close", onReqAborted);
+    res.once("close", onResClose);
+    res.once("finish", onResFinish);
+    stream.once("error", onStreamError);
+
+    if (reqAborted || res.writableEnded || res.destroyed) {
+      detach();
+      destroyStream();
+      return;
+    }
     res.writeHead(200);
     stream.pipe(res);
   } catch (err) {
-    cleanup();
+    detach();
+    destroyStream();
     throw err;
   }
 }

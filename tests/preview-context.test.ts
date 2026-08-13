@@ -63,7 +63,10 @@ test("expires after 5 minutes if never used", () => {
     locale: "en-US",
   });
 
-  clock.now = 5 * 60 * 1000 + 1;
+  clock.now = 5 * 60 * 1000 - 1;
+  assert.equal(store.inspect("id").theme, "light");
+
+  clock.now = 5 * 60 * 1000;
   assert.throws(() => store.consume("id"), PreviewContextExpiredError);
 });
 
@@ -83,10 +86,10 @@ test("after first use, valid for 10 minutes from first use", () => {
   });
 
   store.consume("id");
-  clock.now = 1_000 + 10 * 60 * 1000;
+  clock.now = 1_000 + 10 * 60 * 1000 - 1;
   assert.equal(store.consume("id").theme, "light");
 
-  clock.now = 1_000 + 10 * 60 * 1000 + 1;
+  clock.now = 1_000 + 10 * 60 * 1000;
   assert.throws(() => store.consume("id"), PreviewContextExpiredError);
 });
 
@@ -260,4 +263,139 @@ test("cleanup removes only expired contexts", () => {
 test("consume throws not found for unknown id", () => {
   const store = new PreviewContextStore();
   assert.throws(() => store.consume("not-a-real-id"), PreviewContextNotFoundError);
+});
+
+test("inspect validates existence and TTL without marking first use", () => {
+  const createdAt = 1_000;
+  const clock = { now: createdAt };
+  const store = new PreviewContextStore({
+    now: () => clock.now,
+    createId: () => "id",
+  });
+  store.create({
+    sessionToken: "session-a",
+    root,
+    path: "README.md",
+    metadata: makeMetadata(),
+    theme: "dark",
+    locale: "en-US",
+  });
+
+  const inspected = store.inspect("id");
+  assert.equal(inspected.theme, "dark");
+  assert.equal(inspected.firstUsedAt, null);
+
+  clock.now = createdAt + 5 * 60 * 1000 - 1;
+  assert.equal(store.inspect("id").firstUsedAt, null);
+
+  clock.now = createdAt + 5 * 60 * 1000;
+  assert.throws(() => store.inspect("id"), PreviewContextExpiredError);
+
+  // inspect deletes an expired record; use a fresh store to verify consume marks first use.
+  const clock2 = { now: createdAt + 5 * 60 * 1000 - 1 };
+  const store2 = new PreviewContextStore({
+    now: () => clock2.now,
+    createId: () => "id",
+  });
+  store2.create({
+    sessionToken: "session-a",
+    root,
+    path: "README.md",
+    metadata: makeMetadata(),
+    theme: "dark",
+    locale: "en-US",
+  });
+  assert.equal(store2.consume("id").firstUsedAt, clock2.now);
+});
+
+test("consume re-checks TTL and returns the same record after inspect", () => {
+  const clock = { now: 1_000 };
+  const store = new PreviewContextStore({
+    now: () => clock.now,
+    createId: () => "id",
+  });
+  store.create({
+    sessionToken: "session-a",
+    root,
+    path: "README.md",
+    metadata: makeMetadata(),
+    theme: "light",
+    locale: "en-US",
+  });
+
+  const inspected = store.inspect("id");
+  clock.now = 5 * 60 * 1000 - 1; // last valid moment before initial TTL expires
+  const consumed = store.consume("id");
+  assert.equal(consumed.theme, inspected.theme);
+  assert.equal(consumed.firstUsedAt, clock.now);
+
+  clock.now = consumed.firstUsedAt! + 10 * 60 * 1000 - 1;
+  assert.equal(store.consume("id").theme, "light");
+
+  clock.now = consumed.firstUsedAt! + 10 * 60 * 1000;
+  assert.throws(() => store.consume("id"), PreviewContextExpiredError);
+});
+
+test("first success extends TTL to exactly 10 minutes from first use", () => {
+  const clock = { now: 0 };
+  const store = new PreviewContextStore({
+    now: () => clock.now,
+    createId: () => "id",
+  });
+  store.create({
+    sessionToken: "session-a",
+    root,
+    path: "README.md",
+    metadata: makeMetadata(),
+    theme: "light",
+    locale: "en-US",
+  });
+
+  const first = store.consume("id");
+  assert.equal(first.firstUsedAt, 0);
+
+  clock.now = 10 * 60 * 1000 - 1;
+  assert.equal(store.consume("id").theme, "light");
+
+  clock.now = 10 * 60 * 1000;
+  assert.throws(() => store.consume("id"), PreviewContextExpiredError);
+});
+
+test("expiry boundary uses inclusive >= comparison", () => {
+  const clock = { now: 0 };
+  const store = new PreviewContextStore({
+    now: () => clock.now,
+    createId: () => "id",
+  });
+  store.create({
+    sessionToken: "session-a",
+    root,
+    path: "README.md",
+    metadata: makeMetadata(),
+    theme: "light",
+    locale: "en-US",
+  });
+
+  clock.now = 5 * 60 * 1000;
+  assert.throws(() => store.inspect("id"), PreviewContextExpiredError);
+
+  // inspect deletes an expired record; use a fresh store for the extended-TTL boundary.
+  const clock2 = { now: 0 };
+  const store2 = new PreviewContextStore({
+    now: () => clock2.now,
+    createId: () => "id",
+  });
+  store2.create({
+    sessionToken: "session-a",
+    root,
+    path: "README.md",
+    metadata: makeMetadata(),
+    theme: "light",
+    locale: "en-US",
+  });
+  const first = store2.consume("id");
+  assert.equal(first.firstUsedAt, 0);
+
+  clock2.now = 10 * 60 * 1000;
+  assert.throws(() => store2.consume("id"), PreviewContextExpiredError);
 });

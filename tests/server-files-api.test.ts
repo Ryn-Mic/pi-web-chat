@@ -352,6 +352,24 @@ test("mobile preview context and preview-content routes", async () => {
   );
   assert.equal(
     (await fetch(`${baseUrl}/api/files/preview-content`, {
+      headers: { authorization: "Preview   " },
+    })).status,
+    401,
+  );
+  assert.equal(
+    (await fetch(`${baseUrl}/api/files/preview-content`, {
+      headers: { authorization: `PREVIEW ${id}` },
+    })).status,
+    200,
+  );
+  assert.equal(
+    (await fetch(`${baseUrl}/api/files/preview-content`, {
+      headers: { authorization: `preview ${id}` },
+    })).status,
+    200,
+  );
+  assert.equal(
+    (await fetch(`${baseUrl}/api/files/preview-content`, {
       method: "POST",
       headers: { authorization: `Preview ${id}` },
     })).status,
@@ -429,4 +447,14 @@ test("mobile preview context and preview-content routes", async () => {
     body: JSON.stringify({ cwd: root, path: "README.md", theme: "light", locale: "en" }),
   });
   assert.equal(noSession.status, 401);
+
+  const queryTokenOnly = await fetch(
+    `${baseUrl}/api/files/preview-context?token=${sessionToken}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd: root, path: "README.md", theme: "light", locale: "en" }),
+    },
+  );
+  assert.equal(queryTokenOnly.status, 401);
 });

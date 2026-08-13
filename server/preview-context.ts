@@ -120,7 +120,7 @@ export class PreviewContextStore {
     return { id, expiresAt: new Date(now + INITIAL_TTL_MS).toISOString() };
   }
 
-  consume(rawId: string): PreviewContextRecord {
+  inspect(rawId: string): PreviewContextRecord {
     const key = sha256(rawId);
     const record = this.records.get(key);
     if (!record) {
@@ -133,16 +133,20 @@ export class PreviewContextStore {
         ? record.createdAt + INITIAL_TTL_MS
         : record.firstUsedAt + EXTENDED_TTL_MS;
 
-    if (now > deadline) {
+    if (now >= deadline) {
       this.records.delete(key);
       this.removeFromOrder(record.sessionFingerprint, key);
       throw new PreviewContextExpiredError();
     }
 
-    if (record.firstUsedAt === null) {
-      record.firstUsedAt = now;
-    }
+    return record;
+  }
 
+  consume(rawId: string): PreviewContextRecord {
+    const record = this.inspect(rawId);
+    if (record.firstUsedAt === null) {
+      record.firstUsedAt = this.now();
+    }
     return record;
   }
 
@@ -165,7 +169,7 @@ export class PreviewContextStore {
         record.firstUsedAt === null
           ? record.createdAt + INITIAL_TTL_MS
           : record.firstUsedAt + EXTENDED_TTL_MS;
-      if (now > deadline) {
+      if (now >= deadline) {
         this.records.delete(key);
         this.removeFromOrder(record.sessionFingerprint, key);
         removed++;
@@ -219,18 +223,18 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 
 function sessionTokenFromRequest(req: IncomingMessage): string {
   const header = req.headers.authorization;
-  if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length).trim();
-  try {
-    return new URL(req.url ?? "/", "http://localhost").searchParams.get("token") ?? "";
-  } catch {
-    return "";
-  }
+  if (header?.toLowerCase().startsWith("bearer ")) return header.slice("Bearer ".length).trim();
+  return "";
 }
 
 function previewIdFromRequest(req: IncomingMessage): string {
   const header = req.headers.authorization;
-  if (header?.startsWith("Preview ")) return header.slice("Preview ".length).trim();
-  return "";
+  if (!header) return "";
+  const match = /^([A-Za-z][A-Za-z0-9+.-]*)\s+(.+)$/.exec(header);
+  if (!match) return "";
+  if (match[1].toLowerCase() !== "preview") return "";
+  const value = match[2].trim();
+  return value || "";
 }
 
 function sendPreviewError(
@@ -287,7 +291,7 @@ export async function handlePreviewContentRequest(
 
   let record: PreviewContextRecord;
   try {
-    record = deps.previewContextStore.consume(id);
+    record = deps.previewContextStore.inspect(id);
   } catch (err) {
     if (err instanceof PreviewContextExpiredError || err instanceof PreviewContextNotFoundError) {
       sendJson(res, 410, { error: "preview expired" });
@@ -323,8 +327,13 @@ export async function handlePreviewContentRequest(
 
   try {
     sendResolvedFile(req, res, meta, {
-      "x-preview-theme": record.theme,
-      "x-preview-locale": record.locale,
+      extraHeaders: {
+        "x-preview-theme": record.theme,
+        "x-preview-locale": record.locale,
+      },
+      onReady: () => {
+        deps.previewContextStore.consume(id);
+      },
     });
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
