@@ -1,6 +1,17 @@
 /** Project directory listing & file search with shared ignore filtering. */
-import { readdirSync, readFileSync, existsSync, lstatSync, statSync } from "node:fs";
-import { join, normalize, resolve, sep } from "node:path";
+import {
+  closeSync,
+  createReadStream,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
+import { basename, extname, join, normalize, relative, resolve, sep } from "node:path";
 import ignore, { type Ignore } from "ignore";
 import type { UIFileMatch, UITreeNode } from "../shared/protocol.ts";
 
@@ -12,6 +23,140 @@ const MAX_DIR_ENTRIES = 1000;
 const IGNORE_TTL_MS = 10_000;
 
 export class PathEscapeError extends Error {}
+
+export class PreviewTooLargeError extends Error {}
+
+export const MAX_PREVIEW_BYTES = 100 * 1024 * 1024;
+
+export interface ResolvedPreviewFile {
+  abs: string;
+  realAbs: string;
+  path: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  mtimeMs: number;
+  dev: number;
+  ino: number;
+  etag: string;
+}
+
+export interface OpenResolvedPreviewFileResult {
+  fd: number;
+  stream: import("node:fs").ReadStream;
+}
+
+function posixRel(rel: string): string {
+  return normalize(rel).replaceAll(sep, "/");
+}
+
+function enoentError(rel: string): NodeJS.ErrnoException {
+  const err = new Error(`ENOENT: no such file or directory, preview '${rel}'`) as NodeJS.ErrnoException;
+  err.code = "ENOENT";
+  return err;
+}
+
+function lookupMime(rel: string): string {
+  switch (extname(rel).toLowerCase()) {
+    case ".md":
+      return "text/markdown";
+    case ".txt":
+      return "text/plain";
+    case ".html":
+    case ".htm":
+      return "text/html";
+    case ".css":
+      return "text/css";
+    case ".js":
+    case ".mjs":
+    case ".cjs":
+      return "text/javascript";
+    case ".ts":
+    case ".mts":
+    case ".cts":
+      return "text/typescript";
+    case ".json":
+      return "application/json";
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".svg":
+      return "image/svg+xml";
+    case ".pdf":
+      return "application/pdf";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+function etagFor(st: { dev: number | bigint; ino: number | bigint; size: number; mtimeMs: number }): string {
+  return `W/"${String(st.dev)}-${String(st.ino)}-${st.size}-${st.mtimeMs}"`;
+}
+
+export function resolvePreviewFile(root: string, rel: string): ResolvedPreviewFile {
+  const rootAbs = resolve(root);
+  const rootRealAbs = realpathSync(rootAbs);
+  const abs = assertInsideRoot(rootAbs, rel);
+  const normalizedRel = posixRel(rel);
+  const ig = loadRootIgnore(rootAbs);
+  if (isExcluded(normalizedRel, false, ig)) throw enoentError(normalizedRel);
+
+  let targetAbs = abs;
+  let st = lstatSync(abs);
+  if (st.isSymbolicLink()) {
+    targetAbs = realpathSync(abs);
+    if (targetAbs !== rootRealAbs && !targetAbs.startsWith(rootRealAbs + sep)) {
+      throw new PathEscapeError(rel);
+    }
+    const targetRel = posixRel(relative(rootRealAbs, targetAbs));
+    if (isExcluded(targetRel, false, ig)) throw enoentError(normalizedRel);
+    st = lstatSync(targetAbs);
+  }
+
+  if (!st.isFile()) throw enoentError(normalizedRel);
+  if (st.size > MAX_PREVIEW_BYTES) throw new PreviewTooLargeError();
+
+  return {
+    abs,
+    realAbs: targetAbs,
+    path: normalizedRel,
+    name: basename(normalizedRel),
+    size: st.size,
+    mimeType: lookupMime(normalizedRel),
+    mtimeMs: st.mtimeMs,
+    dev: st.dev,
+    ino: st.ino,
+    etag: etagFor(st),
+  };
+}
+
+export function openResolvedPreviewFile(meta: ResolvedPreviewFile): OpenResolvedPreviewFileResult {
+  const fd = openSync(meta.realAbs, "r");
+  try {
+    const st = fstatSync(fd);
+    if (
+      st.dev !== meta.dev ||
+      st.ino !== meta.ino ||
+      st.size !== meta.size ||
+      st.mtimeMs !== meta.mtimeMs
+    ) {
+      const err = new Error("file changed after metadata resolution") as NodeJS.ErrnoException;
+      err.code = "ESTALE";
+      throw err;
+    }
+    return {
+      fd,
+      stream: createReadStream(meta.realAbs, { fd, autoClose: true }),
+    };
+  } catch (err) {
+    closeSync(fd);
+    throw err;
+  }
+}
 
 /** Reject any existing rel segment that is a symlink resolving to a directory. */
 function assertNoSymlinkedDirectorySegment(root: string, rel: string): void {

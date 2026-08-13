@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import {
   chmodSync,
+  closeSync,
+  ftruncateSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -10,7 +13,15 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
-import { listDir, PathEscapeError, searchFiles, walkProject } from "../server/files.ts";
+import {
+  listDir,
+  openResolvedPreviewFile,
+  PathEscapeError,
+  PreviewTooLargeError,
+  resolvePreviewFile,
+  searchFiles,
+  walkProject,
+} from "../server/files.ts";
 
 let root = "";
 let outsideRoot = "";
@@ -171,4 +182,59 @@ test("searchFiles: limit clamps results", () => {
   fixture();
   const { matches } = searchFiles(root, "ts", 2);
   assert.equal(matches.length, 2);
+});
+
+test("resolvePreviewFile: returns normalized metadata and a stable weak ETag", () => {
+  fixture();
+  writeFileSync(join(root, "hello.md"), "hello");
+  const meta = resolvePreviewFile(root, "hello.md");
+  assert.equal(meta.path, "hello.md");
+  assert.equal(meta.name, "hello.md");
+  assert.equal(meta.size, 5);
+  assert.equal(meta.mimeType, "text/markdown");
+  assert.match(meta.etag, /^W\/"[^"]+"$/);
+});
+
+test("resolvePreviewFile: allows an in-root file symlink but rejects outside and directory targets", () => {
+  fixture();
+  writeFileSync(join(root, "target.txt"), "ok");
+  symlinkSync("target.txt", join(root, "alias.txt"));
+  assert.equal(resolvePreviewFile(root, "alias.txt").name, "alias.txt");
+
+  outsideRoot = mkdtempSync(join(tmpdir(), "pi-preview-outside-"));
+  writeFileSync(join(outsideRoot, "secret.txt"), "secret");
+  symlinkSync(join(outsideRoot, "secret.txt"), join(root, "outside.txt"));
+  assert.throws(() => resolvePreviewFile(root, "outside.txt"), PathEscapeError);
+
+  symlinkSync("src", join(root, "dir-link"));
+  assert.throws(() => resolvePreviewFile(root, "dir-link"), PathEscapeError);
+});
+
+test("resolvePreviewFile: hides ignored files and enforces the 100 MiB boundary", () => {
+  fixture();
+  assert.throws(() => resolvePreviewFile(root, "secret.txt"), { code: "ENOENT" });
+
+  const fd = openSync(join(root, "large.bin"), "w");
+  try {
+    ftruncateSync(fd, 100 * 1024 * 1024);
+  } finally {
+    closeSync(fd);
+  }
+  assert.equal(resolvePreviewFile(root, "large.bin").size, 100 * 1024 * 1024);
+
+  const tooLargeFd = openSync(join(root, "too-large.bin"), "w");
+  try {
+    ftruncateSync(tooLargeFd, 100 * 1024 * 1024 + 1);
+  } finally {
+    closeSync(tooLargeFd);
+  }
+  assert.throws(() => resolvePreviewFile(root, "too-large.bin"), PreviewTooLargeError);
+});
+
+test("openResolvedPreviewFile: rejects a file replaced after metadata resolution", () => {
+  fixture();
+  writeFileSync(join(root, "race.txt"), "before");
+  const meta = resolvePreviewFile(root, "race.txt");
+  writeFileSync(join(root, "race.txt"), "after-change");
+  assert.throws(() => openResolvedPreviewFile(meta), { code: "ESTALE" });
 });
