@@ -52,6 +52,17 @@ export const ja: Messages = {
   mentionNoFiles: "一致するファイルなし",
   mentionPartial: "結果が不完全な可能性があります — 続けて入力",
 
+  filePreviewLoading: "{name} を読み込み中…",
+  filePreviewUnsupported: "{name} はプレビューできない形式です",
+  filePreviewMalformed: "{name} が破損しているか形式が不正です",
+  filePreviewTooLarge: "{name} は大きすぎてプレビューできません",
+  filePreviewForbidden: "{name} を開く権限がありません",
+  filePreviewMissing: "{name} が見つかりません",
+  filePreviewChanged: "{name} は読み込み中に変更されました",
+  filePreviewExpired: "{name} のプレビュー期限が切れました",
+  filePreviewFailed: "{name} の読み込みに失敗しました",
+  filePreviewRetry: "再試行",
+
   sendMessage: "メッセージを送信",
   streamingPlaceholder: "ストリーミング中…（送信でステアリング）",
   attachImage: "画像を添付",

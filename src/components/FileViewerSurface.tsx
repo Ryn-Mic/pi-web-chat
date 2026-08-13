@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useMemo, useRef } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from "react";
 import { createFileViewerNotificationGate } from "../lib/file-viewer-notifications";
 import { createFileViewerOptions } from "../lib/file-viewer-options";
 import type { Locale } from "../lib/i18n";
@@ -26,12 +26,20 @@ export function FileViewerSurface({
   onError?: (error: unknown) => void;
 }) {
   const gateRef = useRef(createFileViewerNotificationGate());
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const options = useMemo(
     () => createFileViewerOptions({ mobile, theme, locale }),
     [mobile, theme, locale],
   );
   const handleStateChange = useCallback(
     (state: { ready: boolean; error: unknown | null }) => {
+      if (!mountedRef.current) return;
       const event = gateRef.current(file, state);
       if (event?.type === "ready") {
         onReady?.();

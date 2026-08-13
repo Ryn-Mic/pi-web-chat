@@ -52,6 +52,17 @@ export const ko: Messages = {
   mentionNoFiles: "일치하는 파일 없음",
   mentionPartial: "결과가 불완전할 수 있음 — 계속 입력",
 
+  filePreviewLoading: "{name} 로드 중…",
+  filePreviewUnsupported: "{name} 미리보기를 지원하지 않는 형식입니다",
+  filePreviewMalformed: "{name}이(가) 손상되었거나 형식이 잘못되었습니다",
+  filePreviewTooLarge: "{name}이(가) 너무 커서 미리보기할 수 없습니다",
+  filePreviewForbidden: "{name}을(를) 열 권한이 없습니다",
+  filePreviewMissing: "{name}을(를) 찾을 수 없습니다",
+  filePreviewChanged: "로드 중 {name}이(가) 변경되었습니다",
+  filePreviewExpired: "{name} 미리보기가 만료되었습니다",
+  filePreviewFailed: "{name} 로드 실패",
+  filePreviewRetry: "다시 시도",
+
   sendMessage: "메시지 보내기",
   streamingPlaceholder: "스트리밍 중… (보내면 steering 됩니다)",
   attachImage: "이미지 첨부",

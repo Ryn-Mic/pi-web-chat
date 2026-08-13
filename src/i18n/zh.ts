@@ -53,6 +53,17 @@ export const zh: Messages = {
   mentionNoFiles: "无匹配文件",
   mentionPartial: "结果可能不全，请继续输入",
 
+  filePreviewLoading: "正在加载 {name}…",
+  filePreviewUnsupported: "无法预览 {name}：不支持的格式",
+  filePreviewMalformed: "{name} 似乎已损坏或格式异常",
+  filePreviewTooLarge: "{name} 过大，无法预览",
+  filePreviewForbidden: "没有权限打开 {name}",
+  filePreviewMissing: "找不到 {name}",
+  filePreviewChanged: "{name} 在加载过程中已变化",
+  filePreviewExpired: "{name} 预览已过期",
+  filePreviewFailed: "加载 {name} 失败",
+  filePreviewRetry: "重试",
+
   sendMessage: "发送消息",
   streamingPlaceholder: "流式输出中…（发送可进行引导）",
   attachImage: "附加图片",

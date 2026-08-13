@@ -53,6 +53,18 @@ export type Messages = {
   mentionNoFiles: string;
   mentionPartial: string;
 
+  // file preview
+  filePreviewLoading: string;
+  filePreviewUnsupported: string;
+  filePreviewMalformed: string;
+  filePreviewTooLarge: string;
+  filePreviewForbidden: string;
+  filePreviewMissing: string;
+  filePreviewChanged: string;
+  filePreviewExpired: string;
+  filePreviewFailed: string;
+  filePreviewRetry: string;
+
   // composer
   sendMessage: string;
   streamingPlaceholder: string;
@@ -204,6 +216,17 @@ export const en: Messages = {
   inaccessible: "No access",
   mentionNoFiles: "No matching files",
   mentionPartial: "Results may be incomplete — keep typing",
+
+  filePreviewLoading: "Loading {name}…",
+  filePreviewUnsupported: "Cannot preview {name}: unsupported format",
+  filePreviewMalformed: "{name} appears to be damaged or malformed",
+  filePreviewTooLarge: "{name} is too large to preview",
+  filePreviewForbidden: "Not allowed to open {name}",
+  filePreviewMissing: "{name} not found",
+  filePreviewChanged: "{name} changed while loading",
+  filePreviewExpired: "{name} preview expired",
+  filePreviewFailed: "Failed to load {name}",
+  filePreviewRetry: "Retry",
 
   sendMessage: "Send a message",
   streamingPlaceholder: "Streaming… (send to steer)",
