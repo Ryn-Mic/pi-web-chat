@@ -231,7 +231,7 @@ export function GitWorkspacePanel({ cwd, onPreviewFile, docked = true, onClose, 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className={`flex items-center gap-1 border-b border-line px-3 ${docked ? "py-2.5" : "py-2"}`}>
-        <h2 className="min-w-0 flex-1 truncate px-1 text-[15px] font-semibold text-ink" title={cwd}>{t("git")}{status?.branch ? <span className="ml-2 font-mono text-xs font-normal text-muted">{status.branch}</span> : null}</h2>
+        <h2 className="min-w-0 flex-1 truncate px-1 text-[15px] font-semibold text-ink" title={cwd}>{status?.branch ? <span className="font-mono text-sm">{status.branch}</span> : t("git")}</h2>
         {onClose && <button type="button" onClick={onClose} aria-label={t("closeFiles")} title={t("closeFiles")} className="flex size-8 items-center justify-center rounded-lg text-faint hover:bg-hover hover:text-ink">×</button>}
       </div>
       {statusPending && <div className="p-4 text-sm text-faint">...</div>}
