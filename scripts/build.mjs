@@ -102,31 +102,43 @@ function chunkLabel(manifestEntry) {
     .join("\n");
 }
 
+function staticChunkLabel(key, manifestEntry) {
+  return [key, manifestEntry?.file, manifestEntry?.src]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function findHtmlEntrypoints(manifest) {
   return Object.entries(manifest).filter(([key, entry]) =>
     Boolean(entry?.isEntry && (key.endsWith(".html") || entry.src?.endsWith(".html"))),
   );
 }
 
+function collectManifestGraph(manifest, starts, edge, target = new Set()) {
+  for (const startKey of starts) {
+    if (target.has(startKey)) continue;
+    const entry = manifest[startKey];
+    if (!entry) failBuild(`manifest import ${startKey} missing`);
+    target.add(startKey);
+    collectManifestGraph(manifest, entry[edge] ?? [], edge, target);
+  }
+  return target;
+}
+
 function assertFileViewerLazy(manifest) {
   const entries = findHtmlEntrypoints(manifest);
   if (entries.length === 0) failBuild("no HTML entrypoint found in Vite manifest");
 
-  const collectStaticGraph = (startKey, target = new Set()) => {
-    if (target.has(startKey)) return target;
-    const entry = manifest[startKey];
-    if (!entry) failBuild(`manifest import ${startKey} missing`);
-    target.add(startKey);
-    for (const imported of entry.imports ?? []) collectStaticGraph(imported, target);
-    return target;
-  };
+  const appEntries = entries.filter(([key, entry]) =>
+    key === "index.html" || entry.src === "index.html",
+  );
+  if (appEntries.length !== 1) failBuild("expected exactly one chat index.html manifest entry");
 
-  const staticGraph = new Set();
-  for (const [key] of entries) collectStaticGraph(key, staticGraph);
-
-  const forbiddenPattern = /@file-viewer\/(react-full|preset-all)|react-full|preset-all/;
+  const [appKey] = appEntries[0];
+  const staticGraph = collectManifestGraph(manifest, [appKey], "imports");
+  const forbiddenPattern = /@file-viewer\/(react-full|preset-all)|file-viewer-react-full|preset-all/;
   const forbiddenStatic = [...staticGraph].filter((key) =>
-    forbiddenPattern.test(`${key}\n${chunkLabel(manifest[key])}`),
+    forbiddenPattern.test(staticChunkLabel(key, manifest[key])),
   );
   if (forbiddenStatic.length > 0) {
     failBuild(
@@ -134,7 +146,71 @@ function assertFileViewerLazy(manifest) {
     );
   }
 
-  console.log("✓ File Viewer absent from static entry graph");
+  const fullEntries = Object.entries(manifest).filter(([key, entry]) =>
+    key.includes("node_modules/@file-viewer/react-full/") ||
+    entry.src?.includes("node_modules/@file-viewer/react-full/"),
+  );
+  if (fullEntries.length !== 1) {
+    failBuild(`expected one lazy @file-viewer/react-full entry, found ${fullEntries.length}`);
+  }
+
+  const [fullKey, fullEntry] = fullEntries[0];
+  if (!/^assets\/file-viewer-react-full-[\w-]+\.js$/.test(fullEntry.file)) {
+    failBuild(`lazy File Viewer chunk has unstable name: ${fullEntry.file}`);
+  }
+
+  const dynamicGraph = collectManifestGraph(manifest, [appKey], "dynamicImports");
+  if (!dynamicGraph.has(fullKey)) {
+    failBuild("File Viewer full package is not reachable through the chat dynamic-import graph");
+  }
+
+  const viewerGraph = collectManifestGraph(manifest, [fullKey], "imports");
+  const viewerDynamicGraph = collectManifestGraph(manifest, [fullKey], "dynamicImports");
+  const allViewerChunks = new Set([...viewerGraph, ...viewerDynamicGraph]);
+  // Rollup can merge the all-renderer preset into a shared anonymous chunk,
+  // so verify the emitted lazy closure's code marker rather than its chunk key.
+  const hasPresetAll = [...viewerGraph].some((key) => {
+    const file = manifest[key]?.file;
+    if (!file) return false;
+    const filePath = join(publicDist, file);
+    return existsSync(filePath) && readFileSync(filePath, "utf8").includes("preset-all");
+  });
+  if (!hasPresetAll) failBuild("lazy File Viewer graph is missing the full preset");
+
+  // A full renderer may import shared app/core chunks. Those chunks are not
+  // viewer-only and can legitimately remain in the app precache; only chunks
+  // absent from the chat static graph are subject to the no-precache rule.
+  const exclusiveViewerChunks = [...allViewerChunks]
+    .filter((key) => !staticGraph.has(key))
+    .map((key) => manifest[key]?.file)
+    .filter((file) => typeof file === "string" && file !== fullEntry.file);
+
+  return {
+    fullChunk: fullEntry.file,
+    viewerChunks: exclusiveViewerChunks,
+  };
+}
+
+function assertFileViewerNotPrecached({ fullChunk, viewerChunks }) {
+  const swPath = join(publicDist, "sw.js");
+  if (!existsSync(swPath)) failBuild("dist/public/sw.js missing");
+  const serviceWorker = readFileSync(swPath, "utf8");
+
+  if (serviceWorker.includes("file-viewer/")) {
+    failBuild("File Viewer runtime assets leaked into the service-worker precache");
+  }
+  const emittedViewerChunks = listFilesRecursive(join(publicDist, "assets"))
+    .map(toPublicPath)
+    .filter((file) => /^assets\/file-viewer-.*\.js$/.test(file));
+  const precachedViewerChunks = [...new Set([fullChunk, ...viewerChunks, ...emittedViewerChunks])]
+    .filter((file) => serviceWorker.includes(file));
+  if (precachedViewerChunks.length > 0) {
+    failBuild(
+      `File Viewer lazy chunks leaked into the service-worker precache: ${precachedViewerChunks.join(", ")}`,
+    );
+  }
+
+  console.log("✓ File Viewer is lazy and excluded from service-worker precache");
 }
 
 function assertThirdPartyNotices() {
@@ -190,7 +266,8 @@ console.log("▸ building frontend (vite)…");
 execSync("npx vite build", { cwd: root, stdio: "inherit" });
 
 assertFileViewerAssets();
-assertFileViewerLazy(loadManifest());
+const viewerBuild = assertFileViewerLazy(loadManifest());
+assertFileViewerNotPrecached(viewerBuild);
 assertThirdPartyNotices();
 
 console.log("▸ bundling server (esbuild)…");

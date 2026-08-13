@@ -19,6 +19,34 @@ export default defineConfig({
     outDir: "dist/public",
     emptyOutDir: true,
     manifest: true,
+    rollupOptions: {
+      output: {
+        // Preserve Rollup's natural lazy graph. Only change emitted names so
+        // Workbox can exclude every full-viewer chunk without naming a shared
+        // headless precheck chunk as viewer runtime.
+        chunkFileNames(chunk) {
+          const moduleIds = chunk.moduleIds;
+          const includesHeadless = moduleIds.some((id) =>
+            id.includes("/node_modules/@file-viewer/core/dist/headless"),
+          );
+          const includesViewerRuntime = moduleIds.some(
+            (id) =>
+              id.includes("/node_modules/@file-viewer/") ||
+              id.includes("/node_modules/rtf.js/"),
+          );
+          if (includesViewerRuntime && !includesHeadless) {
+            if (chunk.facadeModuleId?.includes("/node_modules/@file-viewer/react-full/")) {
+              return "assets/file-viewer-react-full-[hash].js";
+            }
+            if (chunk.facadeModuleId?.includes("/node_modules/@file-viewer/preset-all/")) {
+              return "assets/file-viewer-preset-all-[hash].js";
+            }
+            return "assets/file-viewer-[name]-[hash].js";
+          }
+          return "assets/[name]-[hash].js";
+        },
+      },
+    },
   },
   plugins: [
     fileViewerRenderers({ copyAssets: true, inject: false }),

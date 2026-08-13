@@ -4,13 +4,15 @@ import type { UITreeNode } from "../../shared/protocol";
 import { useInvalidateTree, useTree } from "../lib/api";
 import { chatClient, useChat } from "../lib/chat";
 import { onRequestOpenFilesDrawer } from "../lib/drawer";
-import {
-  setFilesPanelOpen,
-  toggleTreeDirExpanded,
-  useFilesPanelOpen,
-  useTreeDirExpanded,
-} from "../lib/filetree";
+import { previewIdentity } from "../lib/file-preview";
+import { toggleTreeDirExpanded, useTreeDirExpanded } from "../lib/filetree";
 import { useT } from "../lib/i18n";
+
+export interface PreviewFileSelection {
+  cwd: string;
+  path: string;
+  name: string;
+}
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
   return (
@@ -28,12 +30,16 @@ function TreeNodeRow({
   cwd,
   node,
   depth,
+  onPreviewFile,
   onPickFile,
+  selectedFileIdentity,
 }: {
   cwd: string;
   node: UITreeNode;
   depth: number;
+  onPreviewFile?: (file: PreviewFileSelection) => void;
   onPickFile?: () => void;
+  selectedFileIdentity?: string;
 }) {
   const t = useT();
   const expanded = useTreeDirExpanded(cwd, node.path);
@@ -53,15 +59,14 @@ function TreeNodeRow({
               // Inaccessible: no expansion or child fetch; aria-disabled keeps it focusable.
             }}
             title={t("inaccessible")}
-            className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] cursor-not-allowed text-faint transition-colors"
+            className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] text-faint transition-colors cursor-not-allowed"
           >
             <span className="size-3 shrink-0" aria-hidden />
-            {/* nf-fa-folder_o */}
             <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
               {"\uf114"}
             </span>
             <span className="truncate">{node.name}</span>
-            <span className="sr-only">— {t("inaccessible")}</span>
+            <span className="sr-only"> {t("inaccessible")}</span>
           </button>
         </div>
       );
@@ -79,25 +84,31 @@ function TreeNodeRow({
             className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] text-muted transition-colors hover:bg-hover hover:text-ink"
           >
             <ChevronIcon expanded={expanded} />
-            {/* nf-fa-folder_o / folder_open_o */}
             <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
               {expanded ? "\uf115" : "\uf114"}
             </span>
             <span className="truncate">{node.name}</span>
           </button>
-          {expanded && <TreeDir cwd={cwd} path={node.path} depth={depth + 1} onPickFile={onPickFile} />}
+          {expanded && (
+            <TreeDir
+              cwd={cwd}
+              path={node.path}
+              depth={depth + 1}
+              onPreviewFile={onPreviewFile}
+              onPickFile={onPickFile}
+              selectedFileIdentity={selectedFileIdentity}
+            />
+          )}
         </div>
       );
     }
 
-    // Empty dir (hasChildren === false): folder/name only, not an expandable action.
     return (
       <div
         style={indent}
         className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] text-muted"
       >
         <span className="size-3 shrink-0" aria-hidden />
-        {/* nf-fa-folder_o */}
         <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
           {"\uf114"}
         </span>
@@ -106,24 +117,48 @@ function TreeNodeRow({
     );
   }
 
+  const selected = selectedFileIdentity === previewIdentity(cwd, node.path);
+  const file = { cwd, path: node.path, name: node.name };
+  const previewOrReference = () => {
+    if (onPreviewFile) onPreviewFile(file);
+    else chatClient.insertComposerText(`@${node.path} `);
+    onPickFile?.();
+  };
+
   return (
-    <button
-      type="button"
+    <div
       style={indent}
-      onClick={() => {
-        chatClient.insertComposerText(`@${node.path} `);
-        onPickFile?.();
-      }}
-      title={node.path}
-      className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] text-muted transition-colors hover:bg-hover hover:text-ink"
+      className={`flex min-w-0 items-center rounded-md transition-colors ${
+        selected ? "bg-hover text-ink" : "text-muted hover:bg-hover hover:text-ink"
+      }`}
     >
-      <span className="size-3 shrink-0" aria-hidden />
-      {/* nf-fa-file_o */}
-      <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
-        {"\uf016"}
-      </span>
-      <span className="truncate">{node.name}</span>
-    </button>
+      <button
+        type="button"
+        onClick={previewOrReference}
+        title={node.path}
+        aria-current={selected ? "true" : undefined}
+        className="flex min-h-11 min-w-0 flex-1 items-center gap-1.5 py-1.5 pr-1 text-left text-[13px]"
+      >
+        <span className={`size-1.5 shrink-0 rounded-full ${selected ? "bg-accent" : "bg-transparent"}`} aria-hidden />
+        <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
+          {"\uf016"}
+        </span>
+        <span className="truncate">{node.name}</span>
+      </button>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          chatClient.insertComposerText(`@${node.path} `);
+          onPickFile?.();
+        }}
+        title={`@${node.path}`}
+        aria-label={`@${node.path}`}
+        className="flex size-11 shrink-0 items-center justify-center rounded-md text-xs font-medium text-faint transition-colors hover:bg-hover hover:text-ink"
+      >
+        @
+      </button>
+    </div>
   );
 }
 
@@ -131,12 +166,16 @@ function TreeDir({
   cwd,
   path,
   depth,
+  onPreviewFile,
   onPickFile,
+  selectedFileIdentity,
 }: {
   cwd: string;
   path: string;
   depth: number;
+  onPreviewFile?: (file: PreviewFileSelection) => void;
   onPickFile?: () => void;
+  selectedFileIdentity?: string;
 }) {
   const t = useT();
   const { data, isPending, isError, refetch } = useTree(cwd, path);
@@ -145,7 +184,7 @@ function TreeDir({
   if (isPending) {
     return (
       <div style={indent} className="py-1.5 text-[12px] text-faint" aria-busy>
-        …
+        ...
       </div>
     );
   }
@@ -172,7 +211,15 @@ function TreeDir({
   return (
     <>
       {nodes.map((node) => (
-        <TreeNodeRow key={node.path} cwd={cwd} node={node} depth={depth} onPickFile={onPickFile} />
+        <TreeNodeRow
+          key={node.path}
+          cwd={cwd}
+          node={node}
+          depth={depth}
+          onPreviewFile={onPreviewFile}
+          onPickFile={onPickFile}
+          selectedFileIdentity={selectedFileIdentity}
+        />
       ))}
       {data?.truncated && (
         <div style={indent} className="py-1.5 text-[11px] text-faint">
@@ -183,20 +230,25 @@ function TreeDir({
   );
 }
 
-/** Shared tree content (desktop sidebar + mobile drawer), rooted at the active tab's cwd. */
+/** Shared tree content, rooted at the active chat tab's project directory. */
 export function FileTreePanel({
   docked,
   onClose,
   onPickFile,
+  onPreviewFile,
+  selectedFileIdentity,
+  cwd: cwdOverride,
 }: {
-  /** Desktop docked sidebar (renders a plain h2). Drawer renders Dialog.Title. */
   docked?: boolean;
   onClose?: () => void;
   onPickFile?: () => void;
+  onPreviewFile?: (file: PreviewFileSelection) => void;
+  selectedFileIdentity?: string;
+  cwd?: string;
 }) {
   const t = useT();
   const { snapshot } = useChat();
-  const cwd = snapshot?.cwd;
+  const cwd = cwdOverride ?? snapshot?.cwd;
   const invalidateTree = useInvalidateTree();
   const rootQuery = useTree(cwd, "", !!cwd);
 
@@ -241,23 +293,19 @@ export function FileTreePanel({
       </div>
       <div className="thin-scroll flex-1 overflow-y-auto px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
         {cwd ? (
-          <TreeDir cwd={cwd} path="" depth={0} onPickFile={onPickFile} />
+          <TreeDir
+            cwd={cwd}
+            path=""
+            depth={0}
+            onPreviewFile={onPreviewFile}
+            onPickFile={onPickFile}
+            selectedFileIdentity={selectedFileIdentity}
+          />
         ) : (
           <div className="px-4 py-8 text-center text-sm text-faint">{t("emptyDirectory")}</div>
         )}
       </div>
     </>
-  );
-}
-
-/** Desktop docked right panel (md+), controlled by the header toggle. */
-export function FilesSidebar() {
-  const open = useFilesPanelOpen();
-  if (!open) return null;
-  return (
-    <aside className="hidden h-full min-h-0 w-64 shrink-0 flex-col overflow-hidden bg-sidebar md:flex">
-      <FileTreePanel docked onClose={() => setFilesPanelOpen(false)} />
-    </aside>
   );
 }
 

@@ -14,7 +14,8 @@ import { useSidebarPinned } from "../lib/sidebar";
 import { useLeftEdgeSwipe, useRightEdgeSwipe } from "../lib/useEdgeSwipe";
 import { Composer } from "./Composer";
 import { ExtensionUIHost } from "./ExtensionUIHost";
-import { FilesDrawer, FilesSidebar } from "./FileTreePanel";
+import { FilesDrawer } from "./FileTreePanel";
+import { FileWorkspaceSidebar } from "./FileWorkspaceSidebar";
 import { ProjectBadge } from "./ProjectBadge";
 import { MessageList } from "./MessageList";
 import { SessionTabs } from "./SessionTabs";
@@ -317,7 +318,7 @@ export function ChatPage() {
         )}
         <ExtensionUIHost />
       </div>
-      <FilesSidebar />
+      <FileWorkspaceSidebar />
       <FilesDrawer />
     </div>
   );
