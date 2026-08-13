@@ -4,8 +4,10 @@ dist/
 .DS_Store
 .env
 
-# Playwright MCP debugging artifacts
+# Playwright debugging and test artifacts
 .playwright-mcp/
+test-results/
+playwright-report/
 
 # Local npm package archives
 *.tgz

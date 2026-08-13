@@ -17,6 +17,10 @@ import {
 import { notifyTaskComplete } from "./browserNotifications";
 import { rememberSessionId } from "./resume";
 import {
+  clearPreviewWorkspace,
+  mergePreviewWorkspace,
+} from "./file-preview";
+import {
   SessionWorkspace,
   type WorkspaceClient,
   type WorkspaceTab,
@@ -43,8 +47,8 @@ export interface ChatState {
   /** The live thinking block has finished and should be collapsed immediately. */
   streamThinkingComplete: boolean;
   activeTools: ActiveTool[];
-  /** Text to inject into the composer right after a fork (cleared after consumption) */
-  injectText: string | null;
+  /** Text to inject into the composer (fork refill = replace; file reference = insert) — cleared after consumption */
+  injectText: { text: string; mode: "replace" | "insert" } | null;
   /** Incremented to focus the composer textarea */
   focusToken: number;
   /** Server version differs from the client build → prompt a reload */
@@ -587,7 +591,8 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         this.maybeFinishPromptRecovery();
         break;
       case "forked":
-        if (event.selectedText) this.update({ injectText: event.selectedText });
+        if (event.selectedText)
+          this.update({ injectText: { text: event.selectedText, mode: "replace" } });
         break;
       case "command_catalog":
         this.update({ commands: event.commands });
@@ -619,7 +624,12 @@ export class ChatClient implements WorkspaceClient<ChatState> {
 
   /** 把历史消息重新填充到输入框 (user 消息的 reuse 按钮) */
   refillComposer(text: string) {
-    this.update({ injectText: text });
+    this.update({ injectText: { text, mode: "replace" } });
+  }
+
+  /** Insert text at the composer caret (file references from the tree panel). */
+  insertComposerText(text: string) {
+    this.update({ injectText: { text, mode: "insert" } });
   }
 
   consumeInjectText() {
@@ -693,6 +703,11 @@ class ChatWorkspaceClient {
       // draft may publish while another tab is active.
       if (active) rememberSessionId(sessionId);
     },
+    {
+      onTabClosed: (key) => clearPreviewWorkspace(key),
+      onTabsMerged: (losing, surviving) =>
+        mergePreviewWorkspace(losing, surviving),
+    },
   );
 
   get state(): ChatState {
@@ -732,6 +747,10 @@ class ChatWorkspaceClient {
 
   refillComposer(text: string) {
     this.workspace.getActiveClient()?.refillComposer(text);
+  }
+
+  insertComposerText(text: string) {
+    this.workspace.getActiveClient()?.insertComposerText(text);
   }
 
   consumeInjectText() {

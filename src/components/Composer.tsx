@@ -3,8 +3,11 @@ import type { UIImageAttachment } from "../../shared/protocol";
 import { chatClient, useChat } from "../lib/chat";
 import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
 import { getComposerDraft, setComposerDraft } from "../lib/composer-drafts";
+import { useFileSearch } from "../lib/api";
 import { useT } from "../lib/i18n";
+import { extractMentionQuery, replaceMentionToken } from "../lib/mention";
 import { CommandPalette, commandMatches } from "./CommandPalette";
+import { FileMentionPalette } from "./FileMentionPalette";
 import { ForkDialog } from "./ForkDialog";
 import { MessageAnchors } from "./MessageAnchors";
 import { ModelMenu } from "./ModelMenu";
@@ -73,6 +76,10 @@ export function Composer({
   const [images, setImages] = useState<PendingImage[]>(initialDraft.images);
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
   const [commandPaletteDismissed, setCommandPaletteDismissed] = useState(false);
+  const [caret, setCaret] = useState(0);
+  const [mentionDismissed, setMentionDismissed] = useState(false);
+  const [activeMentionIndex, setActiveMentionIndex] = useState(0);
+  const [debouncedMentionQuery, setDebouncedMentionQuery] = useState("");
   const [modelOpenToken, setModelOpenToken] = useState(0);
   const [forkOpen, setForkOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -145,13 +152,31 @@ export function Composer({
     setComposerDraft(tabKey, { text, images });
   }, [tabKey, text, images]);
 
-  // Inject the forked message text into the composer
+  // Inject text into the composer: "replace" refills (fork, reuse), "insert"
+  // splices at the caret (file reference from the tree panel).
   useEffect(() => {
-    if (injectText !== null) {
-      setText(injectText);
-      chatClient.consumeInjectText();
-      textareaRef.current?.focus();
+    if (injectText === null) return;
+    chatClient.consumeInjectText();
+    const el = textareaRef.current;
+    if (injectText.mode === "replace") {
+      setText(injectText.text);
+      setCaret(injectText.text.length);
+      el?.focus();
+      return;
     }
+    if (!el) {
+      setText((prev) => prev + injectText.text);
+      return;
+    }
+    const start = el.selectionStart ?? text.length;
+    const end = el.selectionEnd ?? text.length;
+    setText((prev) => prev.slice(0, start) + injectText.text + prev.slice(end));
+    const caret = start + injectText.text.length;
+    setCaret(caret);
+    el.focus();
+    requestAnimationFrame(() => {
+      el.selectionStart = el.selectionEnd = caret;
+    });
   }, [injectText]);
 
   // Focus the input on new session etc.
@@ -193,14 +218,56 @@ export function Composer({
     }
   }, [commandIntent]);
 
+  const mention = useMemo(() => extractMentionQuery(text, caret), [text, caret]);
+  // Mention wins over the command palette: derive it independently, then gate commandPaletteOpen with !mentionMode.
+  const mentionMode = mention !== null && !mentionDismissed;
   const commandToken = text.trimStart().slice(1).split(/\s/, 1)[0] ?? "";
   const commandMode = text.trimStart().startsWith("/") && !/\s/.test(text.trimStart().slice(1));
   const matchingCommands = useMemo(() => commandMatches(commands, text), [commands, text]);
-  const commandPaletteOpen = commandMode && !commandPaletteDismissed;
+  const commandPaletteOpen = commandMode && !commandPaletteDismissed && !mentionMode;
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebouncedMentionQuery(mention?.query ?? ""), 150);
+    return () => window.clearTimeout(id);
+  }, [mention?.query]);
+
+  const { data: mentionData } = useFileSearch(snapshot?.cwd, debouncedMentionQuery, mentionMode);
+  // placeholderData keeps the previous query's results in flight. Only use
+  // them when they resolve the query currently being edited, otherwise a fast
+  // Enter/Tab could commit a path from a stale query.
+  const mentionMatches = useMemo(
+    () => (mentionMode && mentionData?.query === mention?.query ? (mentionData?.matches ?? []) : []),
+    [mentionMode, mentionData, mention?.query],
+  );
+  // Render and keyboard completion must agree on the selected item; clamp to
+  // the visible range so a shrinking result set can never select a stale index.
+  const safeMentionIndex =
+    mentionMatches.length > 0 ? Math.min(activeMentionIndex, mentionMatches.length - 1) : 0;
+
+  useEffect(() => {
+    setActiveMentionIndex(0);
+  }, [mention?.query]);
 
   useEffect(() => {
     setActiveCommandIndex(0);
   }, [commandToken, commands]);
+
+  const completeMention = (match: { path: string; type: "dir" | "file" }) => {
+    const currentCaret = textareaRef.current?.selectionStart ?? caret;
+    const currentMention = extractMentionQuery(text, currentCaret);
+    if (!currentMention) return;
+    const insert = `@${match.path}${match.type === "dir" ? "/" : ""} `;
+    const { next, caret: nextCaret } = replaceMentionToken(text, currentMention.start, currentCaret, insert);
+    setText(next);
+    setCaret(nextCaret);
+    setMentionDismissed(true);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.selectionStart = el.selectionEnd = nextCaret;
+    });
+  };
 
   const addFiles = async (files: Iterable<File>) => {
     const loaded = await Promise.all([...files].map(fileToImage));
@@ -223,7 +290,9 @@ export function Composer({
   };
 
   const completeCommand = (name: string, argumentHint?: string) => {
-    setText(`/${name}${argumentHint ? " " : ""}`);
+    const next = `/${name}${argumentHint ? " " : ""}`;
+    setText(next);
+    setCaret(next.length);
     setCommandPaletteDismissed(true);
     window.setTimeout(() => textareaRef.current?.focus(), 0);
   };
@@ -257,6 +326,14 @@ export function Composer({
             matches={matchingCommands}
             activeIndex={Math.min(activeCommandIndex, Math.max(0, matchingCommands.length - 1))}
             onSelect={(command) => completeCommand(command.name, command.argumentHint)}
+          />
+        )}
+        {mentionMode && (
+          <FileMentionPalette
+            matches={mentionMatches}
+            activeIndex={safeMentionIndex}
+            partial={mentionData?.partial}
+            onSelect={completeMention}
           />
         )}
       <div className="composer-panel rounded-2xl border border-line bg-card px-2 pt-2 pb-2 shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-colors focus-within:border-faint">
@@ -301,11 +378,14 @@ export function Composer({
             style={{ "--composer-font-size": `${chatFontSizePixels(chatFontSize)}px` } as React.CSSProperties}
             onChange={(e) => {
               setText(e.target.value);
+              setCaret(e.target.selectionStart ?? 0);
               setCommandPaletteDismissed(false);
+              setMentionDismissed(false);
               if (e.target.value.trimStart() === "/") chatClient.send({ type: "get_commands" });
               e.target.style.height = "auto";
               e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
             }}
+            onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
             onPaste={(e) => {
               const files = [...e.clipboardData.items]
                 .filter((item) => item.kind === "file")
@@ -317,6 +397,32 @@ export function Composer({
               }
             }}
             onKeyDown={(e) => {
+              if (mentionMode && !e.nativeEvent.isComposing) {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setActiveMentionIndex(Math.min(safeMentionIndex + 1, Math.max(0, mentionMatches.length - 1)));
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setActiveMentionIndex(Math.max(safeMentionIndex - 1, 0));
+                  return;
+                }
+                if ((e.key === "Tab" || e.key === "Enter") && mentionMatches[safeMentionIndex]) {
+                  e.preventDefault();
+                  completeMention(mentionMatches[safeMentionIndex]!);
+                  return;
+                }
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setMentionDismissed(true);
+                  return;
+                }
+              }
               if (commandPaletteOpen && !e.nativeEvent.isComposing) {
                 if (e.key === "ArrowDown") {
                   e.preventDefault();

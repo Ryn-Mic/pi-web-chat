@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ChatClient } from "../src/lib/chat.ts";
+import { ChatClient, chatClient } from "../src/lib/chat.ts";
 
 class FakeWebSocket {
   static readonly OPEN = 1;
@@ -285,5 +285,77 @@ test("finishes a pending prompt when agent_end is the first event", () => {
     assert.equal(client.state.promptResponseToken, 1);
   } finally {
     restore();
+  }
+});
+
+test("refillComposer requests a full composer replace", () => {
+  const client = new ChatClient();
+  client.refillComposer("reuse me");
+
+  assert.deepEqual(client.state.injectText, { text: "reuse me", mode: "replace" });
+});
+
+test("insertComposerText requests an insert at the caret", () => {
+  const client = new ChatClient();
+  client.insertComposerText("src/app.ts");
+
+  assert.deepEqual(client.state.injectText, { text: "src/app.ts", mode: "insert" });
+});
+
+test("forked event refills the composer in replace mode", () => {
+  const client = new ChatClient();
+  (client as unknown as { handle(event: unknown): void }).handle({
+    type: "forked",
+    selectedText: "selected",
+  });
+
+  assert.deepEqual(client.state.injectText, { text: "selected", mode: "replace" });
+});
+
+test("consumeInjectText clears a pending inject in either mode", () => {
+  const client = new ChatClient();
+  client.insertComposerText("x");
+  client.consumeInjectText();
+  assert.equal(client.state.injectText, null);
+
+  client.refillComposer("y");
+  client.consumeInjectText();
+  assert.equal(client.state.injectText, null);
+});
+
+test("insertComposerText reaches only the active client in the workspace", () => {
+  const previousLocation = (globalThis as { location?: unknown }).location;
+  Object.defineProperty(globalThis, "location", {
+    configurable: true,
+    value: { protocol: "http:", host: "localhost" },
+  });
+  const previousWebSocket = (globalThis as { WebSocket?: unknown }).WebSocket;
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    value: FakeWebSocket,
+  });
+  try {
+    chatClient.connect("session-a");
+    chatClient.connect("session-b");
+    chatClient.activate("session-a");
+
+    chatClient.insertComposerText("src/index.ts");
+
+    const tabs = chatClient.getTabsSnapshot();
+    const active = tabs.find((tab) => tab.key === "session-a");
+    const background = tabs.find((tab) => tab.key === "session-b");
+    assert.deepEqual(active?.state.injectText, { text: "src/index.ts", mode: "insert" });
+    assert.equal(background?.state.injectText, null);
+  } finally {
+    chatClient.closeTab("session-a");
+    chatClient.closeTab("session-b");
+    Object.defineProperty(globalThis, "WebSocket", {
+      configurable: true,
+      value: previousWebSocket,
+    });
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: previousLocation,
+    });
   }
 });

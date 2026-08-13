@@ -5,9 +5,11 @@ import type {
   UIModelDiscoveryRequest,
   UIModelDiscoveryResponse,
   UIExtensionsResponse,
+  UIFileSearchResponse,
   UIForkPoint,
   UIModel,
   UISessionInfo,
+  UITreeResponse,
 } from "../../shared/protocol";
 import { authHeaders, setAuthStatus } from "./auth";
 
@@ -38,6 +40,38 @@ export function useSessions(enabled = true) {
 export function useInvalidateSessions() {
   const qc = useQueryClient();
   return () => qc.invalidateQueries({ queryKey: SESSIONS_QUERY_KEY });
+}
+
+export function useTree(cwd: string | undefined, path: string, enabled = true) {
+  return useQuery({
+    queryKey: ["tree", cwd, path],
+    queryFn: () =>
+      fetchJson<UITreeResponse>(
+        `/api/tree?cwd=${encodeURIComponent(cwd ?? "")}&path=${encodeURIComponent(path)}`,
+      ),
+    enabled: enabled && !!cwd,
+    staleTime: 0,
+  });
+}
+
+export function useFileSearch(cwd: string | undefined, query: string, enabled = true) {
+  return useQuery({
+    queryKey: ["file-search", cwd, query],
+    queryFn: () =>
+      fetchJson<UIFileSearchResponse>(
+        `/api/files/search?cwd=${encodeURIComponent(cwd ?? "")}&q=${encodeURIComponent(query)}`,
+      ),
+    enabled: enabled && !!cwd,
+    staleTime: 2_000,
+    // Keep previous results while the next keystroke's request is in flight
+    placeholderData: (prev) => prev,
+  });
+}
+
+/** Refresh every fetched level of a project's tree (refresh button) */
+export function useInvalidateTree() {
+  const qc = useQueryClient();
+  return (cwd: string) => qc.invalidateQueries({ queryKey: ["tree", cwd] });
 }
 
 /** Delete a session (removes the file) */

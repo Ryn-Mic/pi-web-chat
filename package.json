@@ -1,6 +1,6 @@
 {
   "name": "pi-web-chat",
-  "version": "0.1.66",
+  "version": "0.1.69",
   "description": "Web UI for the pi coding agent (OpenWebUI-style, mobile-friendly)",
   "type": "module",
   "license": "MIT",
@@ -27,7 +27,9 @@
     "bin",
     "dist",
     "extensions",
+    "third-party-licenses",
     "release-notes.json",
+    "THIRD_PARTY_NOTICES.md",
     "LICENSE",
     "README.md"
   ],
@@ -38,10 +40,11 @@
     "build": "node scripts/build.mjs",
     "build:web": "vite build",
     "test": "node --import tsx --test tests/*.test.ts",
+    "test:e2e": "playwright test",
     "start": "node bin/pi-web-chat.mjs",
     "typecheck": "tsc --noEmit",
     "prepack": "npm run build",
-    "pack:check": "npm run build && npm pack --dry-run"
+    "pack:check": "npm run build && node scripts/check-pack-size.mjs"
   },
   "pi": {
     "extensions": [
@@ -50,6 +53,9 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "*",
+    "@file-viewer/core": "^2.2.8",
+    "@file-viewer/react-full": "^2.2.8",
+    "ignore": "^7.0.6",
     "qrcode": "^1.5.4",
     "shiki": "^3.23.0",
     "streamdown": "^2.5.0",
@@ -74,6 +80,8 @@
   },
   "devDependencies": {
     "@base-ui-components/react": "^1.0.0-rc.0",
+    "@file-viewer/vite-plugin": "^2.2.8",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.101.2",

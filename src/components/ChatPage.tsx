@@ -1,8 +1,9 @@
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { chatClient, useChat } from "../lib/chat";
-import { requestOpenSessionsDrawer } from "../lib/drawer";
-import { useT } from "../lib/i18n";
+import { requestOpenFilesDrawer, requestOpenSessionsDrawer } from "../lib/drawer";
+import { setFilesPanelOpen, useFilesPanelOpen } from "../lib/filetree";
+import { useLocale, useT } from "../lib/i18n";
 import {
   getLastSessionId,
   isFreshDraftRequested,
@@ -10,11 +11,18 @@ import {
   useResumeEnabled,
 } from "../lib/resume";
 import { useSidebarPinned } from "../lib/sidebar";
-import { useLeftEdgeSwipe } from "../lib/useEdgeSwipe";
+import { useTheme } from "../lib/theme";
+import { useLeftEdgeSwipe, useRightEdgeSwipe } from "../lib/useEdgeSwipe";
 import { Composer } from "./Composer";
 import { ExtensionUIHost } from "./ExtensionUIHost";
+import { FilesDrawer } from "./FileTreePanel";
+import { FileWorkspaceSidebar } from "./FileWorkspaceSidebar";
 import { ProjectBadge } from "./ProjectBadge";
 import { MessageList } from "./MessageList";
+import {
+  MobileFilePreview,
+  type MobilePreviewSelection,
+} from "./MobileFilePreview";
 import { SessionTabs } from "./SessionTabs";
 import { SessionsDrawer, SessionsSidebar } from "./SessionsDrawer";
 
@@ -53,6 +61,8 @@ function connectionLabel(
 
 export function ChatPage() {
   const t = useT();
+  const theme = useTheme();
+  const locale = useLocale();
   const {
     connection,
     sessionId,
@@ -79,6 +89,7 @@ export function ChatPage() {
   const resumeEnabled = useResumeEnabled();
   const messageListRef = useRef<HTMLDivElement>(null);
   const [settingsOpenToken, setSettingsOpenToken] = useState(0);
+  const [mobilePreview, setMobilePreview] = useState<MobilePreviewSelection | null>(null);
 
   // URL → connection ("/" is a draft without an id yet; the server sends
   // session_bound on the first input)
@@ -120,6 +131,14 @@ export function ChatPage() {
     onSwipeRight: requestOpenSessionsDrawer,
   });
 
+  // Right edge → left swipe opens the files drawer (mirrors the sessions gesture).
+  // Always enabled: the gesture is touch-only (mobile), so the desktop docked
+  // panel state must not disable it — otherwise docking on desktop then
+  // shrinking to a mobile width leaves the drawer unreachable by swipe.
+  const filesPanelOpen = useFilesPanelOpen();
+  const openFilesDrawer = useCallback(() => requestOpenFilesDrawer(), []);
+  useRightEdgeSwipe({ enabled: true, onSwipeLeft: openFilesDrawer });
+
   useEffect(() => {
     if (!commandIntent) return;
     if (commandIntent.action === "open_settings") {
@@ -136,6 +155,11 @@ export function ChatPage() {
       chatClient.requestComposerFocus();
     }
   }, [commandIntent, navigate]);
+
+  // The header files button toggles the docked panel on md+ and opens the
+  // overlay drawer below. aria-pressed only describes the desktop toggle, so
+  // on mobile it stays unset (the drawer has no pressed state).
+  const isDesktop = window.matchMedia("(min-width: 768px)").matches;
 
   // #root is the flex/dvh shell; fill it (no position:fixed — iOS 26 safe).
   return (
@@ -166,6 +190,29 @@ export function ChatPage() {
             />
             <ProjectBadge cwd={snapshot?.cwd} />
           </div>
+          <button
+            type="button"
+            onClick={() => {
+              // Desktop toggles the docked panel; mobile opens the overlay drawer
+              if (window.matchMedia("(min-width: 768px)").matches) {
+                setFilesPanelOpen(!filesPanelOpen);
+              } else {
+                requestOpenFilesDrawer();
+              }
+            }}
+            aria-label={t("openFiles")}
+            title={t("openFiles")}
+            aria-pressed={isDesktop ? filesPanelOpen : undefined}
+            className="flex size-9 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink"
+          >
+            <svg viewBox="0 0 24 24" className="size-5 fill-none stroke-current stroke-[1.8]" aria-hidden>
+              <path
+                d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6Z"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
           <button
             type="button"
             onClick={() => {
@@ -279,6 +326,16 @@ export function ChatPage() {
         )}
         <ExtensionUIHost />
       </div>
+      <FileWorkspaceSidebar />
+      <FilesDrawer onPreviewFile={setMobilePreview} />
+      {mobilePreview && (
+        <MobileFilePreview
+          selection={mobilePreview}
+          theme={theme}
+          locale={locale}
+          onClose={() => setMobilePreview(null)}
+        />
+      )}
     </div>
   );
 }

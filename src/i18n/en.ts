@@ -41,6 +41,36 @@ export type Messages = {
   closeSidebar: string;
   closeSessionTab: string;
 
+  // files
+  files: string;
+  openFiles: string;
+  closeFiles: string;
+  refreshTree: string;
+  emptyDirectory: string;
+  treeLoadError: string;
+  treeTruncated: string;
+  inaccessible: string;
+  mentionNoFiles: string;
+  mentionPartial: string;
+
+  // file preview
+  filePreviewLoading: string;
+  filePreviewUnsupported: string;
+  filePreviewMalformed: string;
+  filePreviewTooLarge: string;
+  filePreviewForbidden: string;
+  filePreviewMissing: string;
+  filePreviewChanged: string;
+  filePreviewExpired: string;
+  filePreviewFailed: string;
+  filePreviewRetry: string;
+  previewFile: string;
+  referenceFile: string;
+  closePreviewTab: string;
+  refreshPreview: string;
+  backToFiles: string;
+  closePreview: string;
+
   // composer
   sendMessage: string;
   streamingPlaceholder: string;
@@ -181,6 +211,34 @@ export const en: Messages = {
   unpinSidebar: "Unpin sidebar",
   closeSidebar: "Close sidebar",
   closeSessionTab: "Close session tab",
+
+  files: "Files",
+  openFiles: "Open files",
+  closeFiles: "Close files",
+  refreshTree: "Refresh",
+  emptyDirectory: "Empty directory",
+  treeLoadError: "Failed to load — tap to retry",
+  treeTruncated: "Showing the first 1000 entries",
+  inaccessible: "No access",
+  mentionNoFiles: "No matching files",
+  mentionPartial: "Results may be incomplete — keep typing",
+
+  filePreviewLoading: "Loading {name}…",
+  filePreviewUnsupported: "Cannot preview {name}: unsupported format",
+  filePreviewMalformed: "{name} appears to be damaged or malformed",
+  filePreviewTooLarge: "{name} is too large to preview",
+  filePreviewForbidden: "Not allowed to open {name}",
+  filePreviewMissing: "{name} not found",
+  filePreviewChanged: "{name} changed while loading",
+  filePreviewExpired: "{name} preview expired",
+  filePreviewFailed: "Failed to load {name}",
+  filePreviewRetry: "Retry",
+  previewFile: "Preview {name}",
+  referenceFile: "Reference {name}",
+  closePreviewTab: "Close preview tab",
+  refreshPreview: "Refresh preview",
+  backToFiles: "Back to files",
+  closePreview: "Close preview",
 
   sendMessage: "Send a message",
   streamingPlaceholder: "Streaming… (send to steer)",

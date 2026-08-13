@@ -21,6 +21,7 @@ import type {
   ServerEvent,
   UICustomModelsResponse,
   UICustomProvider,
+  UIFileSearchResponse,
   UIModelDiscoveryRequest,
   UIExtensionInfo,
   UICommandInfo,
@@ -28,8 +29,16 @@ import type {
   UISessionInfo,
   UISnapshot,
   UIThinkingLevel,
+  UITreeResponse,
 } from "../shared/protocol.ts";
 import { auth, authStartupInfo } from "./auth.ts";
+import { handleDesktopFileContent, streamStaticFile } from "./file-content.ts";
+import { listDir, PathEscapeError, searchFiles } from "./files.ts";
+import {
+  handlePreviewContentRequest,
+  handlePreviewContextRequest,
+  PreviewContextStore,
+} from "./preview-context.ts";
 import { readCustomModels, resolveIncomingApiKey, validateProviders, writeCustomModels } from "./models-config.ts";
 import { getActiveTodo, serializeMessages } from "./serialize.ts";
 
@@ -45,6 +54,11 @@ mkdirSync(AGENT_CWD, { recursive: true });
 
 /** Daemon state file dir (same STATE_DIR as extensions/pi-web-chat.ts) */
 const DAEMON_STATE_DIR = join(HOME, ".pi", "web-chat");
+
+/** Short-lived mobile preview capability store. Cleanup timer lives here so the
+ * store itself stays testable without a background interval. */
+const previewContextStore = new PreviewContextStore();
+setInterval(() => previewContextStore.cleanup(), 60_000).unref();
 
 // Resolve static assets for both layouts:
 //   production package: <pkg>/dist/index.js  + <pkg>/dist/public/
@@ -366,6 +380,31 @@ function gitBranchAt(cwd: string): string | null {
   }
   gitBranchCache.set(cwd, { branch, at: Date.now() });
   return branch;
+}
+
+/** ~-shorten an absolute path for display */
+function shortenHome(p: string): string {
+  return p === HOME ? "~" : p.startsWith(HOME + "/") ? "~" + p.slice(HOME.length) : p;
+}
+
+// Known-project cache for file API authorization (anti arbitrary-read).
+const KNOWN_ROOTS_TTL_MS = 3_000;
+let knownRootsCache: { at: number; roots: Set<string> } | null = null;
+
+/** Roots the file APIs may serve: loaded runtimes + sessions' cwds + the chat workspace. */
+async function knownProjectRoots(): Promise<Set<string>> {
+  if (knownRootsCache && Date.now() - knownRootsCache.at < KNOWN_ROOTS_TTL_MS) {
+    return knownRootsCache.roots;
+  }
+  const roots = new Set<string>([AGENT_CWD]);
+  for (const entry of entries.values()) roots.add(entry.runtime.cwd);
+  try {
+    for (const s of await SessionManager.listAll()) if (s.cwd) roots.add(s.cwd);
+  } catch {
+    /* keep the entry/AGENT_CWD roots */
+  }
+  knownRootsCache = { at: Date.now(), roots };
+  return roots;
 }
 
 function supportedThinkingLevels(model: unknown): UIThinkingLevel[] {
@@ -1055,17 +1094,6 @@ let knownCustomProviderKeys = new Set(readCustomModels().providers.map((p) => p.
 // HTTP server (API + static files)
 // ---------------------------------------------------------------------------
 
-const MIME: Record<string, string> = {
-  ".html": "text/html",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".ico": "image/x-icon",
-  ".woff2": "font/woff2",
-  ".webmanifest": "application/manifest+json",
-};
-
 /** Extract the session token from Authorization: Bearer <t> or ?token=<t> */
 function sessionTokenFromRequest(req: IncomingMessage): string {
   const header = req.headers.authorization;
@@ -1077,7 +1105,12 @@ function sessionTokenFromRequest(req: IncomingMessage): string {
   }
 }
 
-async function handleAuthRequest(req: IncomingMessage, res: import("node:http").ServerResponse, url: URL) {
+async function handleAuthRequest(
+  req: IncomingMessage,
+  res: import("node:http").ServerResponse,
+  url: URL,
+  previewStore: PreviewContextStore,
+) {
   const sendJson = (status: number, body: unknown) => {
     res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
     res.end(JSON.stringify(body));
@@ -1117,7 +1150,9 @@ async function handleAuthRequest(req: IncomingMessage, res: import("node:http").
 
   // Logout
   if (url.pathname === "/api/auth/logout" && req.method === "POST") {
-    auth.logout(sessionTokenFromRequest(req));
+    const sessionToken = sessionTokenFromRequest(req);
+    previewStore.deleteBySessionToken(sessionToken);
+    auth.logout(sessionToken);
     sendJson(200, { ok: true });
     return;
   }
@@ -1145,7 +1180,11 @@ async function handleAuthRequest(req: IncomingMessage, res: import("node:http").
     return;
   }
 
-  sendJson(404, { error: "not found" });
+  if (req.method === "GET" || req.method === "HEAD") {
+    sendJson(404, { error: "not found" });
+  } else {
+    sendJson(405, { error: "method not allowed" });
+  }
 }
 
 
@@ -1165,7 +1204,17 @@ const httpServer = createServer(async (req, res) => {
 
     // Auth API (reachable without a session)
     if (url.pathname.startsWith("/api/auth/")) {
-      await handleAuthRequest(req, res, url);
+      await handleAuthRequest(req, res, url, previewContextStore);
+      return;
+    }
+
+    // Mobile preview content is reachable with a short-lived Preview capability id,
+    // before the global Bearer gate, and must reject Bearer/query auth.
+    if (await handlePreviewContentRequest(req, res, url, {
+      knownProjectRoots,
+      expandHome,
+      previewContextStore,
+    })) {
       return;
     }
 
@@ -1176,6 +1225,15 @@ const httpServer = createServer(async (req, res) => {
         "cache-control": "no-store",
       });
       res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+
+    // Mobile preview capability creation (requires a valid session).
+    if (await handlePreviewContextRequest(req, res, url, {
+      knownProjectRoots,
+      expandHome,
+      previewContextStore,
+    })) {
       return;
     }
 
@@ -1367,6 +1425,48 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
+    // Project file browsing (tree + @-mention search). cwd must be a known project root.
+    if (await handleDesktopFileContent(req, res, url, { knownProjectRoots, expandHome })) {
+      return;
+    }
+
+    if (url.pathname === "/api/tree" || url.pathname === "/api/files/search") {
+      const root = expandHome(url.searchParams.get("cwd") ?? "");
+      if (!root || !(await knownProjectRoots()).has(root)) {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unknown project cwd" }));
+        return;
+      }
+      try {
+        if (!statSync(root).isDirectory()) throw Object.assign(new Error("not a directory"), { code: "ENOENT" });
+        if (url.pathname === "/api/tree") {
+          const rel = url.searchParams.get("path") ?? "";
+          const { nodes, truncated } = listDir(root, rel);
+          const body: UITreeResponse = { root: shortenHome(root), path: rel, nodes, ...(truncated ? { truncated } : {}) };
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(body));
+          return;
+        }
+        const q = url.searchParams.get("q") ?? "";
+        const limitParam = Number(url.searchParams.get("limit") ?? "50");
+        const { matches, partial } = searchFiles(root, q, Number.isFinite(limitParam) ? limitParam : 50);
+        const body: UIFileSearchResponse = { root: shortenHome(root), query: q, matches, ...(partial ? { partial } : {}) };
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(body));
+        return;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        const status =
+          err instanceof PathEscapeError || code === "ENOTDIR" ? 400
+          : code === "ENOENT" ? 404
+          : code === "EACCES" ? 403
+          : 500;
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: status === 500 ? "internal server error" : err instanceof Error ? err.message : String(err) }));
+        return;
+      }
+    }
+
     if (url.pathname === "/api/extensions") {
       const anyEntry = entries.values().next().value as SessionEntry | undefined;
       if (!anyEntry) {
@@ -1433,23 +1533,73 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
+    // Unmatched API routes
+    if (url.pathname.startsWith("/api/")) {
+      if (req.method === "GET" || req.method === "HEAD") {
+        res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "not found" }));
+      } else {
+        res.writeHead(405, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "method not allowed" }));
+      }
+      return;
+    }
+
     // Static files (production build)
     if (existsSync(DIST_DIR)) {
-      let filePath = join(DIST_DIR, url.pathname === "/" ? "index.html" : url.pathname);
-      if (!filePath.startsWith(DIST_DIR) || !existsSync(filePath)) {
-        filePath = join(DIST_DIR, "index.html"); // SPA fallback
+      let pathname: string;
+      try {
+        pathname = decodeURIComponent(url.pathname);
+      } catch {
+        res.writeHead(400, { "content-type": "text/plain" });
+        res.end("Bad request");
+        return;
       }
-      const ext = extname(filePath);
-      res.writeHead(200, { "content-type": MIME[ext] ?? "application/octet-stream" });
-      res.end(readFileSync(filePath));
+      const viewerPrefix = "/file-viewer/";
+      const isViewer = pathname.startsWith(viewerPrefix);
+
+      const filePath = resolve(DIST_DIR, "." + pathname);
+      const distRoot = resolve(DIST_DIR);
+      if (filePath !== distRoot && !filePath.startsWith(distRoot + "/")) {
+        res.writeHead(403, { "content-type": "text/plain" });
+        res.end("Forbidden");
+        return;
+      }
+
+      if (isViewer) {
+        if (existsSync(filePath) && statSync(filePath).isFile()) {
+          streamStaticFile(req, res, filePath, {
+            cacheControl: "public, max-age=3600, must-revalidate",
+          });
+        } else {
+          res.writeHead(404, { "content-type": "text/plain" });
+          res.end("Not found");
+        }
+        return;
+      }
+
+      if (existsSync(filePath) && statSync(filePath).isFile()) {
+        const ext = extname(filePath).toLowerCase();
+        const cacheControl = ext === ".html" ? "no-cache" : undefined;
+        streamStaticFile(req, res, filePath, cacheControl ? { cacheControl } : undefined);
+        return;
+      }
+
+      // SPA fallback for non-API, non-viewer navigation
+      const indexHtml = join(DIST_DIR, "index.html");
+      res.writeHead(200, {
+        "content-type": "text/html",
+        "cache-control": "no-cache",
+      });
+      res.end(readFileSync(indexHtml));
       return;
     }
 
     res.writeHead(404);
     res.end("Not found. Run `npm run build` first, or use `npm run dev`.");
-  } catch (err) {
+  } catch {
     res.writeHead(500, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: String(err instanceof Error ? err.message : err) }));
+    res.end(JSON.stringify({ error: "internal server error" }));
   }
 });
 

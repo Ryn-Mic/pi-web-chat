@@ -25,6 +25,11 @@ type ClientFactory<Client> = (
   tabKey: string,
 ) => Client;
 
+export interface SessionWorkspaceLifecycle {
+  onTabClosed?(key: string): void;
+  onTabsMerged?(losingKey: string, survivingKey: string): void;
+}
+
 /**
  * Keeps one independent client/runtime connection per session tab.
  * The active tab is a view concern; inactive clients stay connected so their
@@ -45,6 +50,7 @@ export class SessionWorkspace<
   constructor(
     createClient: ClientFactory<Client>,
     private readonly onSessionBound?: (sessionId: string, active: boolean) => void,
+    private readonly lifecycle?: SessionWorkspaceLifecycle,
   ) {
     this.createClient = createClient;
   }
@@ -112,6 +118,7 @@ export class SessionWorkspace<
         remaining[Math.min(Math.max(closedIndex, 0), remaining.length - 1)] ?? null;
     }
     this.refresh();
+    this.lifecycle?.onTabClosed?.(resolvedKey);
     return this.activeKeyValue;
   }
 
@@ -166,7 +173,8 @@ export class SessionWorkspace<
     const existingKey =
       this.tabsSnapshot.find((tab) => tab.sessionId === boundId)?.key ?? boundId;
     const existing = this.clients.get(existingKey);
-    if (existing && existing !== client) {
+    const merged = existing && existing !== client;
+    if (merged) {
       this.unsubscriptions.get(tabKey)?.();
       this.unsubscriptions.delete(tabKey);
       this.clients.delete(tabKey);
@@ -179,6 +187,10 @@ export class SessionWorkspace<
     // server's draft -> session transition.
     this.refresh();
     this.onSessionBound?.(boundId, this.activeKeyValue === tabKey);
+
+    if (merged) {
+      this.lifecycle?.onTabsMerged?.(tabKey, existingKey);
+    }
   }
 
   private refresh() {
