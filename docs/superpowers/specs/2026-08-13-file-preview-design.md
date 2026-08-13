@@ -43,7 +43,7 @@
 - Vite 项目必须注册 `fileViewerRenderers({ copyAssets: true })`；不能再安装或传入另一份 `preset-all`。
 - viewer 主题支持 `light | dark | system`；内置 locale 精确为 `zh-CN | en-US | ja-JP`。本项目 zh/en/ja 显式映射，ko 固定 fallback `en-US`，外围 shell 仍使用本项目韩语。
 - `precheckFileViewerSource` 只从 `@file-viewer/core/headless` 导出，`react-full` 不重导出；因此 core 必须是直接 dependency，不能依赖 npm hoist 偶然可解析。
-- 这些依赖均为 Apache-2.0。最终 npm 包必须包含第三方声明与许可证副本。
+- File Viewer root packages（`@file-viewer/react-full`/`core`/`vite-plugin`）为 Apache-2.0。完整运行时还包含其他许可证的 transitive/embedded 组件与资产（如 `@flyfish-dev/cad-viewer`、`dwf-viewer` 的 AGPL-3.0-only，`@mlightcad/libredwg-web` 的 GPL-3.0，`@fontsource-variable/noto-sans-sc` 的 OFL-1.1，`occt-import-js` 的 LGPL-2.1，`@file-viewer/ppt` 的 SEE LICENSE 等）。最终 npm 包必须携带 root license set（`THIRD_PARTY_NOTICES.md` + `third-party-licenses/`），且 `copy-assets` 复制的 `dist/public/file-viewer/` 树必须保留其内部嵌入的 notices/license 文件。
 
 ## 信息架构
 
@@ -256,7 +256,7 @@ function createFileViewerOptions(input: {
 - 其他静态路径的 fallback 仍限制在 `DIST_DIR` 内，不能因新增资产路径放宽。
 - Vite 显式开启 `build.manifest: true`。`scripts/build.mjs` 继续调用 Vite；build 验证必须检查 manifest 和代表性的 PDF/Office/CAD/WASM 资产存在，并沿 manifest 静态 import graph 检查聊天入口 chunk 不静态依赖 full preset chunk。
 - `package.json` dependencies 加同版本范围的 `@file-viewer/react-full` 和 `@file-viewer/core`；devDependencies 加 `@file-viewer/vite-plugin`。不单独安装 `preset-all`。
-- 新增 `THIRD_PARTY_NOTICES.md`，包含 File Viewer 名称、来源、版本、Apache-2.0 说明和许可证路径；`package.json.files` 加入该文件及 `third-party-licenses/`，保存上游 Apache-2.0 文本。
+- 新增/更新 `THIRD_PARTY_NOTICES.md`，列出 File Viewer root packages 及所有 runtime 组件的名称、版本、许可证、来源 URL 和本地 license/notice 文件路径；`package.json.files` 包含该文件及 `third-party-licenses/`。`scripts/build.mjs` 增加 `assertThirdPartyNotices` 门控：检查 root license set 与 copied dist 中关键 embedded notices 存在且非空。
 - `file-viewer-copy-assets@2.2.8` 官方 unpacked payload 约 160 MB，full assets 会显著扩大 `dist`。新增 `scripts/check-pack-size.mjs` 运行 `npm pack --dry-run --json`，记录压缩与 unpacked size并强制压缩 tarball ≤ 150 MiB、unpacked ≤ 500 MiB；`pack:check` 改为 `npm run build && node scripts/check-pack-size.mjs`。超过门限则停止交付并改用标准 package + 明确 presets，而不是静默发布超大包。
 
 ## UI 与可访问性

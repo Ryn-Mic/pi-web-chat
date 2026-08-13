@@ -137,6 +137,52 @@ function assertFileViewerLazy(manifest) {
   console.log("✓ File Viewer absent from static entry graph");
 }
 
+function assertThirdPartyNotices() {
+  const rootLicenseDir = join(root, "third-party-licenses");
+  const requiredRootFiles = [
+    "Apache-2.0.txt",
+    "AGPL-3.0-only.txt",
+    "cad-viewer-NOTICE.txt",
+    "dwf-viewer-NOTICE.txt",
+    "OFL-1.1.txt",
+    "LGPL-2.1.txt",
+    "file-viewer-ppt-LICENSE.txt",
+    "file-viewer-ppt-NOTICE.txt",
+    "GPL-3.0-only.txt",
+  ];
+
+  for (const name of requiredRootFiles) {
+    const filePath = join(rootLicenseDir, name);
+    if (!existsSync(filePath)) failBuild(`missing root license file: third-party-licenses/${name}`);
+    const stats = statSync(filePath);
+    if (!stats.isFile() || stats.size === 0) {
+      failBuild(`empty or invalid root license file: third-party-licenses/${name}`);
+    }
+    console.log(`✓ root license file: third-party-licenses/${name}`);
+  }
+
+  const assetRoot = join(publicDist, "file-viewer");
+  const requiredAssetNotices = [
+    "vendor/ppt/LICENSE",
+    "vendor/ppt/NOTICE",
+    "wasm/model/LICENSE.occt-import-js.txt",
+    "vendor/pdf/cmaps/LICENSE",
+    "vendor/drawio/LICENSE",
+  ];
+
+  for (const rel of requiredAssetNotices) {
+    const filePath = join(assetRoot, rel);
+    if (!existsSync(filePath)) {
+      failBuild(`missing embedded asset notice: dist/public/file-viewer/${rel}`);
+    }
+    const stats = statSync(filePath);
+    if (!stats.isFile() || stats.size === 0) {
+      failBuild(`empty or invalid embedded asset notice: dist/public/file-viewer/${rel}`);
+    }
+    console.log(`✓ embedded asset notice: dist/public/file-viewer/${rel}`);
+  }
+}
+
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
@@ -145,6 +191,7 @@ execSync("npx vite build", { cwd: root, stdio: "inherit" });
 
 assertFileViewerAssets();
 assertFileViewerLazy(loadManifest());
+assertThirdPartyNotices();
 
 console.log("▸ bundling server (esbuild)…");
 await esbuild.build({

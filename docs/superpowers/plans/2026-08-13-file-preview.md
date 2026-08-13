@@ -637,7 +637,7 @@ export function FileViewerSurface({
 
 - [ ] **步骤 5：加入许可证文件和 package files**
 
-`THIRD_PARTY_NOTICES.md` 记录项目名、GitHub URL、当前解析版本、Apache-2.0；复制上游 Apache-2.0 到 `third-party-licenses/Apache-2.0.txt`；`package.json.files` 加两项。
+`THIRD_PARTY_NOTICES.md` 记录 File Viewer root packages 及完整 runtime 中各组件的名称、版本、许可证、来源 URL 和对应本地 license/notice 文件（包括 Apache-2.0、AGPL-3.0-only、GPL-3.0-only、LGPL-2.1、OFL-1.1、`@file-viewer/ppt` 的 SEE LICENSE 等）；复制上游真实 license/notice 文本到 `third-party-licenses/`；`package.json.files` 包含 `THIRD_PARTY_NOTICES.md` 与 `third-party-licenses/`。`scripts/build.mjs` 增加 `assertThirdPartyNotices`：检查 root license set 存在且非空，并在 Vite 复制资产后检查 `dist/public/file-viewer/` 中关键 embedded notices（`vendor/ppt/LICENSE+NOTICE`、`wasm/model/LICENSE.occt-import-js.txt`、`vendor/pdf/cmaps/LICENSE`、`vendor/drawio/LICENSE`）存在且非空。
 
 - [ ] **步骤 6：运行测试、typecheck 和生产 build**
 
@@ -1038,4 +1038,4 @@ git commit -m "chore(发布): 0.1.69 文件预览"
 - Chat initial entry 和 iframe entry 都不静态包含 `react-full/preset-all`；viewer 只在预览时 lazy 加载，`file-viewer/**` 不进入 Workbox precache。
 - 文件树主按钮只预览，独立 `@` 只引用；桌面 tabs、移动 history/focus、375/768/1440 布局和 safe-area 通过真实浏览器验证。
 - `.html/.htm/.xml` 以文本显示；恶意 SVG 测试通过，否则服务端 deny `.svg`。
-- npm package 包含运行资产、THIRD_PARTY_NOTICES 和 Apache-2.0，且 pack size 硬门限通过。
+- npm package 包含运行资产、`THIRD_PARTY_NOTICES.md`、完整 root license set（`third-party-licenses/`）且保留 `dist/public/file-viewer/` 内 embedded notices；`scripts/build.mjs` 的 `assertThirdPartyNotices` 门控通过；pack size 硬门限通过。
