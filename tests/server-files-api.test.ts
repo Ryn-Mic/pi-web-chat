@@ -282,3 +282,151 @@ test("file APIs require a session token, authorize known cwd, and reject unsafe 
   const missingRoot = await getJson(baseUrl, `/api/tree?cwd=${encodeURIComponent(root)}`, sessionToken);
   assert.equal(missingRoot.status, 404);
 });
+
+test("mobile preview context and preview-content routes", async () => {
+  home = mkdtempSync(join(tmpdir(), "pi-web-home-"));
+  const root = join(home, "project");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "README.md"), "hello");
+
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      HOME: home,
+      PORT: String(port),
+      HOST: "127.0.0.1",
+      PI_WEB_CWD: root,
+      PI_WEB_TOKEN: "test-token",
+      PI_WEB_2FA: "off",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.resume();
+  child.stderr.resume();
+  await waitForHealth(baseUrl);
+
+  const sessionToken = await login(baseUrl);
+
+  const created = await fetch(`${baseUrl}/api/files/preview-context`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${sessionToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ cwd: root, path: "README.md", theme: "dark", locale: "ko" }),
+  });
+  assert.equal(created.status, 200);
+  const { id } = (await created.json()) as { id: string };
+  assert.equal(typeof id, "string");
+
+  const preview = await fetch(`${baseUrl}/api/files/preview-content`, {
+    headers: { authorization: `Preview ${id}` },
+  });
+  assert.equal(preview.status, 200);
+  assert.equal(preview.headers.get("x-preview-theme"), "dark");
+  assert.equal(preview.headers.get("x-preview-locale"), "en-US");
+  assert.equal(preview.headers.get("content-type"), "text/markdown");
+  assert.equal(await preview.text(), "hello");
+
+  const head = await fetch(`${baseUrl}/api/files/preview-content`, {
+    method: "HEAD",
+    headers: { authorization: `Preview ${id}` },
+  });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get("x-preview-theme"), "dark");
+  assert.equal(await head.text(), "");
+
+  assert.equal((await fetch(`${baseUrl}/api/files/preview-content`)).status, 401);
+  assert.equal(
+    (await fetch(`${baseUrl}/api/files/preview-content`, {
+      headers: { authorization: `Bearer ${sessionToken}` },
+    })).status,
+    401,
+  );
+  assert.equal(
+    (await fetch(`${baseUrl}/api/files/preview-content?id=${encodeURIComponent(id)}`)).status,
+    401,
+  );
+  assert.equal(
+    (await fetch(`${baseUrl}/api/files/preview-content`, {
+      method: "POST",
+      headers: { authorization: `Preview ${id}` },
+    })).status,
+    405,
+  );
+
+  const unknownCwd = await fetch(`${baseUrl}/api/files/preview-context`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${sessionToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ cwd: "/etc", path: "passwd", theme: "light", locale: "en" }),
+  });
+  assert.equal(unknownCwd.status, 403);
+
+  const escapePath = await fetch(`${baseUrl}/api/files/preview-context`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${sessionToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ cwd: root, path: "../outside.txt", theme: "light", locale: "en" }),
+  });
+  assert.equal(escapePath.status, 400);
+
+  const bigPath = join(root, "big.bin");
+  const bigFd = openSync(bigPath, "w");
+  try {
+    ftruncateSync(bigFd, 101 * 1024 * 1024);
+  } finally {
+    closeSync(bigFd);
+  }
+  const tooLarge = await fetch(`${baseUrl}/api/files/preview-context`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${sessionToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ cwd: root, path: "big.bin", theme: "light", locale: "en" }),
+  });
+  assert.equal(tooLarge.status, 413);
+
+  writeFileSync(join(root, "README.md"), "HELLO");
+  const changed = await fetch(`${baseUrl}/api/files/preview-content`, {
+    headers: { authorization: `Preview ${id}` },
+  });
+  assert.equal(changed.status, 409);
+
+  const created2 = await fetch(`${baseUrl}/api/files/preview-context`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${sessionToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ cwd: root, path: "README.md", theme: "light", locale: "zh" }),
+  });
+  assert.equal(created2.status, 200);
+  const { id: id2 } = (await created2.json()) as { id: string };
+
+  const logoutRes = await fetch(`${baseUrl}/api/auth/logout`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${sessionToken}` },
+  });
+  assert.equal(logoutRes.status, 200);
+
+  const afterLogout = await fetch(`${baseUrl}/api/files/preview-content`, {
+    headers: { authorization: `Preview ${id2}` },
+  });
+  assert.equal(afterLogout.status, 410);
+
+  const noSession = await fetch(`${baseUrl}/api/files/preview-context`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cwd: root, path: "README.md", theme: "light", locale: "en" }),
+  });
+  assert.equal(noSession.status, 401);
+});

@@ -116,7 +116,7 @@ function sendPlain(res: ServerResponse, status: number, message: string): void {
   res.end(message);
 }
 
-function setContentHeaders(res: ServerResponse, meta: ResolvedPreviewFile): void {
+export function setContentHeaders(res: ServerResponse, meta: ResolvedPreviewFile): void {
   res.setHeader("content-type", meta.mimeType);
   res.setHeader("content-length", String(meta.size));
   res.setHeader("etag", meta.etag);
@@ -125,6 +125,56 @@ function setContentHeaders(res: ServerResponse, meta: ResolvedPreviewFile): void
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("cross-origin-resource-policy", "same-origin");
   res.setHeader("last-modified", new Date(meta.mtimeMs).toUTCString());
+}
+
+export function sendResolvedFile(
+  req: IncomingMessage,
+  res: ServerResponse,
+  meta: ResolvedPreviewFile,
+  extraHeaders?: Record<string, string>,
+): void {
+  if (req.method === "HEAD") {
+    setContentHeaders(res, meta);
+    if (extraHeaders) {
+      for (const [key, value] of Object.entries(extraHeaders)) {
+        res.setHeader(key, value);
+      }
+    }
+    res.writeHead(200);
+    res.end();
+    return;
+  }
+
+  let stream: ReturnType<typeof createReadStream> | undefined;
+  const cleanup = () => {
+    stream?.destroy();
+    stream = undefined;
+  };
+  req.once("aborted", cleanup);
+  res.once("close", cleanup);
+
+  try {
+    const fdResult = openResolvedPreviewFile(meta);
+    stream = fdResult.stream;
+    stream.on("error", () => {
+      cleanup();
+      if (!res.headersSent) {
+        res.writeHead(500, { "content-type": "application/json", "cache-control": "no-store" });
+      }
+      res.destroy();
+    });
+    setContentHeaders(res, meta);
+    if (extraHeaders) {
+      for (const [key, value] of Object.entries(extraHeaders)) {
+        res.setHeader(key, value);
+      }
+    }
+    res.writeHead(200);
+    stream.pipe(res);
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
 }
 
 export async function handleDesktopFileContent(
@@ -183,22 +233,14 @@ export async function handleDesktopFileContent(
     return true;
   }
 
-  if (req.method === "HEAD") {
-    setContentHeaders(res, meta);
-    res.writeHead(200);
-    res.end();
-    return true;
-  }
-
   const ifMatch = req.headers["if-match"];
-  if (!ifMatch || ifMatch !== meta.etag) {
+  if (req.method === "GET" && (!ifMatch || ifMatch !== meta.etag)) {
     sendJson(409, { error: "content changed" });
     return true;
   }
 
-  let fdResult: ReturnType<typeof openResolvedPreviewFile>;
   try {
-    fdResult = openResolvedPreviewFile(meta);
+    sendResolvedFile(req, res, meta);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ESTALE") {
@@ -216,24 +258,5 @@ export async function handleDesktopFileContent(
     sendJson(500, INTERNAL_ERROR_JSON);
     return true;
   }
-
-  const stream = fdResult.stream;
-  const cleanup = () => {
-    stream.destroy();
-    stream.removeAllListeners();
-  };
-  req.once("aborted", cleanup);
-  res.once("close", cleanup);
-  stream.on("error", () => {
-    cleanup();
-    if (!res.headersSent) {
-      res.writeHead(500, { "content-type": "application/json", "cache-control": "no-store" });
-    }
-    res.destroy();
-  });
-
-  setContentHeaders(res, meta);
-  res.writeHead(200);
-  stream.pipe(res);
   return true;
 }

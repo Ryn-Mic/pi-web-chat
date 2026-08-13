@@ -34,6 +34,11 @@ import type {
 import { auth, authStartupInfo } from "./auth.ts";
 import { handleDesktopFileContent, streamStaticFile } from "./file-content.ts";
 import { listDir, PathEscapeError, searchFiles } from "./files.ts";
+import {
+  handlePreviewContentRequest,
+  handlePreviewContextRequest,
+  PreviewContextStore,
+} from "./preview-context.ts";
 import { readCustomModels, resolveIncomingApiKey, validateProviders, writeCustomModels } from "./models-config.ts";
 import { getActiveTodo, serializeMessages } from "./serialize.ts";
 
@@ -49,6 +54,11 @@ mkdirSync(AGENT_CWD, { recursive: true });
 
 /** Daemon state file dir (same STATE_DIR as extensions/pi-web-chat.ts) */
 const DAEMON_STATE_DIR = join(HOME, ".pi", "web-chat");
+
+/** Short-lived mobile preview capability store. Cleanup timer lives here so the
+ * store itself stays testable without a background interval. */
+const previewContextStore = new PreviewContextStore();
+setInterval(() => previewContextStore.cleanup(), 60_000).unref();
 
 // Resolve static assets for both layouts:
 //   production package: <pkg>/dist/index.js  + <pkg>/dist/public/
@@ -1095,7 +1105,12 @@ function sessionTokenFromRequest(req: IncomingMessage): string {
   }
 }
 
-async function handleAuthRequest(req: IncomingMessage, res: import("node:http").ServerResponse, url: URL) {
+async function handleAuthRequest(
+  req: IncomingMessage,
+  res: import("node:http").ServerResponse,
+  url: URL,
+  previewStore: PreviewContextStore,
+) {
   const sendJson = (status: number, body: unknown) => {
     res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
     res.end(JSON.stringify(body));
@@ -1135,7 +1150,9 @@ async function handleAuthRequest(req: IncomingMessage, res: import("node:http").
 
   // Logout
   if (url.pathname === "/api/auth/logout" && req.method === "POST") {
-    auth.logout(sessionTokenFromRequest(req));
+    const sessionToken = sessionTokenFromRequest(req);
+    previewStore.deleteBySessionToken(sessionToken);
+    auth.logout(sessionToken);
     sendJson(200, { ok: true });
     return;
   }
@@ -1187,7 +1204,17 @@ const httpServer = createServer(async (req, res) => {
 
     // Auth API (reachable without a session)
     if (url.pathname.startsWith("/api/auth/")) {
-      await handleAuthRequest(req, res, url);
+      await handleAuthRequest(req, res, url, previewContextStore);
+      return;
+    }
+
+    // Mobile preview content is reachable with a short-lived Preview capability id,
+    // before the global Bearer gate, and must reject Bearer/query auth.
+    if (await handlePreviewContentRequest(req, res, url, {
+      knownProjectRoots,
+      expandHome,
+      previewContextStore,
+    })) {
       return;
     }
 
@@ -1198,6 +1225,15 @@ const httpServer = createServer(async (req, res) => {
         "cache-control": "no-store",
       });
       res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+
+    // Mobile preview capability creation (requires a valid session).
+    if (await handlePreviewContextRequest(req, res, url, {
+      knownProjectRoots,
+      expandHome,
+      previewContextStore,
+    })) {
       return;
     }
 

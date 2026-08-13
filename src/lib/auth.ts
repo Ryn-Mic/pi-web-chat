@@ -96,16 +96,16 @@ export async function login(token: string, totp?: string): Promise<{ ok: boolean
 
 export async function logout() {
   const token = cachedToken;
-  setSessionToken(null);
-  setAuthStatus("unauthenticated");
   if (token) {
     try {
       await fetch("/api/auth/logout", {
         method: "POST",
-        headers: authHeaders(),
+        headers: { authorization: `Bearer ${token}` },
       });
     } catch {
       /* ignore */
     }
   }
+  setSessionToken(null);
+  setAuthStatus("unauthenticated");
 }
