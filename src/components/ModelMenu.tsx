@@ -4,6 +4,7 @@ import type { UIModel } from "../../shared/protocol";
 import { useModels } from "../lib/api";
 import { chatClient } from "../lib/chat";
 import { useT } from "../lib/i18n";
+import { LoadingIndicator } from "./LoadingIndicator";
 
 function modelLabel(model: UIModel) {
   return model.name?.trim() || model.id;
@@ -17,7 +18,7 @@ function matchesQuery(model: UIModel, q: string) {
 
 export function ModelMenu({ current, openToken = 0 }: { current: UIModel | null; openToken?: number }) {
   const t = useT();
-  const { data: models } = useModels();
+  const { data: models, isPending, isFetching } = useModels();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -109,8 +110,13 @@ export function ModelMenu({ current, openToken = 0 }: { current: UIModel | null;
               </div>
             </div>
 
-            <div className="max-h-[min(50vh,22rem)] overflow-y-auto py-1">
-              {filtered.map((m) => {
+            <div className="relative max-h-[min(50vh,22rem)] overflow-y-auto py-1">
+              {isPending ? (
+                <div className="flex justify-center px-3 py-6">
+                  <LoadingIndicator label={t("loading")} showLabel />
+                </div>
+              ) : (
+                filtered.map((m) => {
                 const active = current && m.provider === current.provider && m.id === current.id;
                 return (
                   <Menu.Item
@@ -126,8 +132,10 @@ export function ModelMenu({ current, openToken = 0 }: { current: UIModel | null;
                     <span className="max-w-[42%] shrink-0 truncate text-right text-xs text-faint">{m.provider}</span>
                   </Menu.Item>
                 );
-              })}
-              {filtered.length === 0 && (
+                })
+              )}
+              {isFetching && !isPending && <LoadingIndicator label={t("loading")} size="sm" className="absolute top-3 right-3" />}
+              {!isPending && filtered.length === 0 && (
                 <div className="px-3 py-6 text-center text-sm text-faint">
                   {models && models.length === 0 ? t("noModelsAvailable") : t("noSearchResults")}
                 </div>

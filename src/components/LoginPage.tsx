@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { login } from "../lib/auth";
 import { useT } from "../lib/i18n";
+import { LoadingIndicator } from "./LoadingIndicator";
 
 export function LoginPage() {
   const t = useT();
@@ -79,7 +80,7 @@ export function LoginPage() {
             disabled={busy || !token.trim() || (twoFactor && totp.trim().length !== 6)}
             className="mt-5 w-full rounded-lg bg-accent py-2 text-sm font-medium text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-40"
           >
-            {busy ? t("loggingIn") : t("login")}
+            {busy ? <LoadingIndicator label={t("loggingIn")} size="sm" showLabel className="justify-center text-accent-ink" /> : t("login")}
           </button>
         </form>
       </div>

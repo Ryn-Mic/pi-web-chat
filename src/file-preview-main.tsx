@@ -2,6 +2,8 @@ import { precheckFileViewerSource } from "@file-viewer/core/headless";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { FileViewerSurface } from "./components/FileViewerSurface";
+import { LoadingIndicator } from "./components/LoadingIndicator";
+import { t } from "./lib/i18n";
 import {
   consumePreviewContextFromHash,
   loadFramePreviewFile,
@@ -50,7 +52,11 @@ function PreviewFrameApp() {
     return <div className="flex h-[100dvh] items-center justify-center bg-canvas text-sm text-muted">Preview unavailable</div>;
   }
   if (!preview) {
-    return <div className="h-[100dvh] animate-pulse bg-canvas" aria-busy="true" />;
+    return (
+      <div className="flex h-[100dvh] items-center justify-center bg-canvas">
+        <LoadingIndicator label={t("loading")} showLabel />
+      </div>
+    );
   }
   return (
     <div className="h-[100dvh] min-h-0 bg-canvas">

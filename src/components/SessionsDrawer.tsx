@@ -13,6 +13,7 @@ import {
   useProjectCollapsed,
   useSidebarPinned,
 } from "../lib/sidebar";
+import { LoadingIndicator } from "./LoadingIndicator";
 import { SettingsMenu } from "./SettingsMenu";
 
 function formatDate(iso: string, locale: string) {
@@ -120,14 +121,15 @@ function SessionRow({
   session: UISessionInfo;
   active: boolean;
   onSelect: () => void;
-  onRename: (name: string) => void;
-  onDelete: () => void;
+  onRename: (name: string) => Promise<void>;
+  onDelete: () => Promise<void>;
 }) {
   const t = useT();
   const locale = useLocale();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [saving, setSaving] = useState(false);
   const renameSubmitted = useRef(false);
   const title = session.name ?? session.firstMessage ?? t("emptySession");
   const meta = `${formatDate(session.modified, localeTag(locale))} · ${t("messageCount", {
@@ -144,7 +146,8 @@ function SessionRow({
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               renameSubmitted.current = true;
-              onRename(draft.trim());
+              setSaving(true);
+              void onRename(draft.trim()).finally(() => setSaving(false));
               setEditing(false);
             } else if (e.key === "Escape") {
               setEditing(false);
@@ -155,7 +158,8 @@ function SessionRow({
               renameSubmitted.current = false;
               return;
             }
-            onRename(draft.trim());
+            setSaving(true);
+            void onRename(draft.trim()).finally(() => setSaving(false));
             setEditing(false);
           }}
           placeholder={t("sessionNamePlaceholder")}
@@ -198,14 +202,20 @@ function SessionRow({
         <span className="flex shrink-0 items-center gap-0.5 pr-1">
           <button
             type="button"
-            onClick={onDelete}
+            onClick={() => {
+              setSaving(true);
+              void onDelete().finally(() => setSaving(false));
+            }}
+            disabled={saving}
             title={t("confirmDelete")}
             aria-label={t("confirmDelete")}
-            className="flex size-6 items-center justify-center rounded-md text-red-500 transition-colors hover:bg-red-500/10"
+            className="flex size-6 items-center justify-center rounded-md text-red-500 transition-colors hover:bg-red-500/10 disabled:cursor-wait disabled:opacity-60"
           >
-            <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2">
-              <path d="m5 12 4 4L19 6" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
+            {saving ? <LoadingIndicator label={t("loading")} size="sm" /> : (
+              <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2">
+                <path d="m5 12 4 4L19 6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            )}
           </button>
           <button
             type="button"
@@ -303,8 +313,8 @@ function ProjectGroup({
   list: UISessionInfo[];
   currentSessionFile?: string;
   onSelect: (s: UISessionInfo) => void;
-  onRename: (s: UISessionInfo, name: string) => void;
-  onDelete: (s: UISessionInfo) => void;
+  onRename: (s: UISessionInfo, name: string) => Promise<void>;
+  onDelete: (s: UISessionInfo) => Promise<void>;
   onNewSession: () => void;
 }) {
   const collapsed = useProjectCollapsed(project);
@@ -348,7 +358,7 @@ function SessionsPanel({
   const t = useT();
   const navigate = useNavigate();
   const sidebarPinned = useSidebarPinned();
-  const { data: sessions, refetch } = useSessions(active);
+  const { data: sessions, isPending, isFetching, refetch } = useSessions(active);
   useSessionListSync(active);
   const activeSessionId = chatClient.state.sessionId;
 
@@ -384,7 +394,7 @@ function SessionsPanel({
     } catch {
       return;
     }
-    void refetch();
+    await refetch();
     const deletingActiveSession =
       session.id === activeSessionId || session.path === currentSessionFile;
     const nextTab = chatClient.closeTab(session.id);
@@ -416,7 +426,7 @@ function SessionsPanel({
     } catch {
       /* ignore */
     }
-    void refetch();
+    await refetch();
   };
 
   // Group sessions by project (server sorts newest-first; group order follows
@@ -447,6 +457,7 @@ function SessionsPanel({
           </Dialog.Title>
         )}
         <div className="flex items-center gap-0.5">
+          {isFetching && <LoadingIndicator label={t("loading")} size="sm" />}
           <SettingsMenu openToken={settingsOpenToken} />
           {/* Desktop-only sidebar dock toggle */}
           <button
@@ -463,22 +474,28 @@ function SessionsPanel({
       </div>
 
       <div className="thin-scroll flex-1 overflow-y-auto px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
-        {groups.map(([project, list]) => (
-          <ProjectGroup
-            key={project}
-            project={project}
-            list={list}
-            currentSessionFile={currentSessionFile}
-            onNewSession={() => startNewSessionInProject(project)}
-            onSelect={(s) => {
-              void navigate({ to: "/s/$sessionId", params: { sessionId: s.id } });
-              onSelectSession?.();
-            }}
-            onRename={handleRename}
-            onDelete={(s) => void handleDelete(s)}
-          />
-        ))}
-        {sessions && sessions.length === 0 && (
+        {isPending ? (
+          <div className="flex justify-center px-4 py-8">
+            <LoadingIndicator label={t("loading")} showLabel />
+          </div>
+        ) : (
+          groups.map(([project, list]) => (
+            <ProjectGroup
+              key={project}
+              project={project}
+              list={list}
+              currentSessionFile={currentSessionFile}
+              onNewSession={() => startNewSessionInProject(project)}
+              onSelect={(s) => {
+                void navigate({ to: "/s/$sessionId", params: { sessionId: s.id } });
+                onSelectSession?.();
+              }}
+              onRename={handleRename}
+              onDelete={handleDelete}
+            />
+          ))
+        )}
+        {!isPending && sessions && sessions.length === 0 && (
           <div className="px-4 py-8 text-center text-sm text-faint">{t("noSavedSessions")}</div>
         )}
       </div>

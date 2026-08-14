@@ -8,6 +8,7 @@ import {
   useInvalidateModels,
 } from "../lib/api";
 import { useT } from "../lib/i18n";
+import { LoadingIndicator } from "./LoadingIndicator";
 
 const APIS: UICustomApi[] = [
   "openai-completions",
@@ -573,7 +574,7 @@ export function ModelsDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const t = useT();
-  const { data, refetch } = useCustomModels(open);
+  const { data, isPending, refetch } = useCustomModels(open);
   const invalidateModels = useInvalidateModels();
   const [draft, setDraft] = useState<UICustomProvider[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -645,6 +646,12 @@ export function ModelsDialog({
           </div>
 
           <div className="thin-scroll flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2 sm:p-3">
+            {isPending ? (
+              <div className="flex flex-1 items-center justify-center px-4 py-8">
+                <LoadingIndicator label={t("loading")} showLabel />
+              </div>
+            ) : (
+              <>
             {data?.parseError && (
               <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-600 dark:border-red-900 dark:bg-red-950/40 dark:text-red-400">
                 models.json parse error: {data.parseError}
@@ -669,7 +676,7 @@ export function ModelsDialog({
                 <p className="mt-1 max-w-xs text-xs leading-relaxed text-faint">{t("customModelsDescription", { path: data?.path ?? "models.json" })}</p>
               </div>
             )}
-            <button
+            {draft && <button
               type="button"
               onClick={() =>
                 setDraft((prev) => [
@@ -687,7 +694,9 @@ export function ModelsDialog({
             >
               <PlusIcon />
               {t("addProvider")}
-            </button>
+            </button>}
+              </>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2 border-t border-line bg-card px-3 py-2.5 sm:px-4">
@@ -714,7 +723,7 @@ export function ModelsDialog({
               disabled={status === "saving" || draft === null}
               className="min-w-20 rounded-lg bg-accent px-3.5 py-2 text-[13px] font-medium text-accent-ink transition-[opacity,transform] hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {status === "saving" ? t("saving") : t("save")}
+              {status === "saving" ? <LoadingIndicator label={t("saving")} size="sm" showLabel /> : t("save")}
             </button>
           </div>
         </Dialog.Popup>

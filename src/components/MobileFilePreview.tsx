@@ -9,6 +9,7 @@ import { useT, type Locale } from "../lib/i18n";
 import { requestOpenFilesDrawer } from "../lib/drawer";
 import type { Theme } from "../lib/theme";
 import type { PreviewFileSelection } from "./FileTreePanel";
+import { LoadingIndicator } from "./LoadingIndicator";
 
 export interface MobilePreviewSelection extends PreviewFileSelection {
   trigger?: HTMLElement | null;
@@ -127,7 +128,9 @@ export function MobileFilePreview({
             className="h-full w-full border-0 bg-canvas"
           />
         ) : (
-          <div className="h-full animate-pulse bg-hover" aria-busy="true" />
+          <div className="flex h-full items-center justify-center bg-hover/40">
+            <LoadingIndicator label={t("filePreviewLoading", { name: selection.name })} showLabel />
+          </div>
         )}
       </div>
     </div>

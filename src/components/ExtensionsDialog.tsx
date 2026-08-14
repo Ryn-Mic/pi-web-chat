@@ -2,6 +2,7 @@ import { Dialog } from "@base-ui-components/react/dialog";
 import type { UIExtensionInfo } from "../../shared/protocol";
 import { useExtensions } from "../lib/api";
 import { useT } from "../lib/i18n";
+import { LoadingIndicator } from "./LoadingIndicator";
 
 function DetailRow({ label, items }: { label: string; items: string[] }) {
   if (items.length === 0) return null;
@@ -24,7 +25,7 @@ export function ExtensionsDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const t = useT();
-  const { data, refetch } = useExtensions(open);
+  const { data, isPending, isFetching, refetch } = useExtensions(open);
   const extensions = data?.extensions ?? [];
   const errors = data?.errors ?? [];
 
@@ -54,7 +55,13 @@ export function ExtensionsDialog({
             </Dialog.Description>
           </div>
 
-          <div className="flex-1 overflow-y-auto">
+          <div className="relative flex-1 overflow-y-auto">
+            {isPending ? (
+              <div className="flex justify-center px-4 py-8">
+                <LoadingIndicator label={t("extensionsLoading")} showLabel />
+              </div>
+            ) : (
+              <>
             {errors.length > 0 && (
               <div className="border-b border-red-200 bg-red-50 px-4 py-3 dark:border-red-900/50 dark:bg-red-950/40">
                 <div className="text-xs font-semibold text-red-600 dark:text-red-400">
@@ -112,6 +119,9 @@ export function ExtensionsDialog({
                 {t("noExtensionsLoaded")}
               </div>
             )}
+              </>
+            )}
+            {isFetching && !isPending && <LoadingIndicator label={t("loading")} size="sm" className="absolute top-3 right-4" />}
           </div>
         </Dialog.Popup>
       </Dialog.Portal>

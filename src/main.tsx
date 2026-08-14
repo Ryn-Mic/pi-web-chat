@@ -10,8 +10,9 @@ import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { ChatPage } from "./components/ChatPage";
 import { LoginPage } from "./components/LoginPage";
+import { LoadingIndicator } from "./components/LoadingIndicator";
 import { checkAuth, useAuthStatus } from "./lib/auth";
-import { initLocale } from "./lib/i18n";
+import { initLocale, t } from "./lib/i18n";
 import { initTheme } from "./lib/theme";
 import { initViewportLock } from "./lib/viewport";
 import "streamdown/styles.css";
@@ -63,7 +64,7 @@ function AuthGate() {
   if (status === "checking") {
     return (
       <div className="flex h-full items-center justify-center bg-canvas">
-        <span className="size-2.5 animate-pulse rounded-full bg-amber-400" />
+        <LoadingIndicator label={t("loading")} size="lg" />
       </div>
     );
   }

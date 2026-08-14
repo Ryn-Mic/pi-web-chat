@@ -4,6 +4,7 @@ export const ja: Messages = {
   connected: "接続済み",
   connecting: "接続中…",
   connectingHint: "pi に接続しています…",
+  loading: "読み込み中…",
   connectionLost: "サーバーに接続できません。再試行中…",
   disconnected: "未接続",
   settings: "設定",

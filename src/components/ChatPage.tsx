@@ -18,6 +18,7 @@ import { ExtensionUIHost } from "./ExtensionUIHost";
 import { FilesDrawer } from "./FileTreePanel";
 import { MobileGitCommitDetail, type MobileGitCommitSelection } from "./MobileGitCommitDetail";
 import { FileWorkspaceSidebar } from "./FileWorkspaceSidebar";
+import { LoadingIndicator } from "./LoadingIndicator";
 import { ProjectBadge } from "./ProjectBadge";
 import { MessageList } from "./MessageList";
 import {
@@ -235,10 +236,7 @@ export function ChatPage() {
 
         {showConnectingOverlay ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-            <span
-              className={`size-2.5 rounded-full ${connectionDotClass(connection)}`}
-              aria-hidden
-            />
+            <LoadingIndicator label={t("connecting")} size="lg" />
             <p className="text-sm text-muted">
               {connection === "disconnected" ? t("connectionLost") : t("connectingHint")}
             </p>

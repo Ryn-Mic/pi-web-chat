@@ -3,6 +3,7 @@ import { useGitCommit } from "../lib/api";
 import { requestOpenFilesDrawer } from "../lib/drawer";
 import { useT } from "../lib/i18n";
 import { GitCommitContent } from "./GitWorkspacePanel";
+import { LoadingIndicator } from "./LoadingIndicator";
 
 export interface MobileGitCommitSelection {
   cwd: string;
@@ -70,7 +71,7 @@ export function MobileGitCommitDetail({
         </button>
       </header>
       <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-3 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-        {isPending && <div className="text-sm text-faint" aria-busy>...</div>}
+        {isPending && <div className="flex justify-center"><LoadingIndicator label={t("loading")} showLabel /></div>}
         {isError && <div className="text-sm text-red-500">{t("gitOperationFailed")}</div>}
         {data && <GitCommitContent data={data} />}
       </div>

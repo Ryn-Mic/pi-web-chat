@@ -10,6 +10,7 @@ import { CommandPalette, commandMatches } from "./CommandPalette";
 import { FileMentionPalette } from "./FileMentionPalette";
 import { ForkDialog } from "./ForkDialog";
 import { MessageAnchors } from "./MessageAnchors";
+import { LoadingIndicator } from "./LoadingIndicator";
 import { ModelMenu } from "./ModelMenu";
 import { ActiveTodoBadge, BranchBadge, TodoProgress } from "./ProjectBadge";
 import { ThinkingMenu } from "./ThinkingMenu";
@@ -74,6 +75,7 @@ export function Composer({
   const initialDraft = useState(() => getComposerDraft(tabKey))[0];
   const [text, setText] = useState(initialDraft.text);
   const [images, setImages] = useState<PendingImage[]>(initialDraft.images);
+  const [processingImages, setProcessingImages] = useState(false);
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
   const [commandPaletteDismissed, setCommandPaletteDismissed] = useState(false);
   const [caret, setCaret] = useState(0);
@@ -209,7 +211,11 @@ export function Composer({
     return () => window.clearTimeout(id);
   }, [mention?.query]);
 
-  const { data: mentionData } = useFileSearch(snapshot?.cwd, debouncedMentionQuery, mentionMode);
+  const { data: mentionData, isPending: mentionPending, isFetching: mentionFetching } = useFileSearch(
+    snapshot?.cwd,
+    debouncedMentionQuery,
+    mentionMode,
+  );
   // placeholderData keeps the previous query's results in flight. Only use
   // them when they resolve the query currently being edited, otherwise a fast
   // Enter/Tab could commit a path from a stale query.
@@ -248,13 +254,18 @@ export function Composer({
   };
 
   const addFiles = async (files: Iterable<File>) => {
-    const loaded = await Promise.all([...files].map(fileToImage));
-    setImages((prev) => [...prev, ...loaded.filter((i): i is PendingImage => i !== null)]);
+    setProcessingImages(true);
+    try {
+      const loaded = await Promise.all([...files].map(fileToImage));
+      setImages((prev) => [...prev, ...loaded.filter((i): i is PendingImage => i !== null)]);
+    } finally {
+      setProcessingImages(false);
+    }
   };
 
   const send = () => {
     const trimmed = text.trim();
-    if ((!trimmed && images.length === 0) || promptInFlight) return;
+    if ((!trimmed && images.length === 0) || promptInFlight || processingImages) return;
 
     const submittedImages = [...images];
     const sent = chatClient.send({
@@ -312,6 +323,7 @@ export function Composer({
             matches={mentionMatches}
             activeIndex={safeMentionIndex}
             partial={mentionData?.partial}
+            loading={mentionPending || (mentionFetching && mentionData?.query !== mention?.query)}
             onSelect={completeMention}
           />
         )}
@@ -439,13 +451,14 @@ export function Composer({
           <div className="mt-1 flex items-center gap-1 px-1">
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="flex size-8 shrink-0 items-center justify-center rounded-full border border-line text-muted transition-colors hover:bg-hover hover:text-ink"
+              disabled={processingImages}
+              className="flex size-8 shrink-0 items-center justify-center rounded-full border border-line text-muted transition-colors hover:bg-hover hover:text-ink disabled:cursor-wait disabled:opacity-60"
               aria-label={t("attachImage")}
               title={t("attachImage")}
             >
-              <svg viewBox="0 0 24 24" className="size-[18px] fill-none stroke-current stroke-[1.8]">
+              {processingImages ? <LoadingIndicator label={t("loading")} size="sm" /> : <svg viewBox="0 0 24 24" className="size-[18px] fill-none stroke-current stroke-[1.8]">
                 <path d="M12 5v14M5 12h14" strokeLinecap="round" />
-              </svg>
+              </svg>}
             </button>
             <ModelMenu current={snapshot?.model ?? null} openToken={modelOpenToken} />
             <ThinkingMenu
@@ -490,7 +503,7 @@ export function Composer({
             ) : (
               <button
                 onClick={send}
-                disabled={!text.trim() && images.length === 0}
+                disabled={processingImages || (!text.trim() && images.length === 0)}
                 className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-30"
                 aria-label={t("send")}
               >

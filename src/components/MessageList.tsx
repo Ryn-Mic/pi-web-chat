@@ -4,6 +4,7 @@ import { chatClient, type ActiveTool } from "../lib/chat";
 import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
 import { buildEditDiffFromArgs, isUnifiedDiff } from "../lib/diff";
 import { useT } from "../lib/i18n";
+import { LoadingIndicator } from "./LoadingIndicator";
 import { DiffView } from "./DiffView";
 import { Markdown, streamdownPlugins } from "./Markdown";
 import { Streamdown } from "streamdown";
@@ -521,18 +522,15 @@ export function MessageList({
             </div>
           )}
           {activeTools.map((tool) => (
-            <div key={tool.toolCallId} className="flex items-center gap-2 text-sm text-muted">
-              <span className="size-2 animate-pulse rounded-full bg-amber-400" />
-              {t("toolRunning", { name: tool.toolName })}
-            </div>
+            <LoadingIndicator
+              key={tool.toolCallId}
+              label={t("toolRunning", { name: tool.toolName })}
+              size="sm"
+              showLabel
+              className="text-sm"
+            />
           ))}
-          {showTyping && (
-            <div className="flex items-center gap-1.5 text-faint">
-              <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:0ms]" />
-              <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:150ms]" />
-              <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:300ms]" />
-            </div>
-          )}
+          {showTyping && <LoadingIndicator label={t("loading")} size="sm" />}
         </div>
       </div>
     </div>

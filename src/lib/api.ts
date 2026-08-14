@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   UICustomModelsResponse,
@@ -44,7 +45,10 @@ export function useSessions(enabled = true) {
 /** Refresh the sidebar list after session create/switch/message completion */
 export function useInvalidateSessions() {
   const qc = useQueryClient();
-  return () => qc.invalidateQueries({ queryKey: SESSIONS_QUERY_KEY });
+  return useCallback(
+    () => qc.invalidateQueries({ queryKey: SESSIONS_QUERY_KEY }),
+    [qc],
+  );
 }
 
 export function useTree(cwd: string | undefined, path: string, enabled = true) {

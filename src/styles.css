@@ -167,6 +167,34 @@ html.ua-ios.ua-standalone body {
   display: none;
 }
 
+@keyframes loading-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* A compact, token-aware progress mark for local and full-page waits. */
+.loading-indicator__orbital {
+  position: relative;
+  display: inline-block;
+  border: 1.5px solid color-mix(in srgb, var(--c-faint) 35%, transparent);
+  border-top-color: var(--c-accent);
+  border-radius: 999px;
+  animation: loading-orbit 0.8s linear infinite;
+}
+.loading-indicator__orbital::after {
+  position: absolute;
+  top: -2px;
+  left: 50%;
+  width: 22%;
+  aspect-ratio: 1;
+  content: "";
+  border-radius: 999px;
+  background: var(--c-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-card) 70%, transparent);
+  transform: translateX(-50%);
+}
+
 /* User-message anchor jump highlight (fades out after 1.6s) */
 @keyframes anchor-flash {
   0% {
@@ -207,7 +235,8 @@ html.ua-ios.ua-standalone body {
   animation: badge-marquee 14s ease-in-out 1.2s infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .badge-marquee {
+  .badge-marquee,
+  .loading-indicator__orbital {
     animation: none;
   }
 }

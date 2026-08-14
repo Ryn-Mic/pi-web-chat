@@ -11,6 +11,7 @@ import { chatClient } from "../lib/chat";
 import { formatGitTimestamp, splitCommitDiffByFile } from "../lib/git";
 import { useT } from "../lib/i18n";
 import { DiffView } from "./DiffView";
+import { LoadingIndicator } from "./LoadingIndicator";
 import type { PreviewFileSelection } from "./FileTreePanel";
 
 function statusLetter(file: UIGitFile): string {
@@ -31,15 +32,22 @@ function statusClass(file: UIGitFile): string {
 }
 
 function GitFileRow({
+  cwd,
   file,
   onPreviewFile,
 }: {
+  cwd: string;
   file: UIGitFile;
   onPreviewFile?: (file: PreviewFileSelection) => void;
 }) {
   const t = useT();
   const open = (event: MouseEvent<HTMLButtonElement>) => {
-    const selected = { cwd: "", path: file.path, name: file.path.split("/").pop() ?? file.path, trigger: event.currentTarget };
+    const selected = {
+      cwd,
+      path: file.path,
+      name: file.path.split("/").pop() ?? file.path,
+      trigger: event.currentTarget,
+    };
     if (onPreviewFile) onPreviewFile(selected);
     else chatClient.insertComposerText(`@${file.path} `);
   };
@@ -63,10 +71,12 @@ function GitFileRow({
 }
 
 function FileGroup({
+  cwd,
   title,
   files,
   onPreviewFile,
 }: {
+  cwd: string;
   title: string;
   files: UIGitFile[];
   onPreviewFile?: (file: PreviewFileSelection) => void;
@@ -75,7 +85,7 @@ function FileGroup({
   return (
     <section className="space-y-1">
       <h3 className="px-2 text-[10px] font-semibold uppercase tracking-wider text-faint">{title} <span className="font-normal">{files.length}</span></h3>
-      <div>{files.map((file, index) => <GitFileRow key={`${file.path}-${file.oldPath ?? ""}-${index}`} file={file} onPreviewFile={onPreviewFile} />)}</div>
+      <div>{files.map((file, index) => <GitFileRow key={`${file.path}-${file.oldPath ?? ""}-${index}`} cwd={cwd} file={file} onPreviewFile={onPreviewFile} />)}</div>
     </section>
   );
 }
@@ -83,22 +93,21 @@ function FileGroup({
 function BranchSection({ cwd, status, branches }: { cwd: string; status: UIGitStatus; branches: UIGitBranch[] }) {
   const t = useT();
   const [error, setError] = useState<string | null>(null);
-  const [switching, setSwitching] = useState(false);
+  const [switchingBranch, setSwitchingBranch] = useState<string | null>(null);
   const switchBranch = async (branch: string) => {
-    if (branch === status.branch || switching) return;
+    if (branch === status.branch || switchingBranch) return;
     if (status.isDirty) {
       setError(t("gitConfirmDiscard"));
       return;
     }
     setError(null);
-    setSwitching(true);
+    setSwitchingBranch(branch);
     try {
       await checkoutGitBranch(cwd, branch);
       window.location.reload();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : t("gitOperationFailed"));
-    } finally {
-      setSwitching(false);
+      setSwitchingBranch(null);
     }
   };
   return (
@@ -109,12 +118,16 @@ function BranchSection({ cwd, status, branches }: { cwd: string; status: UIGitSt
           <button
             key={branch.name}
             type="button"
-            disabled={switching}
+            disabled={switchingBranch !== null}
             onClick={() => void switchBranch(branch.name)}
             className={`flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] transition-colors hover:bg-hover disabled:opacity-50 ${branch.current ? "text-ink" : "text-muted"}`}
             title={branch.upstream ? `${branch.name} -> ${branch.upstream}` : branch.name}
           >
-            <span className={`size-1.5 shrink-0 rounded-full ${branch.current ? "bg-emerald-500" : "bg-transparent"}`} aria-hidden />
+            {switchingBranch === branch.name ? (
+              <LoadingIndicator label={t("loading")} size="sm" />
+            ) : (
+              <span className={`size-1.5 shrink-0 rounded-full ${branch.current ? "bg-emerald-500" : "bg-transparent"}`} aria-hidden />
+            )}
             <span className="truncate">{branch.name}</span>
             <span className="ml-auto shrink-0 font-mono text-[10px] text-faint">{branch.commit}</span>
           </button>
@@ -198,7 +211,7 @@ export function GitCommitContent({ data }: { data: UIGitCommitDetail }) {
 function CommitDetail({ cwd, hash, onClose }: { cwd: string; hash: string; onClose: () => void }) {
   const t = useT();
   const { data, isPending, isError } = useGitCommit(cwd, hash);
-  if (isPending) return <div className="p-4 text-sm text-faint">...</div>;
+  if (isPending) return <div className="flex justify-center p-4"><LoadingIndicator label={t("loading")} showLabel /></div>;
   if (isError || !data) return <div className="p-4 text-sm text-red-500">{t("gitOperationFailed")}</div>;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -220,8 +233,8 @@ export function GitWorkspacePanel({ cwd, onPreviewFile, docked = true, onClose, 
   const t = useT();
   const [selectedCommit, setSelectedCommit] = useState<string | null>(null);
   const { data: status, isPending: statusPending, isError: statusError } = useGitStatus(cwd);
-  const { data: branches = [] } = useGitBranches(cwd, !!status);
-  const { data: commits = [] } = useGitLog(cwd, !!status);
+  const { data: branches = [], isFetching: branchesFetching } = useGitBranches(cwd, !!status);
+  const { data: commits = [], isFetching: commitsFetching } = useGitLog(cwd, !!status);
   const files = useMemo(() => {
     if (!status) return [];
     return [...status.staged, ...status.unstaged, ...status.untracked.filter((file) => !status.staged.some((item) => item.path === file.path))];
@@ -234,7 +247,7 @@ export function GitWorkspacePanel({ cwd, onPreviewFile, docked = true, onClose, 
         <h2 className="min-w-0 flex-1 truncate px-1 text-[15px] font-semibold text-ink" title={cwd}>{status?.branch ? <span className="font-mono text-sm">{status.branch}</span> : t("git")}</h2>
         {onClose && <button type="button" onClick={onClose} aria-label={t("closeFiles")} title={t("closeFiles")} className="flex size-8 items-center justify-center rounded-lg text-faint hover:bg-hover hover:text-ink">×</button>}
       </div>
-      {statusPending && <div className="p-4 text-sm text-faint">...</div>}
+      {statusPending && <div className="flex justify-center p-4"><LoadingIndicator label={t("loading")} showLabel /></div>}
       {statusError && <div className="p-4 text-sm text-muted">{t("gitNotRepository")}</div>}
       {status && !statusError && (
         <>
@@ -246,12 +259,14 @@ export function GitWorkspacePanel({ cwd, onPreviewFile, docked = true, onClose, 
             {(status.ahead > 0 || status.behind > 0) && <span>↑{status.ahead} ↓{status.behind}</span>}
           </div>
           <div className="thin-scroll flex-1 space-y-5 overflow-y-auto p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
-            {status.conflicted.length > 0 && <FileGroup title={t("gitConflicted")} files={status.conflicted} onPreviewFile={onPreviewFile} />}
-            <FileGroup title={t("gitStagedFiles")} files={status.staged} onPreviewFile={onPreviewFile} />
-            <FileGroup title={t("gitChangedFiles")} files={status.unstaged} onPreviewFile={onPreviewFile} />
-            <FileGroup title={t("gitUntrackedFiles")} files={status.untracked} onPreviewFile={onPreviewFile} />
+            {status.conflicted.length > 0 && <FileGroup cwd={cwd!} title={t("gitConflicted")} files={status.conflicted} onPreviewFile={onPreviewFile} />}
+            <FileGroup cwd={cwd!} title={t("gitStagedFiles")} files={status.staged} onPreviewFile={onPreviewFile} />
+            <FileGroup cwd={cwd!} title={t("gitChangedFiles")} files={status.unstaged} onPreviewFile={onPreviewFile} />
+            <FileGroup cwd={cwd!} title={t("gitUntrackedFiles")} files={status.untracked} onPreviewFile={onPreviewFile} />
             <BranchSection cwd={cwd!} status={status} branches={branches} />
+            {branchesFetching && <LoadingIndicator label={t("loading")} size="sm" className="px-2" />}
             <CommitSection commits={commits} onSelect={(commit, trigger) => onSelectCommit ? onSelectCommit(commit, trigger) : setSelectedCommit(commit.hash)} />
+            {commitsFetching && <LoadingIndicator label={t("loading")} size="sm" className="px-2" />}
             {files.length === 0 && <p className="px-2 text-sm text-faint">{t("gitNoChanges")}</p>}
           </div>
         </>

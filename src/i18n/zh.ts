@@ -5,6 +5,7 @@ export const zh: Messages = {
   connected: "已连接",
   connecting: "连接中…",
   connectingHint: "正在连接 pi…",
+  loading: "正在加载…",
   connectionLost: "无法连接服务器，正在重试…",
   disconnected: "已断开",
   settings: "设置",

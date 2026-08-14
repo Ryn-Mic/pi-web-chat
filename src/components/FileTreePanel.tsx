@@ -8,6 +8,7 @@ import { previewIdentity } from "../lib/file-preview";
 import { toggleTreeDirExpanded, useTreeDirExpanded } from "../lib/filetree";
 import { useT } from "../lib/i18n";
 import { GitWorkspacePanel } from "./GitWorkspacePanel";
+import { LoadingIndicator } from "./LoadingIndicator";
 
 export interface PreviewFileSelection {
   cwd: string;
@@ -186,8 +187,8 @@ function TreeDir({
 
   if (isPending) {
     return (
-      <div style={indent} className="py-1.5 text-[12px] text-faint" aria-busy>
-        ...
+      <div style={indent} className="py-1.5">
+        <LoadingIndicator label={t("loading")} size="sm" showLabel />
       </div>
     );
   }
@@ -273,11 +274,12 @@ export function FileTreePanel({
             onClick={() => cwd && invalidateTree(cwd)}
             title={t("refreshTree")}
             aria-label={t("refreshTree")}
-            className="flex size-8 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink"
+            disabled={!cwd || rootQuery.isFetching}
+            className="flex size-8 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink disabled:cursor-wait disabled:opacity-60"
           >
-            <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-[1.8]" aria-hidden>
+            {rootQuery.isFetching ? <LoadingIndicator label={t("loading")} size="sm" /> : <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-[1.8]" aria-hidden>
               <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
+            </svg>}
           </button>
           {onClose && (
             <button

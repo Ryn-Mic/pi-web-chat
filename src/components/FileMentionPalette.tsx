@@ -1,5 +1,6 @@
 import type { UIFileMatch } from "../../shared/protocol";
 import { useT } from "../lib/i18n";
+import { LoadingIndicator } from "./LoadingIndicator";
 
 const POPUP_CLASS =
   "absolute right-0 bottom-[calc(100%+0.5rem)] left-0 z-20 rounded-lg border border-line bg-card shadow-lg";
@@ -8,14 +9,23 @@ export function FileMentionPalette({
   matches,
   activeIndex,
   partial,
+  loading = false,
   onSelect,
 }: {
   matches: UIFileMatch[];
   activeIndex: number;
   partial?: boolean;
+  loading?: boolean;
   onSelect: (match: UIFileMatch) => void;
 }) {
   const t = useT();
+  if (loading) {
+    return (
+      <div className={`${POPUP_CLASS} px-3 py-3`}>
+        <LoadingIndicator label={t("loading")} size="sm" showLabel />
+      </div>
+    );
+  }
   if (matches.length === 0) {
     return <div className={`${POPUP_CLASS} px-3 py-3 text-sm text-faint`}>{t("mentionNoFiles")}</div>;
   }

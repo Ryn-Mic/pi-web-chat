@@ -4,6 +4,7 @@ export const ko: Messages = {
   connected: "연결됨",
   connecting: "연결 중…",
   connectingHint: "pi에 연결하는 중…",
+  loading: "불러오는 중…",
   connectionLost: "서버에 연결할 수 없습니다. 재시도 중…",
   disconnected: "연결 끊김",
   settings: "설정",

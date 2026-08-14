@@ -10,6 +10,7 @@ import type { Messages } from "../i18n/en";
 import { useLocale, useT } from "../lib/i18n";
 import { useTheme } from "../lib/theme";
 import { FileViewerSurface } from "./FileViewerSurface";
+import { LoadingIndicator } from "./LoadingIndicator";
 
 interface FilePreviewPaneProps {
   cwd: string;
@@ -108,9 +109,7 @@ export function FilePreviewPane({
           <div className="h-5 w-2/5 animate-pulse rounded bg-black/10 dark:bg-white/10" />
         </div>
         <div className="flex-1 animate-pulse rounded bg-black/5 dark:bg-white/5" />
-        <div className="text-sm text-neutral-500">
-          {t("filePreviewLoading", { name })}
-        </div>
+        <LoadingIndicator label={t("filePreviewLoading", { name })} showLabel className="text-sm" />
       </div>
     );
   }

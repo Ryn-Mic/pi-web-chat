@@ -3,6 +3,7 @@ export type Messages = {
   connected: string;
   connecting: string;
   connectingHint: string;
+  loading: string;
   connectionLost: string;
   disconnected: string;
   settings: string;
@@ -198,6 +199,7 @@ export const en: Messages = {
   connected: "Connected",
   connecting: "Connecting…",
   connectingHint: "Connecting to pi…",
+  loading: "Loading…",
   connectionLost: "Can't reach the server. Retrying…",
   disconnected: "Disconnected",
   settings: "Settings",
