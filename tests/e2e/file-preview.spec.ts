@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+const PROJECT_ROOT = "/tmp/pi-web-chat-file-preview-e2e/project";
+
 async function login(page: Page) {
   await page.goto("/");
   await page.getByLabel("Access token").fill("e2e-token");
@@ -11,6 +13,7 @@ test("desktop file preview and @ reference are independent", async ({ page }) =>
   await page.setViewportSize({ width: 1440, height: 900 });
   await login(page);
   await page.getByRole("button", { name: "Open files" }).click();
+  await expect(page.locator(`h2[title="${PROJECT_ROOT}"]`)).toHaveCount(0);
 
   const composer = page.locator("textarea");
   await expect(composer).toHaveValue("");
@@ -29,6 +32,7 @@ test("Git workspace shows changes and opens changed files in preview", async ({ 
   await login(page);
   await page.getByRole("button", { name: "Open files" }).click();
   await page.getByRole("tab", { name: "Git" }).click();
+  await expect(page.locator(`h2[title="${PROJECT_ROOT}"]`)).toHaveCount(0);
 
   await expect(page.getByText("seed preview files")).toBeVisible();
   await expect(page.getByTitle("README.md", { exact: true }).first()).toBeVisible();
@@ -42,6 +46,7 @@ test("mobile commit detail is full-screen and expands one file diff at a time", 
   await login(page);
   await page.getByRole("button", { name: "Open files" }).click();
   await page.getByRole("tab", { name: "Git" }).click();
+  await expect(page.locator(`h2[title="${PROJECT_ROOT}"]`)).toHaveCount(0);
   await page.getByText("update preview files").click();
 
   await expect(page.getByRole("heading", { name: "update preview files" })).toBeVisible();

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { sameToolCallBlock, sameToolResult, type ToolCallBlock } from "../src/lib/toolCall.ts";
+import {
+  sameToolCallBlock,
+  sameToolResult,
+  todoCallSummary,
+  type ToolCallBlock,
+} from "../src/lib/toolCall.ts";
 
 function block(overrides: Partial<ToolCallBlock> = {}): ToolCallBlock {
   return {
@@ -73,6 +78,27 @@ test("sameToolResult: todo task lists compare by value, not reference", () => {
 
   const shorter = { ...rebuilt, tasks: [rebuilt.tasks[0]!] };
   assert.equal(sameToolResult(a, shorter), false);
+});
+
+test("todoCallSummary describes the task targeted by each call", () => {
+  const tasks = [
+    { id: 1, subject: "first task", status: "in_progress" as const, activeForm: "doing first" },
+    { id: 2, subject: "second task", status: "pending" as const },
+  ];
+  const result = { text: "", isError: false, tasks };
+
+  assert.equal(
+    todoCallSummary(block({ name: "todo", args: { action: "create", subject: "second task" } })),
+    "create · second task",
+  );
+  assert.equal(
+    todoCallSummary(block({ name: "todo", args: { action: "update", id: 2 }, result })),
+    "update · #2 second task",
+  );
+  assert.equal(
+    todoCallSummary(block({ name: "todo", args: { action: "list" }, result })),
+    "list · 0/2 · doing first",
+  );
 });
 
 test("sameToolCallBlock: rebuilt wrappers sharing the agent's args object are equal", () => {

@@ -229,7 +229,7 @@ function CommitDetail({ cwd, hash, onClose }: { cwd: string; hash: string; onClo
   );
 }
 
-export function GitWorkspacePanel({ cwd, onPreviewFile, docked = true, onClose, onSelectCommit }: { cwd?: string; onPreviewFile?: (file: PreviewFileSelection) => void; docked?: boolean; onClose?: () => void; onSelectCommit?: (commit: UIGitCommit, trigger?: HTMLElement | null) => void }) {
+export function GitWorkspacePanel({ cwd, onPreviewFile, onSelectCommit }: { cwd?: string; onPreviewFile?: (file: PreviewFileSelection) => void; onSelectCommit?: (commit: UIGitCommit, trigger?: HTMLElement | null) => void }) {
   const t = useT();
   const [selectedCommit, setSelectedCommit] = useState<string | null>(null);
   const { data: status, isPending: statusPending, isError: statusError } = useGitStatus(cwd);
@@ -243,10 +243,6 @@ export function GitWorkspacePanel({ cwd, onPreviewFile, docked = true, onClose, 
   if (selectedCommit && cwd && !onSelectCommit) return <CommitDetail cwd={cwd} hash={selectedCommit} onClose={() => setSelectedCommit(null)} />;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className={`flex items-center gap-1 border-b border-line px-3 ${docked ? "py-2.5" : "py-2"}`}>
-        <h2 className="min-w-0 flex-1 truncate px-1 text-[15px] font-semibold text-ink" title={cwd}>{status?.branch ? <span className="font-mono text-sm">{status.branch}</span> : t("git")}</h2>
-        {onClose && <button type="button" onClick={onClose} aria-label={t("closeFiles")} title={t("closeFiles")} className="flex size-8 items-center justify-center rounded-lg text-faint hover:bg-hover hover:text-ink">×</button>}
-      </div>
       {statusPending && <div className="flex justify-center p-4"><LoadingIndicator label={t("loading")} showLabel /></div>}
       {statusError && <div className="p-4 text-sm text-muted">{t("gitNotRepository")}</div>}
       {status && !statusError && (

@@ -4,7 +4,7 @@ import { chatClient, type ActiveTool } from "../lib/chat";
 import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
 import { buildEditDiffFromArgs, isUnifiedDiff } from "../lib/diff";
 import { useT } from "../lib/i18n";
-import { sameToolCallBlock, type ToolCallBlock } from "../lib/toolCall";
+import { sameToolCallBlock, todoCallSummary, type ToolCallBlock } from "../lib/toolCall";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { DiffView } from "./DiffView";
 import { Markdown, streamdownPlugins } from "./Markdown";
@@ -28,9 +28,11 @@ function TodoCard({ block }: { block: Extract<UIContentBlock, { type: "toolCall"
   const done = tasks.filter((x) => x.status === "completed").length;
   const pct = tasks.length > 0 ? Math.round((done / tasks.length) * 100) : 0;
   const current = tasks.find((x) => x.status === "in_progress");
-  const summary = tasks.length > 0
-    ? `${done}/${tasks.length}${current?.activeForm ? ` · ${current.activeForm}` : ""}`
-    : t("toolRunning", { name: "todo" });
+  const summary =
+    todoCallSummary(block) ??
+    (tasks.length > 0
+      ? `${done}/${tasks.length}${current?.activeForm ? ` · ${current.activeForm}` : ""}`
+      : t("toolRunning", { name: "todo" }));
   return (
     <details className="my-2 rounded-xl border border-line bg-card/60 text-sm">
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 select-none">

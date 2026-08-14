@@ -126,7 +126,7 @@ export function FileWorkspaceTabs({
           </div>
         );
       })}
-      {workspace.active !== FILES_TAB_ID && onRefresh && (
+      {onRefresh && (
         <button
           type="button"
           onClick={onRefresh}

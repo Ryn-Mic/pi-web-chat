@@ -1,7 +1,7 @@
 import { Dialog } from "@base-ui-components/react/dialog";
 import { useEffect, useState, type MouseEvent } from "react";
 import type { UITreeNode } from "../../shared/protocol";
-import { useInvalidateTree, useTree } from "../lib/api";
+import { useInvalidateGit, useInvalidateTree, useTree } from "../lib/api";
 import { chatClient, useChat } from "../lib/chat";
 import { onRequestOpenFilesDrawer } from "../lib/drawer";
 import { previewIdentity } from "../lib/file-preview";
@@ -236,15 +236,11 @@ function TreeDir({
 
 /** Shared tree content, rooted at the active chat tab's project directory. */
 export function FileTreePanel({
-  docked,
-  onClose,
   onPickFile,
   onPreviewFile,
   selectedFileIdentity,
   cwd: cwdOverride,
 }: {
-  docked?: boolean;
-  onClose?: () => void;
   onPickFile?: () => void;
   onPreviewFile?: (file: PreviewFileSelection) => void;
   selectedFileIdentity?: string;
@@ -253,64 +249,22 @@ export function FileTreePanel({
   const t = useT();
   const { snapshot } = useChat();
   const cwd = cwdOverride ?? snapshot?.cwd;
-  const invalidateTree = useInvalidateTree();
-  const rootQuery = useTree(cwd, "", !!cwd);
 
   return (
-    <>
-      <div className="flex items-center justify-between gap-1 px-3 py-2.5">
-        {docked ? (
-          <h2 className="min-w-0 flex-1 truncate px-1 text-[15px] font-semibold tracking-tight text-ink" title={cwd}>
-            {rootQuery.data?.root ?? t("files")}
-          </h2>
-        ) : (
-          <Dialog.Title className="min-w-0 flex-1 truncate px-1 text-[15px] font-semibold tracking-tight text-ink" title={cwd}>
-            {rootQuery.data?.root ?? t("files")}
-          </Dialog.Title>
-        )}
-        <div className="flex items-center gap-0.5">
-          <button
-            type="button"
-            onClick={() => cwd && invalidateTree(cwd)}
-            title={t("refreshTree")}
-            aria-label={t("refreshTree")}
-            disabled={!cwd || rootQuery.isFetching}
-            className="flex size-8 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink disabled:cursor-wait disabled:opacity-60"
-          >
-            {rootQuery.isFetching ? <LoadingIndicator label={t("loading")} size="sm" /> : <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-[1.8]" aria-hidden>
-              <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>}
-          </button>
-          {onClose && (
-            <button
-              type="button"
-              onClick={onClose}
-              title={t("closeFiles")}
-              aria-label={t("closeFiles")}
-              className="flex size-8 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink"
-            >
-              <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2" aria-hidden>
-                <path d="M18 6 6 18M6 6l12 12" strokeLinecap="round" />
-              </svg>
-            </button>
-          )}
-        </div>
-      </div>
-      <div className="thin-scroll flex-1 overflow-y-auto px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
-        {cwd ? (
-          <TreeDir
-            cwd={cwd}
-            path=""
-            depth={0}
-            onPreviewFile={onPreviewFile}
-            onPickFile={onPickFile}
-            selectedFileIdentity={selectedFileIdentity}
-          />
-        ) : (
-          <div className="px-4 py-8 text-center text-sm text-faint">{t("emptyDirectory")}</div>
-        )}
-      </div>
-    </>
+    <div className="thin-scroll flex-1 overflow-y-auto px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
+      {cwd ? (
+        <TreeDir
+          cwd={cwd}
+          path=""
+          depth={0}
+          onPreviewFile={onPreviewFile}
+          onPickFile={onPickFile}
+          selectedFileIdentity={selectedFileIdentity}
+        />
+      ) : (
+        <div className="px-4 py-8 text-center text-sm text-faint">{t("emptyDirectory")}</div>
+      )}
+    </div>
   );
 }
 
@@ -324,43 +278,72 @@ export function FilesDrawer({
 }) {
   const t = useT();
   const { snapshot } = useChat();
+  const invalidateGit = useInvalidateGit();
+  const invalidateTree = useInvalidateTree();
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<"files" | "git">("files");
   useEffect(() => onRequestOpenFilesDrawer((nextView) => {
     if (nextView) setView(nextView);
     setOpen(true);
   }), []);
+  const refresh = () => {
+    if (!snapshot?.cwd) return;
+    if (view === "files") invalidateTree(snapshot.cwd);
+    else invalidateGit(snapshot.cwd);
+  };
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 bg-black/40 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
         <Dialog.Popup className="fixed inset-y-0 right-0 flex w-[82vw] max-w-xs flex-col bg-sidebar shadow-2xl outline-none transition-transform data-[starting-style]:translate-x-full data-[ending-style]:translate-x-full">
           <Dialog.Title className="sr-only">{t("workspace")}</Dialog.Title>
-          <div role="tablist" aria-label={t("workspace")} className="flex shrink-0 gap-1 border-b border-line px-2 pt-[calc(0.5rem+env(safe-area-inset-top))] pb-1.5">
-            {(["files", "git"] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                role="tab"
-                aria-selected={view === item}
-                onClick={() => setView(item)}
-                className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium ${view === item ? "bg-card text-ink shadow-sm" : "text-muted hover:bg-hover hover:text-ink"}`}
-              >
-                {t(item)}
-              </button>
-            ))}
+          <div className="flex shrink-0 items-center gap-1 border-b border-line px-2 pt-[calc(0.5rem+env(safe-area-inset-top))] pb-1.5">
+            <div role="tablist" aria-label={t("workspace")} className="flex min-w-0 flex-1 gap-1">
+              {(["files", "git"] as const).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  role="tab"
+                  aria-selected={view === item}
+                  onClick={() => setView(item)}
+                  className={`min-w-0 flex-1 rounded-md px-3 py-1.5 text-xs font-medium ${view === item ? "bg-card text-ink shadow-sm" : "text-muted hover:bg-hover hover:text-ink"}`}
+                >
+                  {t(item)}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={refresh}
+              disabled={!snapshot?.cwd}
+              aria-label={view === "files" ? t("refreshTree") : t("refreshPreview")}
+              title={view === "files" ? t("refreshTree") : t("refreshPreview")}
+              className="flex size-8 shrink-0 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink disabled:opacity-50"
+            >
+              <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-[1.8]" aria-hidden>
+                <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              aria-label={t("closeFiles")}
+              title={t("closeFiles")}
+              className="flex size-8 shrink-0 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink"
+            >
+              <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2" aria-hidden>
+                <path d="M18 6 6 18M6 6l12 12" strokeLinecap="round" />
+              </svg>
+            </button>
           </div>
           {view === "files" ? (
             <FileTreePanel
-              onClose={() => setOpen(false)}
               onPickFile={() => setOpen(false)}
               onPreviewFile={onPreviewFile}
             />
           ) : (
             <GitWorkspacePanel
               cwd={snapshot?.cwd}
-              docked={false}
-              onClose={() => setOpen(false)}
               onSelectCommit={(commit, trigger) => {
                 setOpen(false);
                 onSelectCommit?.({ cwd: snapshot?.cwd ?? "", hash: commit.hash, subject: commit.subject, trigger });
