@@ -64,8 +64,20 @@ export interface UIContextUsage {
   percent: number | null;
 }
 
+export interface UIHistoryState {
+  /** Opaque server cursor for the page immediately before snapshot.messages. */
+  cursor: string | null;
+  hasMore: boolean;
+}
+
+export interface UIHistoryPage extends UIHistoryState {
+  messages: UIMessage[];
+}
+
 export interface UISnapshot {
   messages: UIMessage[];
+  /** Older messages are loaded separately so live snapshot offsets stay stable. */
+  history?: UIHistoryState;
   isStreaming: boolean;
   model: UIModel | null;
   thinkingLevel: UIThinkingLevel;
@@ -82,6 +94,20 @@ export interface UISnapshot {
   gitBranch?: string | null;
   /** Current todo task, when the latest todo snapshot has an active item. */
   activeTodo?: UIActiveTodo;
+  /** Authoritative in-flight tools for full snapshot/reconnect recovery. */
+  activeTools?: Array<{ toolCallId: string; toolName: string }>;
+}
+
+/** Snapshot fields that are always replaced atomically by an incremental update. */
+export type UISnapshotMetadata = Omit<UISnapshot, "messages">;
+
+/** Replace messages[from..] on top of one exact full-snapshot revision. */
+export interface UISnapshotDelta {
+  baseRevision: number;
+  revision: number;
+  from: number;
+  messages: UIMessage[];
+  snapshot: UISnapshotMetadata;
 }
 
 export interface UISessionInfo {
@@ -309,7 +335,8 @@ export interface UIImageAttachment {
 }
 
 export type ServerEvent =
-  | { type: "snapshot"; snapshot: UISnapshot }
+  | { type: "snapshot"; seq: number; revision: number; snapshot: UISnapshot }
+  | { type: "snapshot_delta"; seq: number; delta: UISnapshotDelta }
   /** The server accepted a prompt command before starting the agent run. */
   | { type: "prompt_received"; requestId: string }
   /** Sent after a client abort command has been processed by the session. */
@@ -328,13 +355,13 @@ export type ServerEvent =
    * changes (e.g. fork).
    */
   | { type: "session_bound"; sessionId: string }
-  | { type: "delta"; kind: "text" | "thinking"; delta: string }
+  | { type: "delta"; seq: number; kind: "text" | "thinking"; delta: string }
   /** The agent closed its current reasoning block; keep it available but collapse it. */
-  | { type: "thinking_end" }
-  | { type: "tool_start"; toolCallId: string; toolName: string }
-  | { type: "tool_end"; toolCallId: string; toolName: string; isError: boolean }
-  | { type: "agent_start" }
-  | { type: "agent_end" }
+  | { type: "thinking_end"; seq: number }
+  | { type: "tool_start"; seq: number; toolCallId: string; toolName: string }
+  | { type: "tool_end"; seq: number; toolCallId: string; toolName: string; isError: boolean }
+  | { type: "agent_start"; seq: number }
+  | { type: "agent_end"; seq: number }
   | { type: "forked"; selectedText?: string }
   | { type: "command_catalog"; commands: UICommandInfo[] }
   | { type: "command_result"; message: string }
@@ -344,6 +371,10 @@ export type ServerEvent =
 
 export type ClientCommand =
   | { type: "prompt"; text: string; images?: UIImageAttachment[]; requestId?: string }
+  /** Ask the server to reset incremental snapshot state after a revision gap. */
+  | { type: "get_snapshot" }
+  /** Replay events strictly after seq, or fall back to a full snapshot. */
+  | { type: "sync_events"; afterSeq: number }
   | { type: "abort" }
   | { type: "set_model"; provider: string; id: string }
   | { type: "set_thinking_level"; level: UIThinkingLevel }

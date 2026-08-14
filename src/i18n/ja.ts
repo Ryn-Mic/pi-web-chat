@@ -34,6 +34,7 @@ export const ja: Messages = {
   sessionNamePlaceholder: "セッション名…",
   emptySession: "(空のセッション)",
   messageCount: "メッセージ {count}",
+  loadEarlierMessages: "以前のメッセージを読み込む",
   noSavedSessions: "保存されたセッションはありません",
   noProject: "プロジェクトなし",
   sessionList: "セッション一覧",

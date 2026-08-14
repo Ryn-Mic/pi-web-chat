@@ -6,9 +6,11 @@ import type {
   UICommandInfo,
   UIExtensionUIRequest,
   UIExtensionUIResponse,
+  UIHistoryPage,
   UIMessage,
   UISnapshot,
 } from "../../shared/protocol";
+import { applySnapshotDelta } from "../../shared/snapshot";
 import { authHeaders, checkAuth } from "./auth";
 import {
   clearComposerDraft,
@@ -31,6 +33,33 @@ export interface ActiveTool {
   toolName: string;
 }
 
+type FrameHost = {
+  requestAnimationFrame?: (callback: () => void) => number;
+  cancelAnimationFrame?: (handle: number) => void;
+};
+
+/**
+ * Run `callback` on the next animation frame; returns a canceller.
+ *
+ * Falls back to a macrotask outside the browser (unit tests, SSR) so the
+ * scheduling logic stays testable without a DOM.
+ */
+function onNextFrame(callback: () => void): () => void {
+  const host = globalThis as FrameHost;
+  if (typeof host.requestAnimationFrame === "function") {
+    const handle = host.requestAnimationFrame(callback);
+    return () => host.cancelAnimationFrame?.(handle);
+  }
+  const timer = setTimeout(callback, 0);
+  return () => clearTimeout(timer);
+}
+
+/** Run `callback` after `ms`; returns a canceller. */
+function afterDelay(ms: number, callback: () => void): () => void {
+  const timer = setTimeout(callback, ms);
+  return () => clearTimeout(timer);
+}
+
 /** WS lifecycle for chrome status (avoid red flash on first paint). */
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 export type PromptStatus = "idle" | "sending" | "accepted" | "running";
@@ -40,6 +69,11 @@ export interface ChatState {
   /** Session id the server bound to this connection (for URL sync) */
   sessionId: string | null;
   snapshot: UISnapshot | null;
+  /** Pages loaded before the fixed live snapshot window. */
+  historicalMessages: UIMessage[];
+  historyCursor: string | null;
+  historyHasMore: boolean;
+  historyLoading: boolean;
   /** Assistant text streaming right now (not yet in the snapshot) */
   streamText: string;
   streamThinking: string;
@@ -81,6 +115,10 @@ function createInitialState(): ChatState {
     connection: "connecting",
     sessionId: null,
     snapshot: null,
+    historicalMessages: [],
+    historyCursor: null,
+    historyHasMore: false,
+    historyLoading: false,
     streamText: "",
     streamThinking: "",
     streamThinkingComplete: false,
@@ -110,6 +148,10 @@ export class ChatClient implements WorkspaceClient<ChatState> {
 
   private ws: WebSocket | null = null;
   private listeners = new Set<() => void>();
+  /** State events collapse into one subscriber notification per microtask. */
+  private notifyScheduled = false;
+  /** Invalidates an already queued (and therefore uncancellable) microtask. */
+  private notifyGeneration = 0;
   private reconnectDelay = 400;
   private intentionalClose = false;
   /** Advances for every socket opened explicitly or by a reconnect. */
@@ -137,39 +179,56 @@ export class ChatClient implements WorkspaceClient<ChatState> {
   /** Prompt metadata used to reconcile the optimistic message with snapshots. */
   private optimisticSubmitted: SubmittedComposerPrompt | null = null;
   private optimisticUserCountAtSend = 0;
+  /** Full snapshot revision currently installed in state.snapshot. */
+  private snapshotRevision: number | null = null;
+  /** Last contiguous per-session event installed by this client. */
+  private eventSeq: number | null = null;
+  private eventSyncPending = false;
+  /** Avoid spamming get_snapshot while waiting for one gap repair response. */
+  private snapshotResyncPending = false;
 
   /**
-   * Stream deltas coalesced here and flushed on a fixed cadence. Fast models
-   * emit ~100 delta frames/s; every flush re-renders the whole MessageList
-   * and re-parses the accumulated markdown, so rendering per-token is a
-   * sustained CPU load on phones (heat / battery drain). 100ms keeps the
-   * stream visually smooth at ~10 updates/s.
+   * Stream deltas coalesced here and flushed on a two-tier cadence, mirroring
+   * DSH's Notifier split:
+   *
+   * - State events (snapshot / tool_end / agent_end …) flush synchronously at the
+   *   top of {@link handle} — they must never be deferred.
+   * - Visual deltas coalesce onto an animation frame, rate-capped to
+   *   {@link DELTA_FLUSH_MS}. Fast models emit ~100 delta frames/s and every
+   *   flush re-renders the whole MessageList, so rendering per token is a
+   *   sustained CPU load on phones (heat / battery drain).
+   *
+   * The first delta after a quiet period is not delayed: it flushes on the next
+   * frame so the response starts painting immediately instead of 100ms late.
+   * Using an animation frame also means a hidden tab stops re-rendering — deltas
+   * keep accumulating and land in a single flush when it becomes visible again.
    */
   private static readonly DELTA_FLUSH_MS = 100;
   private streamBuf: { text?: string; thinking?: string } | null = null;
-  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private flushHandle: (() => void) | null = null;
+  /** Timestamp of the last flush that actually applied deltas. */
+  private lastFlushAt = 0;
 
   private scheduleFlush() {
-    if (this.flushTimer) return;
-    // One-shot timeout: fires once, clears itself, and the next delta after
-    // that schedules a fresh one. (setInterval here leaks — the callback
-    // nulls the handle before it can be cleared, so a new interval gets
-    // created every window and never stops.)
-    this.flushTimer = setTimeout(() => {
-      this.flushTimer = null;
+    if (this.flushHandle) return;
+    const run = () => {
+      this.flushHandle = null;
       this.flushStreamBuffer();
-    }, ChatClient.DELTA_FLUSH_MS);
+    };
+    const elapsed = Date.now() - this.lastFlushAt;
+    const wait = Math.max(0, ChatClient.DELTA_FLUSH_MS - elapsed);
+    this.flushHandle = wait > 0 ? afterDelay(wait, run) : onNextFrame(run);
   }
 
   /** Apply buffered deltas to state and stop the timer. */
   private flushStreamBuffer() {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
+    this.cancelScheduledFlush();
     const buf = this.streamBuf;
     this.streamBuf = null;
     if (!buf) return;
+    // Only a flush that applied deltas resets the rate window; otherwise the
+    // frequent state events would keep pushing the next delta 100ms out.
+    this.lastFlushAt = Date.now();
     this.update({
       streamText: buf.text ? this.state.streamText + buf.text : this.state.streamText,
       streamThinking: buf.thinking
@@ -179,12 +238,16 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     });
   }
 
+  private cancelScheduledFlush() {
+    if (this.flushHandle) {
+      this.flushHandle();
+      this.flushHandle = null;
+    }
+  }
+
   /** Drop any pending stream deltas (session switch / disconnect). */
   private clearStreamBuffer() {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
+    this.cancelScheduledFlush();
     this.streamBuf = null;
   }
 
@@ -193,7 +256,12 @@ export class ChatClient implements WorkspaceClient<ChatState> {
   }
 
   private markPromptRunning() {
-    if (!this.pendingPrompt || this.state.promptStatus === "idle") return;
+    if (
+      !this.pendingPrompt ||
+      this.state.promptStatus === "idle" ||
+      this.state.promptStatus === "running"
+    )
+      return;
     this.update({ promptStatus: "running" });
   }
 
@@ -292,9 +360,17 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       this.clearStreamBuffer();
       this.pendingPrompt = null;
       this.optimisticSubmitted = null;
+      this.snapshotRevision = null;
+      this.eventSeq = null;
+      this.eventSyncPending = false;
+      this.snapshotResyncPending = false;
       this.update({
         connection: "connecting",
         snapshot: null,
+        historicalMessages: [],
+        historyCursor: null,
+        historyHasMore: false,
+        historyLoading: false,
         sessionId: null,
         streamText: "",
         streamThinking: "",
@@ -324,6 +400,9 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     const token = authHeaders().authorization?.replace("Bearer ", "");
     if (token) query.set("token", token);
     if (sessionId) query.set("session", sessionId);
+    if (!switchingSession && sessionId && this.eventSeq !== null) {
+      query.set("since", String(this.eventSeq));
+    }
     // Include the remembered cwd on reconnects so an unpublished draft stays
     // in the project directory it was created from. Harmless for existing
     // sessions (the server resolves cwd from the session header instead).
@@ -423,6 +502,37 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     this.onDispose?.();
   }
 
+  async loadOlderMessages(): Promise<boolean> {
+    const sessionId = this.state.sessionId;
+    const cursor = this.state.historyCursor;
+    if (!sessionId || !cursor || !this.state.historyHasMore || this.state.historyLoading) {
+      return false;
+    }
+
+    this.update({ historyLoading: true });
+    try {
+      const query = new URLSearchParams({ cursor });
+      const url = `/api/sessions/${encodeURIComponent(sessionId)}/history?${query}`;
+      const response = await fetch(url, { headers: authHeaders() });
+      if (!response.ok) throw new Error(`history request failed: ${response.status}`);
+      const page = (await response.json()) as UIHistoryPage;
+      // Ignore a response that outlived a tab/session switch or a second cursor.
+      if (this.state.sessionId !== sessionId || this.state.historyCursor !== cursor) return false;
+      this.update({
+        historicalMessages: [...page.messages, ...this.state.historicalMessages],
+        historyCursor: page.cursor,
+        historyHasMore: page.hasMore,
+        historyLoading: false,
+      });
+      return true;
+    } catch {
+      if (this.state.sessionId === sessionId && this.state.historyCursor === cursor) {
+        this.update({ historyLoading: false });
+      }
+      return false;
+    }
+  }
+
   send(cmd: ClientCommand): boolean {
     const socketOpen = this.ws?.readyState === WebSocket.OPEN;
     if (cmd.type === "prompt") {
@@ -501,7 +611,71 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     }
   }
 
+  private requestEventSync() {
+    if (
+      this.eventSyncPending ||
+      this.eventSeq === null ||
+      this.ws?.readyState !== WebSocket.OPEN
+    )
+      return;
+    this.eventSyncPending = true;
+    this.ws.send(
+      JSON.stringify({ type: "sync_events", afterSeq: this.eventSeq } satisfies ClientCommand),
+    );
+  }
+
+  private requestFullSnapshot() {
+    if (this.snapshotResyncPending || this.ws?.readyState !== WebSocket.OPEN) return;
+    this.snapshotResyncPending = true;
+    this.ws.send(JSON.stringify({ type: "get_snapshot" } satisfies ClientCommand));
+  }
+
+  private acceptSequence(event: ServerEvent): boolean {
+    if (event.type === "snapshot") {
+      this.eventSeq = event.seq;
+      this.eventSyncPending = false;
+      return true;
+    }
+    if (!("seq" in event)) return true;
+    if (this.eventSeq === null) {
+      this.requestFullSnapshot();
+      return false;
+    }
+    if (event.seq <= this.eventSeq) return false;
+    if (event.seq !== this.eventSeq + 1) {
+      this.requestEventSync();
+      return false;
+    }
+    this.eventSeq = event.seq;
+    this.eventSyncPending = false;
+    return true;
+  }
+
+  private installSnapshot(snapshot: UISnapshot, revision: number, resetHistory = false) {
+    this.snapshotRevision = revision;
+    this.snapshotResyncPending = false;
+    if (snapshot.isStreaming) this.markPromptRunning();
+    this.reconcileOptimisticMessage(snapshot);
+    // Completed messages are reflected in the snapshot, so clear live buffers.
+    this.update({
+      snapshot,
+      ...(resetHistory
+        ? {
+            historicalMessages: [],
+            historyCursor: snapshot.history?.cursor ?? null,
+            historyHasMore: snapshot.history?.hasMore ?? false,
+            historyLoading: false,
+          }
+        : {}),
+      activeTools: snapshot.activeTools ?? (resetHistory ? [] : this.state.activeTools),
+      streamText: "",
+      streamThinking: "",
+      streamThinkingComplete: false,
+    });
+  }
+
   private handle(event: ServerEvent) {
+    if (!this.acceptSequence(event)) return;
     // A non-delta event can replace/clear the streaming text (snapshot,
     // agent_end …). Flush pending deltas first so no characters are lost.
     if (event.type !== "delta") this.flushStreamBuffer();
@@ -525,16 +699,21 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         this.onSessionBound?.(event.sessionId);
         break;
       case "snapshot":
-        if (event.snapshot.isStreaming) this.markPromptRunning();
-        this.reconcileOptimisticMessage(event.snapshot);
-        // Completed messages are reflected in the snapshot, so clear the stream buffers.
-        this.update({
-          snapshot: event.snapshot,
-          streamText: "",
-          streamThinking: "",
-          streamThinkingComplete: false,
-        });
+        this.installSnapshot(event.snapshot, event.revision, true);
         break;
+      case "snapshot_delta": {
+        const snapshot = applySnapshotDelta(
+          this.state.snapshot,
+          this.snapshotRevision,
+          event.delta,
+        );
+        if (!snapshot) {
+          this.requestFullSnapshot();
+          break;
+        }
+        this.installSnapshot(snapshot, event.delta.revision);
+        break;
+      }
       case "prompt_received":
         if (this.pendingPrompt?.requestId === event.requestId) {
           this.pendingPrompt.awaitingReceipt = false;
@@ -546,9 +725,9 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         break;
       case "delta": {
         this.markPromptRunning();
-        // Coalesce per-token deltas into one React update per flush window
-        // (see DELTA_FLUSH_MS) — rendering once per token is a sustained CPU
-        // load on phones (each render re-parses the accumulated markdown).
+        // Coalesce per-token deltas into one React update per flush window (see
+        // DELTA_FLUSH_MS) — every flush re-renders the whole MessageList, which
+        // is a sustained CPU load on phones when done per token.
         const buf = (this.streamBuf ??= {});
         if (event.kind === "text") buf.text = (buf.text ?? "") + event.delta;
         else buf.thinking = (buf.thinking ?? "") + event.delta;
@@ -694,7 +873,23 @@ export class ChatClient implements WorkspaceClient<ChatState> {
 
   private update(partial: Partial<ChatState>) {
     this.state = { ...this.state, ...partial };
-    for (const l of this.listeners) l();
+    this.scheduleNotify();
+  }
+
+  /**
+   * Publish ordinary state changes once per microtask. WebSocket handlers often
+   * make several related updates (flush stream, settle prompt, install
+   * snapshot); subscribers should only observe their final coherent state.
+   */
+  private scheduleNotify() {
+    if (this.notifyScheduled || this.listeners.size === 0) return;
+    this.notifyScheduled = true;
+    const generation = ++this.notifyGeneration;
+    queueMicrotask(() => {
+      if (!this.notifyScheduled || this.notifyGeneration !== generation) return;
+      this.notifyScheduled = false;
+      for (const listener of this.listeners) listener();
+    });
   }
 
   subscribe = (listener: () => void) => {
@@ -760,6 +955,10 @@ class ChatWorkspaceClient {
   // components can keep using the same imperative chatClient surface.
   send(cmd: ClientCommand): boolean {
     return this.workspace.getActiveClient()?.send(cmd) ?? false;
+  }
+
+  loadOlderMessages(): Promise<boolean> {
+    return this.workspace.getActiveClient()?.loadOlderMessages() ?? Promise.resolve(false);
   }
 
   refillComposer(text: string) {

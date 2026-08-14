@@ -151,7 +151,7 @@ dist/public/              构建后的前端（随包发布）
 ## 功能特性
 
 - 实时流式输出（文本 / thinking 增量）
-- **Markdown 渲染**（react-markdown + GFM + highlight.js）
+- **流式 Markdown 渲染**（Streamdown + Shiki 语法高亮）
 - 工具调用展示（bash、edit、read 等），结果可展开；edit 以 git diff 样式呈现
 - 会话列表 / 切换 / 新建（可与 pi CLI 会话共享）
 - **每会话独立 URL**（`/s/:sessionId`）：每个浏览器标签/设备驱动自己的会话；打开同一 URL 实时同步。`/` 开启新会话

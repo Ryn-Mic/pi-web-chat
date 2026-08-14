@@ -34,6 +34,7 @@ export const ko: Messages = {
   sessionNamePlaceholder: "세션 이름…",
   emptySession: "(빈 세션)",
   messageCount: "메시지 {count}",
+  loadEarlierMessages: "이전 메시지 불러오기",
   noSavedSessions: "저장된 세션 없음",
   noProject: "프로젝트 없음",
   sessionList: "세션 목록",

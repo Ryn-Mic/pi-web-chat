@@ -1,9 +1,10 @@
-import { memo, type CSSProperties, useEffect, useRef, useState } from "react";
+import { memo, type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import type { UIContentBlock, UIMessage } from "../../shared/protocol";
 import { chatClient, type ActiveTool } from "../lib/chat";
 import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
 import { buildEditDiffFromArgs, isUnifiedDiff } from "../lib/diff";
 import { useT } from "../lib/i18n";
+import { sameToolCallBlock, type ToolCallBlock } from "../lib/toolCall";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { DiffView } from "./DiffView";
 import { Markdown, streamdownPlugins } from "./Markdown";
@@ -125,15 +126,21 @@ function AskCard({ block }: { block: Extract<UIContentBlock, { type: "toolCall" 
   );
 }
 
-function ToolCallCard({ block }: { block: Extract<UIContentBlock, { type: "toolCall" }> }) {
-  // todo tool: dedicated progress card (full task list via result.tasks)
-  if (block.name === "todo") return <TodoCard block={block} />;
-  // ask_user_question extension: read-only questionnaire card
-  if (block.name === "ask_user_question") return <AskCard block={block} />;
-
-  const args = block.args ? JSON.stringify(block.args) : "";
+/**
+ * Generic tool card (everything except todo / ask_user_question).
+ *
+ * Kept separate from {@link ToolCallCard} so the hooks below are never placed
+ * after a conditional return. `block.args` keeps the agent's original object
+ * reference across snapshots (see server/serialize.ts), so memoising on it is
+ * effective even while the surrounding message objects are rebuilt.
+ */
+function GenericToolCard({ block }: { block: ToolCallBlock }) {
+  const args = useMemo(() => (block.args ? JSON.stringify(block.args) : ""), [block.args]);
   // edit tool: render args (path/edits or legacy file/oldText/newText) as a git diff
-  const edit = block.name === "edit" ? buildEditDiffFromArgs(block.args) : null;
+  const edit = useMemo(
+    () => (block.name === "edit" ? buildEditDiffFromArgs(block.args) : null),
+    [block.name, block.args],
+  );
   // bash tool: collapsed state shows the actual command + timeout, not raw JSON
   const bash =
     block.name === "bash" && block.args && typeof block.args === "object"
@@ -156,9 +163,13 @@ function ToolCallCard({ block }: { block: Extract<UIContentBlock, { type: "toolC
   // payload as result.diff after success, so rendering both produces two
   // identical panels for one file change.
   const resultDiff = block.result?.diff;
-  const resultIsDiff = !!resultDiff || (!!block.result && isUnifiedDiff(block.result.text));
   const resultText = block.result?.text ?? "";
-  const showResult = Boolean(block.result) && !(edit && resultIsDiff && !block.result?.isError);
+  const hasResult = Boolean(block.result);
+  const resultIsDiff = useMemo(
+    () => !!resultDiff || (hasResult && isUnifiedDiff(resultText)),
+    [resultDiff, hasResult, resultText],
+  );
+  const showResult = hasResult && !(edit && resultIsDiff && !block.result?.isError);
 
   return (
     <details className="my-2 rounded-xl border border-line bg-card/60 text-sm">
@@ -234,6 +245,24 @@ function ToolCallCard({ block }: { block: Extract<UIContentBlock, { type: "toolC
   );
 }
 
+/**
+ * Tool call card dispatcher.
+ *
+ * Memoised because every server snapshot rebuilds the message/block wrappers:
+ * without this, each `tool_execution_end` re-renders (and re-computes the diff
+ * of) every tool card in the whole conversation.
+ */
+const ToolCallCard = memo(
+  function ToolCallCard({ block }: { block: ToolCallBlock }) {
+    // todo tool: dedicated progress card (full task list via result.tasks)
+    if (block.name === "todo") return <TodoCard block={block} />;
+    // ask_user_question extension: read-only questionnaire card
+    if (block.name === "ask_user_question") return <AskCard block={block} />;
+    return <GenericToolCard block={block} />;
+  },
+  (prev, next) => sameToolCallBlock(prev.block, next.block),
+);
+
 function Thinking({
   text,
   defaultOpen = true,
@@ -258,8 +287,13 @@ function Thinking({
       <summary className="cursor-pointer text-xs text-faint select-none">thinking…</summary>
       <div className="mt-1 min-w-0 break-words border-l-2 border-line pl-3 text-muted italic [&_pre]:not-italic [&_code]:not-italic">
         {/* Thinking renders markdown too (bold/code/emphasis); Streamdown
-            handles incomplete syntax while streaming. */}
-        <Streamdown mode={streaming ? "streaming" : "static"} plugins={streamdownPlugins}>
+            handles incomplete syntax while streaming. The Shiki plugin is
+            withheld while streaming so growing fences are not re-tokenised on
+            every flush (see Markdown.tsx). */}
+        <Streamdown
+          mode={streaming ? "streaming" : "static"}
+          plugins={streaming ? undefined : streamdownPlugins}
+        >
           {text}
         </Streamdown>
       </div>
@@ -432,6 +466,9 @@ export function MessageList({
   streamThinkingComplete,
   activeTools,
   isStreaming,
+  historyHasMore,
+  historyLoading,
+  onLoadOlder,
   containerRef,
 }: {
   messages: UIMessage[];
@@ -440,6 +477,9 @@ export function MessageList({
   streamThinkingComplete: boolean;
   activeTools: ActiveTool[];
   isStreaming: boolean;
+  historyHasMore: boolean;
+  historyLoading: boolean;
+  onLoadOlder: () => Promise<boolean>;
   /** Scroll container (owned externally for message-anchor jumps) */
   containerRef: React.RefObject<HTMLDivElement | null>;
 }) {
@@ -456,6 +496,20 @@ export function MessageList({
   const chatStyle = {
     "--chat-font-size": `${chatFontSizePixels(chatFontSize)}px`,
   } as CSSProperties;
+
+  const loadOlder = async () => {
+    const container = containerRef.current;
+    const previousHeight = container?.scrollHeight ?? 0;
+    const previousTop = container?.scrollTop ?? 0;
+    stickToBottom.current = false;
+    const loaded = await onLoadOlder();
+    if (!loaded) return;
+    requestAnimationFrame(() => {
+      const current = containerRef.current;
+      if (!current) return;
+      current.scrollTop = previousTop + (current.scrollHeight - previousHeight);
+    });
+  };
 
   // Scroll to bottom on new content. rAF-coalesced and gated on the user
   // already being at the bottom — the old bare scrollIntoView ran on every
@@ -494,6 +548,19 @@ export function MessageList({
         className="thin-scroll h-full overflow-x-hidden overflow-y-auto"
       >
         <div className="mx-auto flex min-w-0 max-w-3xl flex-col gap-4 px-3 py-4 sm:gap-5 sm:px-4 sm:py-5">
+          {historyHasMore && (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={() => void loadOlder()}
+                disabled={historyLoading}
+                className="inline-flex h-8 items-center gap-2 rounded-md border border-line bg-card px-3 text-xs text-muted transition-colors hover:bg-hover hover:text-ink disabled:cursor-wait disabled:opacity-60"
+              >
+                {historyLoading && <LoadingIndicator label="" size="sm" />}
+                {t("loadEarlierMessages")}
+              </button>
+            </div>
+          )}
           {messages.length === 0 && !streamText && (
             <div className="mt-28 text-center">
               <div className="text-4xl text-accent">π</div>

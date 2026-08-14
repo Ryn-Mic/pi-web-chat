@@ -69,6 +69,9 @@ export function ChatPage() {
     connection,
     sessionId,
     snapshot,
+    historicalMessages,
+    historyHasMore,
+    historyLoading,
     streamText,
     streamThinking,
     streamThinkingComplete,
@@ -244,12 +247,19 @@ export function ChatPage() {
         ) : (
           <>
             <MessageList
-              messages={[...(snapshot?.messages ?? []), ...optimisticMessages]}
+              messages={[
+                ...historicalMessages,
+                ...(snapshot?.messages ?? []),
+                ...optimisticMessages,
+              ]}
               streamText={streamText}
               streamThinking={streamThinking}
               streamThinkingComplete={streamThinkingComplete}
               activeTools={activeTools}
               isStreaming={isStreaming}
+              historyHasMore={historyHasMore}
+              historyLoading={historyLoading}
+              onLoadOlder={() => chatClient.loadOlderMessages()}
               containerRef={messageListRef}
             />
             {updateAvailable && (

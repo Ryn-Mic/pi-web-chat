@@ -35,6 +35,7 @@ export const zh: Messages = {
   sessionNamePlaceholder: "会话名称…",
   emptySession: "（空会话）",
   messageCount: "{count} 条消息",
+  loadEarlierMessages: "加载更早消息",
   noSavedSessions: "没有已保存的会话",
   noProject: "无项目",
   sessionList: "会话列表",

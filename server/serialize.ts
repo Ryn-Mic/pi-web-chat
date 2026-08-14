@@ -9,6 +9,33 @@ type AnyMessage = {
   [key: string]: unknown;
 };
 
+type SerializedResult = {
+  text: string;
+  isError: boolean;
+  diff?: string;
+  tasks?: UITodoTask[];
+};
+
+/**
+ * Serialized tool results, keyed on the source `toolResult` message.
+ *
+ * pi appends messages to `agent.state.messages` on `message_end` and never
+ * mutates them afterwards (streaming content lives in `state.streamingMessage`),
+ * so a message object reference is a safe cache key. A WeakMap also means the
+ * cache is collected together with the session — no eviction policy needed.
+ */
+const resultBySource = new WeakMap<object, SerializedResult>();
+
+type CachedMessage = {
+  /** Results the tool calls in this message resolved to when it was serialized. */
+  results: (SerializedResult | undefined)[];
+  /** `null` for messages that render to nothing (e.g. empty user content). */
+  ui: UIMessage | null;
+};
+
+/** Serialized UI messages, keyed on the source message. */
+const uiBySource = new WeakMap<object, CachedMessage>();
+
 /** Strip ANSI escape sequences (color/style codes left by extensions like pi-claude-code-ui) */
 function stripAnsi(text: string): string {
   // SGR/cursor control: ESC [ ... (terminator a-zA-Z or @~)
@@ -29,110 +56,152 @@ function textFromContent(content: unknown): string {
   return "";
 }
 
+function serializeResult(m: AnyMessage): SerializedResult {
+  const details =
+    m.details && typeof m.details === "object" ? (m.details as Record<string, unknown>) : null;
+  const diff = details && typeof details.diff === "string" ? details.diff : undefined;
+  // todo tool carries the full task list on every result (details.tasks)
+  const tasks = Array.isArray(details?.tasks)
+    ? (details.tasks as unknown[]).filter(
+        (t): t is UITodoTask =>
+          !!t &&
+          typeof (t as UITodoTask).id === "number" &&
+          typeof (t as UITodoTask).subject === "string",
+      )
+    : undefined;
+  return {
+    text: textFromContent(m.content),
+    isError: m.isError === true,
+    ...(diff ? { diff } : {}),
+    ...(tasks && tasks.length > 0 ? { tasks } : {}),
+  };
+}
+
+/** Results the tool calls in this message resolve to, in block order. */
+function resultsForMessage(
+  m: AnyMessage,
+  results: Map<string, SerializedResult>,
+): (SerializedResult | undefined)[] {
+  if (m.role !== "assistant" || !Array.isArray(m.content)) return [];
+  const out: (SerializedResult | undefined)[] = [];
+  for (const b of m.content as Record<string, unknown>[]) {
+    if (b.type === "toolCall") out.push(results.get(String(b.id ?? "")));
+  }
+  return out;
+}
+
+function sameResults(
+  a: (SerializedResult | undefined)[],
+  b: (SerializedResult | undefined)[],
+): boolean {
+  return a.length === b.length && a.every((r, i) => r === b[i]);
+}
+
+/** Convert one pi message; returns null when it renders to nothing. */
+function serializeMessage(
+  m: AnyMessage,
+  results: Map<string, SerializedResult>,
+): UIMessage | null {
+  if (m.role === "user") {
+    const blocks: UIContentBlock[] = [];
+    if (typeof m.content === "string") {
+      blocks.push({ type: "text", text: stripAnsi(m.content) });
+    } else if (Array.isArray(m.content)) {
+      for (const b of m.content as { type: string; text?: string; data?: string; mimeType?: string }[]) {
+        if (b.type === "text" && b.text) blocks.push({ type: "text", text: stripAnsi(b.text) });
+        else if (b.type === "image") {
+          blocks.push({
+            type: "image",
+            dataUrl: b.data && b.mimeType ? `data:${b.mimeType};base64,${b.data}` : undefined,
+          });
+        }
+      }
+    }
+    if (blocks.length === 0) return null;
+    return {
+      role: "user",
+      content: blocks,
+      timestamp: typeof m.timestamp === "number" ? m.timestamp : undefined,
+    };
+  }
+
+  if (m.role === "assistant") {
+    const blocks: UIContentBlock[] = [];
+    if (Array.isArray(m.content)) {
+      for (const b of m.content as Record<string, unknown>[]) {
+        if (b.type === "text" && typeof b.text === "string" && b.text.length > 0) {
+          blocks.push({ type: "text", text: stripAnsi(b.text) });
+        } else if (b.type === "thinking" && typeof b.thinking === "string" && b.thinking.length > 0) {
+          blocks.push({ type: "thinking", text: b.thinking });
+        } else if (b.type === "toolCall") {
+          const id = String(b.id ?? "");
+          blocks.push({
+            type: "toolCall",
+            id,
+            name: String(b.name ?? "unknown"),
+            args: b.arguments,
+            result: results.get(id),
+          });
+        }
+      }
+    }
+    if (blocks.length === 0 && !m.errorMessage) return null;
+    return {
+      role: "assistant",
+      content: blocks,
+      errorMessage: typeof m.errorMessage === "string" ? m.errorMessage : undefined,
+      timestamp: typeof m.timestamp === "number" ? m.timestamp : undefined,
+    };
+  }
+
+  // custom/other messages: show when there is text
+  const text = textFromContent(m.content);
+  if (!text) return null;
+  return {
+    role: "custom",
+    content: [{ type: "text", text }],
+    timestamp: typeof m.timestamp === "number" ? m.timestamp : undefined,
+  };
+}
+
 /**
  * Convert pi's AgentMessage[] to UI messages.
  * toolResult messages are paired and merged into their toolCall block.
+ *
+ * Unchanged messages are returned as the *same object reference* across calls.
+ * Snapshots are broadcast on every message_end / tool_execution_end, so without
+ * this the server would rebuild (and re-strip ANSI from) the entire conversation
+ * dozens of times per agent turn, and no client-side memo could ever hit.
  */
 export function serializeMessages(messages: unknown[]): UIMessage[] {
   const msgs = messages as AnyMessage[];
 
   // toolCallId -> result mapping
-  const results = new Map<string, { text: string; isError: boolean; diff?: string; tasks?: UITodoTask[] }>();
+  const results = new Map<string, SerializedResult>();
   for (const m of msgs) {
-    if (m.role === "toolResult" && typeof m.toolCallId === "string") {
-      const details =
-        m.details && typeof m.details === "object"
-          ? (m.details as Record<string, unknown>)
-          : null;
-      const diff = details && typeof details.diff === "string" ? details.diff : undefined;
-      // todo tool carries the full task list on every result (details.tasks)
-      const tasks = Array.isArray(details?.tasks)
-        ? (details.tasks as unknown[]).filter(
-            (t): t is UITodoTask =>
-              !!t &&
-              typeof (t as UITodoTask).id === "number" &&
-              typeof (t as UITodoTask).subject === "string",
-          )
-        : undefined;
-      results.set(m.toolCallId, {
-        text: textFromContent(m.content),
-        isError: m.isError === true,
-        ...(diff ? { diff } : {}),
-        ...(tasks && tasks.length > 0 ? { tasks } : {}),
-      });
+    if (m.role !== "toolResult" || typeof m.toolCallId !== "string") continue;
+    let result = resultBySource.get(m);
+    if (!result) {
+      result = serializeResult(m);
+      resultBySource.set(m, result);
     }
+    results.set(m.toolCallId, result);
   }
 
   const out: UIMessage[] = [];
   for (const m of msgs) {
     if (m.role === "toolResult") continue; // merged into toolCall
 
-    if (m.role === "user") {
-      const blocks: UIContentBlock[] = [];
-      if (typeof m.content === "string") {
-        blocks.push({ type: "text", text: stripAnsi(m.content) });
-      } else if (Array.isArray(m.content)) {
-        for (const b of m.content as { type: string; text?: string; data?: string; mimeType?: string }[]) {
-          if (b.type === "text" && b.text) blocks.push({ type: "text", text: stripAnsi(b.text) });
-          else if (b.type === "image") {
-            blocks.push({
-              type: "image",
-              dataUrl:
-                b.data && b.mimeType ? `data:${b.mimeType};base64,${b.data}` : undefined,
-            });
-          }
-        }
-      }
-      if (blocks.length > 0) {
-        out.push({
-          role: "user",
-          content: blocks,
-          timestamp: typeof m.timestamp === "number" ? m.timestamp : undefined,
-        });
-      }
+    const messageResults = resultsForMessage(m, results);
+    const cached = uiBySource.get(m);
+    if (cached && sameResults(cached.results, messageResults)) {
+      if (cached.ui) out.push(cached.ui);
       continue;
     }
 
-    if (m.role === "assistant") {
-      const blocks: UIContentBlock[] = [];
-      if (Array.isArray(m.content)) {
-        for (const b of m.content as Record<string, unknown>[]) {
-          if (b.type === "text" && typeof b.text === "string" && b.text.length > 0) {
-            blocks.push({ type: "text", text: stripAnsi(b.text) });
-          } else if (b.type === "thinking" && typeof b.thinking === "string" && b.thinking.length > 0) {
-            blocks.push({ type: "thinking", text: b.thinking });
-          } else if (b.type === "toolCall") {
-            const id = String(b.id ?? "");
-            blocks.push({
-              type: "toolCall",
-              id,
-              name: String(b.name ?? "unknown"),
-              args: b.arguments,
-              result: results.get(id),
-            });
-          }
-        }
-      }
-      if (blocks.length > 0 || m.errorMessage) {
-        out.push({
-          role: "assistant",
-          content: blocks,
-          errorMessage: typeof m.errorMessage === "string" ? m.errorMessage : undefined,
-          timestamp: typeof m.timestamp === "number" ? m.timestamp : undefined,
-        });
-      }
-      continue;
-    }
-
-    // custom/other messages: show when there is text
-    const text = textFromContent(m.content);
-    if (text) {
-      out.push({
-        role: "custom",
-        content: [{ type: "text", text }],
-        timestamp: typeof m.timestamp === "number" ? m.timestamp : undefined,
-      });
-    }
+    const ui = serializeMessage(m, results);
+    uiBySource.set(m, { results: messageResults, ui });
+    if (ui) out.push(ui);
   }
 
   return out;

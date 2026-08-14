@@ -31,6 +31,16 @@ const components = {
  * incomplete syntax (unclosed ** / fences / links) natively via remend, which
  * removes the need for manual marker-escaping and the full re-parse jank on
  * every delta.
+ *
+ * While streaming, the Shiki plugin is withheld: Streamdown re-highlights a
+ * fence on every code change (its highlighted body keys the effect on `code`),
+ * and our token cache keys on the full source, so a growing code block would be
+ * re-tokenised from scratch on every flush. Without the plugin the fence renders
+ * as plain text, and dropping the plugin back in once the message settles
+ * highlights it exactly once. The prop must be switched here rather than inside
+ * the plugin: `HighlightOptions` carries no streaming flag, and a module-level
+ * flag would also strip highlighting from the completed messages rendered
+ * alongside the streaming one.
  */
 export const Markdown = memo(function Markdown({
   text,
@@ -46,7 +56,7 @@ export const Markdown = memo(function Markdown({
       <Streamdown
         mode={streaming ? "streaming" : "static"}
         components={components}
-        plugins={streamdownPlugins}
+        plugins={streaming ? undefined : streamdownPlugins}
       >
         {text}
       </Streamdown>

@@ -34,6 +34,7 @@ export type Messages = {
   sessionNamePlaceholder: string;
   emptySession: string;
   messageCount: string;
+  loadEarlierMessages: string;
   noSavedSessions: string;
   noProject: string;
   sessionList: string;
@@ -229,6 +230,7 @@ export const en: Messages = {
   sessionNamePlaceholder: "Session name…",
   emptySession: "(empty session)",
   messageCount: "{count} messages",
+  loadEarlierMessages: "Load earlier messages",
   noSavedSessions: "No saved sessions",
   noProject: "No project",
   sessionList: "Session list",

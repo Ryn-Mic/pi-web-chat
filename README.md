@@ -151,7 +151,7 @@ dist/public/              built frontend (published)
 ## Features
 
 - Live streaming (text / thinking deltas)
-- **Markdown rendering** (react-markdown + GFM + highlight.js)
+- **Streaming Markdown rendering** (Streamdown + Shiki syntax highlighting)
 - Tool-call display (bash, edit, read, …) with expandable results
 - Session list / switch / new session (can share pi CLI sessions)
 - **Per-session URLs** (`/s/:sessionId`): each browser tab/device drives its own session; opening the same URL syncs live. `/` starts a fresh session

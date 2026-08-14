@@ -7,6 +7,8 @@ class FakeWebSocket {
   readyState = FakeWebSocket.OPEN;
   sent: string[] = [];
 
+  constructor(readonly url = "") {}
+
   send(data: string) {
     this.sent.push(data);
   }
@@ -96,6 +98,7 @@ test("replaces the local prompt when its user message reaches a snapshot", () =>
     client.send({ type: "prompt", text: "persisted prompt" });
     (client as unknown as { handle(event: unknown): void }).handle({
       type: "snapshot",
+      revision: 0,
       snapshot: {
         messages: [{ role: "user", content: [{ type: "text", text: "persisted prompt" }] }],
         isStreaming: true,
@@ -187,6 +190,7 @@ test("releases the composer as soon as agent_end arrives", () => {
 
     (client as unknown as { handle(event: unknown): void }).handle({
       type: "snapshot",
+      revision: 0,
       snapshot: {
         messages: [{ role: "user", content: [{ type: "text", text: "finish this draft" }] }],
         isStreaming: false,
@@ -235,7 +239,7 @@ test("consumeInjectText clears a pending inject in either mode", () => {
   assert.equal(client.state.injectText, null);
 });
 
-test("insertComposerText reaches only the active client in the workspace", () => {
+test("insertComposerText reaches only the active client in the workspace", async () => {
   const previousLocation = (globalThis as { location?: unknown }).location;
   Object.defineProperty(globalThis, "location", {
     configurable: true,
@@ -252,6 +256,7 @@ test("insertComposerText reaches only the active client in the workspace", () =>
     chatClient.activate("session-a");
 
     chatClient.insertComposerText("src/index.ts");
+    await Promise.resolve();
 
     const tabs = chatClient.getTabsSnapshot();
     const active = tabs.find((tab) => tab.key === "session-a");
@@ -269,5 +274,472 @@ test("insertComposerText reaches only the active client in the workspace", () =>
       configurable: true,
       value: previousLocation,
     });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Delta flush cadence (two-tier: frame-coalesced deltas, synchronous state)
+// ---------------------------------------------------------------------------
+
+function emit(client: ChatClient, event: unknown) {
+  (client as unknown as { handle(event: unknown): void }).handle(event);
+}
+
+const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("ordinary state updates notify subscribers once per microtask", async () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    let notifications = 0;
+    client.subscribe(() => {
+      notifications += 1;
+    });
+
+    emit(client, { type: "agent_start" });
+    emit(client, { type: "tool_start", toolCallId: "c1", toolName: "bash" });
+    emit(client, { type: "tool_end", toolCallId: "c1" });
+
+    assert.equal(notifications, 0, "state publication is deferred to the microtask");
+    await Promise.resolve();
+    assert.equal(notifications, 1, "related state events are published together");
+  } finally {
+    restore();
+  }
+});
+
+test("the first delta of a stream is not held for a full flush window", async () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, { type: "delta", kind: "text", delta: "He" });
+    assert.equal(client.state.streamText, "", "delta is buffered, not applied inline");
+
+    // No animation frame in node, so the fallback macrotask runs immediately.
+    await tick(5);
+    assert.equal(client.state.streamText, "He", "first delta paints without the 100ms wait");
+  } finally {
+    restore();
+  }
+});
+
+test("bursts of deltas coalesce into one update per flush window", async () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    let renders = 0;
+    client.subscribe(() => {
+      renders += 1;
+    });
+
+    emit(client, { type: "delta", kind: "text", delta: "a" });
+    await tick(5);
+    assert.equal(client.state.streamText, "a");
+    const rendersAfterFirst = renders;
+
+    // Everything in this burst lands in a single flush at the end of the window.
+    for (const chunk of ["b", "c", "d", "e"]) {
+      emit(client, { type: "delta", kind: "text", delta: chunk });
+    }
+    await tick(20);
+    assert.equal(client.state.streamText, "a", "still inside the rate window");
+    assert.equal(renders, rendersAfterFirst, "no render before the window elapses");
+
+    await tick(120);
+    assert.equal(client.state.streamText, "abcde");
+    assert.equal(renders, rendersAfterFirst + 1, "the whole burst is one render");
+  } finally {
+    restore();
+  }
+});
+
+test("text and thinking deltas are buffered independently", async () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, { type: "delta", kind: "thinking", delta: "hmm" });
+    emit(client, { type: "delta", kind: "text", delta: "answer" });
+    await tick(5);
+
+    assert.equal(client.state.streamThinking, "hmm");
+    assert.equal(client.state.streamText, "answer");
+    assert.equal(client.state.streamThinkingComplete, false);
+  } finally {
+    restore();
+  }
+});
+
+test("a state event flushes pending deltas synchronously", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, { type: "delta", kind: "text", delta: "partial" });
+    assert.equal(client.state.streamText, "");
+
+    // thinking_end is a state event: it must not wait for the delta window.
+    emit(client, { type: "thinking_end" });
+    assert.equal(client.state.streamText, "partial");
+    assert.equal(client.state.streamThinkingComplete, true);
+  } finally {
+    restore();
+  }
+});
+
+test("a snapshot flushes then clears the stream buffers", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, { type: "delta", kind: "text", delta: "streamed" });
+    emit(client, {
+      type: "snapshot",
+      revision: 0,
+      snapshot: {
+        messages: [{ role: "assistant", content: [{ type: "text", text: "streamed" }] }],
+        isStreaming: false,
+      },
+    });
+
+    assert.equal(client.state.streamText, "", "completed text lives in the snapshot now");
+    assert.equal(client.state.streamThinking, "");
+  } finally {
+    restore();
+  }
+});
+
+test("no delta is lost when the window elapses between bursts", async () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, { type: "delta", kind: "text", delta: "1" });
+    await tick(5);
+    emit(client, { type: "delta", kind: "text", delta: "2" });
+    await tick(140);
+    emit(client, { type: "delta", kind: "text", delta: "3" });
+    await tick(140);
+
+    assert.equal(client.state.streamText, "123");
+  } finally {
+    restore();
+  }
+});
+
+test("installs a matching incremental snapshot suffix", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, {
+      type: "snapshot",
+      revision: 3,
+      snapshot: {
+        messages: [{ role: "user", content: [{ type: "text", text: "one" }] }],
+        isStreaming: false,
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+      },
+    });
+    emit(client, {
+      type: "snapshot_delta",
+      delta: {
+        baseRevision: 3,
+        revision: 4,
+        from: 1,
+        messages: [{ role: "assistant", content: [{ type: "text", text: "two" }] }],
+        snapshot: {
+          isStreaming: false,
+          model: null,
+          thinkingLevel: "off",
+          thinkingLevels: ["off"],
+        },
+      },
+    });
+
+    assert.equal(client.state.snapshot?.messages.length, 2);
+    assert.equal(client.state.snapshot?.messages[1]?.content[0]?.type, "text");
+    assert.equal(client.state.snapshot?.messages[1]?.content[0]?.text, "two");
+  } finally {
+    restore();
+  }
+});
+
+test("requests one full snapshot when an incremental revision has a gap", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    emit(client, {
+      type: "snapshot",
+      revision: 1,
+      snapshot: {
+        messages: [],
+        isStreaming: false,
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+      },
+    });
+    const gap = {
+      type: "snapshot_delta",
+      delta: {
+        baseRevision: 9,
+        revision: 10,
+        from: 0,
+        messages: [],
+        snapshot: {
+          isStreaming: false,
+          model: null,
+          thinkingLevel: "off",
+          thinkingLevels: ["off"],
+        },
+      },
+    };
+    emit(client, gap);
+    emit(client, gap);
+
+    assert.deepEqual(socket.sent.map((data) => JSON.parse(data)), [{ type: "get_snapshot" }]);
+
+    emit(client, { ...gap, delta: { ...gap.delta, baseRevision: 1, revision: 2 } });
+    assert.equal(client.state.snapshot?.messages.length, 0, "matching updates still install");
+  } finally {
+    restore();
+  }
+});
+
+test("prepends an older history page and advances its cursor", async () => {
+  const previousFetch = globalThis.fetch;
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, { type: "session_bound", sessionId: "session-a" });
+    emit(client, {
+      type: "snapshot",
+      revision: 0,
+      snapshot: {
+        messages: [{ role: "assistant", content: [{ type: "text", text: "latest" }] }],
+        history: { cursor: "cursor-1", hasMore: true },
+        isStreaming: false,
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+      },
+    });
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      assert.match(String(url), /session-a\/history\?cursor=cursor-1/);
+      return new Response(
+        JSON.stringify({
+          messages: [{ role: "user", content: [{ type: "text", text: "older" }] }],
+          cursor: null,
+          hasMore: false,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    assert.equal(await client.loadOlderMessages(), true);
+    assert.equal(client.state.historicalMessages[0]?.content[0]?.text, "older");
+    assert.equal(client.state.historyCursor, null);
+    assert.equal(client.state.historyHasMore, false);
+    assert.equal(client.state.historyLoading, false);
+  } finally {
+    globalThis.fetch = previousFetch;
+    restore();
+  }
+});
+
+test("ignores an older history response after switching sessions", async () => {
+  const previousFetch = globalThis.fetch;
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, { type: "session_bound", sessionId: "session-a" });
+    emit(client, {
+      type: "snapshot",
+      seq: 0,
+      revision: 0,
+      snapshot: {
+        messages: [],
+        history: { cursor: "cursor-1", hasMore: true },
+        isStreaming: false,
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+      },
+    });
+    let resolveFetch!: (response: Response) => void;
+    globalThis.fetch = (() => new Promise<Response>((resolve) => (resolveFetch = resolve))) as typeof fetch;
+
+    const loading = client.loadOlderMessages();
+    emit(client, { type: "session_bound", sessionId: "session-b" });
+    resolveFetch(
+      new Response(JSON.stringify({ messages: [], cursor: null, hasMore: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    assert.equal(await loading, false);
+    assert.deepEqual(client.state.historicalMessages, []);
+  } finally {
+    globalThis.fetch = previousFetch;
+    restore();
+  }
+});
+
+test("requests one event replay for a sequence gap and installs ordered frames", async () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    emit(client, {
+      type: "snapshot",
+      seq: 5,
+      revision: 0,
+      snapshot: {
+        messages: [],
+        isStreaming: true,
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+      },
+    });
+
+    emit(client, { type: "delta", seq: 7, kind: "text", delta: "b" });
+    emit(client, { type: "delta", seq: 7, kind: "text", delta: "b" });
+    assert.deepEqual(socket.sent.map((data) => JSON.parse(data)), [
+      { type: "sync_events", afterSeq: 5 },
+    ]);
+
+    emit(client, { type: "delta", seq: 6, kind: "text", delta: "a" });
+    emit(client, { type: "delta", seq: 7, kind: "text", delta: "b" });
+    emit(client, { type: "delta", seq: 7, kind: "text", delta: "duplicate" });
+    await tick(5);
+
+    assert.equal(client.state.streamText, "ab");
+  } finally {
+    restore();
+  }
+});
+
+test("a full snapshot authoritatively restores active tools", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, {
+      type: "snapshot",
+      seq: 0,
+      revision: 0,
+      snapshot: {
+        messages: [],
+        isStreaming: true,
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+      },
+    });
+    emit(client, { type: "tool_start", seq: 1, toolCallId: "old", toolName: "read" });
+    assert.equal(client.state.activeTools[0]?.toolCallId, "old");
+
+    emit(client, {
+      type: "snapshot",
+      seq: 5,
+      revision: 2,
+      snapshot: {
+        messages: [],
+        isStreaming: true,
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+        activeTools: [{ toolCallId: "current", toolName: "bash" }],
+      },
+    });
+    assert.deepEqual(client.state.activeTools, [{ toolCallId: "current", toolName: "bash" }]);
+
+    emit(client, {
+      type: "snapshot",
+      seq: 6,
+      revision: 3,
+      snapshot: {
+        messages: [],
+        isStreaming: false,
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+      },
+    });
+    assert.deepEqual(client.state.activeTools, []);
+  } finally {
+    restore();
+  }
+});
+
+test("a reconnect advertises the last contiguous event sequence", () => {
+  const previousLocation = (globalThis as { location?: unknown }).location;
+  const previousWebSocket = (globalThis as { WebSocket?: unknown }).WebSocket;
+  Object.defineProperty(globalThis, "location", {
+    configurable: true,
+    value: { protocol: "http:", host: "localhost" },
+  });
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    value: FakeWebSocket,
+  });
+  const client = new ChatClient();
+  try {
+    emit(client, { type: "session_bound", sessionId: "session-a" });
+    emit(client, {
+      type: "snapshot",
+      seq: 12,
+      revision: 3,
+      snapshot: {
+        messages: [],
+        isStreaming: false,
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+      },
+    });
+
+    client.connect("session-a");
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    const url = new URL(socket.url);
+    assert.equal(url.searchParams.get("session"), "session-a");
+    assert.equal(url.searchParams.get("since"), "12");
+  } finally {
+    client.dispose();
+    Object.defineProperty(globalThis, "WebSocket", {
+      configurable: true,
+      value: previousWebSocket,
+    });
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: previousLocation,
+    });
+  }
+});
+
+test("a full snapshot resets an expired event sequence baseline", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    emit(client, {
+      type: "snapshot",
+      seq: 2,
+      revision: 0,
+      snapshot: {
+        messages: [],
+        isStreaming: false,
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+      },
+    });
+    emit(client, { type: "agent_start", seq: 9 });
+    assert.deepEqual(socket.sent.map((data) => JSON.parse(data)), [
+      { type: "sync_events", afterSeq: 2 },
+    ]);
+
+    emit(client, {
+      type: "snapshot",
+      seq: 20,
+      revision: 4,
+      snapshot: {
+        messages: [],
+        isStreaming: false,
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+      },
+    });
+    emit(client, { type: "agent_start", seq: 21 });
+    assert.equal(client.state.snapshot?.isStreaming, true);
+  } finally {
+    restore();
   }
 });

@@ -1,6 +1,6 @@
 {
   "name": "pi-web-chat",
-  "version": "0.1.80",
+  "version": "0.1.84",
   "description": "Web UI for the pi coding agent (OpenWebUI-style, mobile-friendly)",
   "type": "module",
   "license": "MIT",
@@ -96,9 +96,6 @@
     "esbuild": "^0.28.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-markdown": "^10.1.0",
-    "rehype-highlight": "^7.0.2",
-    "remark-gfm": "^4.0.1",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

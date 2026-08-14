@@ -139,7 +139,7 @@ dist/public/              빌드된 프론트 (배포물)
 ## 기능
 
 - 실시간 스트리밍 (text / thinking 델타)
-- **마크다운 렌더링** (react-markdown + GFM + highlight.js 코드 하이라이팅)
+- **스트리밍 마크다운 렌더링** (Streamdown + Shiki 구문 강조)
 - 툴 실행 표시 (bash, edit, read, ...) + 결과 펼쳐보기
 - 세션 목록 / 전환 / 새 세션 (pi CLI 세션과 공유됨)
 - **세션별 URL** (`/s/:sessionId`): 탭·기기마다 서로 다른 세션을 동시에 사용, 같은 URL은 실시간 동기화. `/` 로 접속하면 새 세션

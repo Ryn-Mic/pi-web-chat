@@ -1,4 +1,14 @@
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createServer, type IncomingMessage } from "node:http";
 import { homedir } from "node:os";
@@ -36,7 +46,9 @@ import type {
   UIGitCommitDetail,
   UIGitDiff,
 } from "../shared/protocol.ts";
+import { createSnapshotDelta } from "../shared/snapshot.ts";
 import { auth, authStartupInfo } from "./auth.ts";
+import { selectReplayEvents } from "./event-replay.ts";
 import { handleDesktopFileContent, streamStaticFile } from "./file-content.ts";
 import { listDir, PathEscapeError, searchFiles } from "./files.ts";
 import {
@@ -46,6 +58,12 @@ import {
 } from "./preview-context.ts";
 import { readCustomModels, resolveIncomingApiKey, validateProviders, writeCustomModels } from "./models-config.ts";
 import { getActiveTodo, serializeMessages } from "./serialize.ts";
+import {
+  AppendedJsonlDecoder,
+  applyExternalSessionEntries,
+} from "./session-append.ts";
+import { readSessionHistoryPage } from "./session-history.ts";
+import { SessionSummaryIndex } from "./session-index.ts";
 import {
   checkoutGitBranch,
   getGitBranches,
@@ -65,6 +83,7 @@ const HOME = homedir();
 const DEFAULT_AGENT_CWD = join(HOME, ".pi", "web-chat");
 const AGENT_CWD = resolve(process.env.PI_WEB_CWD ?? DEFAULT_AGENT_CWD);
 mkdirSync(AGENT_CWD, { recursive: true });
+const sessionSummaryIndex = new SessionSummaryIndex(join(getAgentDir(), "sessions"));
 
 /** Daemon state file dir (same STATE_DIR as extensions/pi-web-chat.ts) */
 const DAEMON_STATE_DIR = join(HOME, ".pi", "web-chat");
@@ -148,6 +167,13 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionMan
 // clients viewing the same session. Maps 1:1 to URL /s/:sessionId.
 // ---------------------------------------------------------------------------
 
+type SequencedServerEvent = Extract<ServerEvent, { seq: number }>;
+type SessionEventPayload = SequencedServerEvent extends infer Event
+  ? Event extends SequencedServerEvent
+    ? Omit<Event, "seq">
+    : never
+  : never;
+
 interface SessionEntry {
   id: string;
   runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>>;
@@ -164,12 +190,24 @@ interface SessionEntry {
   reloading?: boolean;
   /** Last (size, mtimeMs) seen by the external-append poller — avoids
       re-reading the whole session file when it hasn't changed. */
-  lastFileStat?: { size: number; mtimeMs: number };
+  lastFileStat?: { ino: number; size: number; mtimeMs: number };
+  externalDecoder: AppendedJsonlDecoder;
+  syncingExternal?: boolean;
   /** Browser that initiated the current extension command, if any. */
   extensionUIClient?: WebSocket;
   /** Recently accepted browser prompt IDs, used to deduplicate reconnect replays. */
   receivedPromptIds: Map<string, number>;
   pendingExtensionUI: Map<string, (response: { cancelled?: boolean; value?: string; confirmed?: boolean }) => void>;
+  /** Revision and full value used as the base for suffix snapshot updates. */
+  snapshotRevision: number;
+  lastSnapshot?: UISnapshot;
+  /** Fixed start of the live snapshot window; it may grow but never slides. */
+  snapshotMessageOffset: number;
+  historyCursor: string | null;
+  historyHasMore: boolean;
+  eventSeq: number;
+  replayEvents: SequencedServerEvent[];
+  activeTools: Map<string, string>;
 }
 
 const entries = new Map<string, SessionEntry>();
@@ -187,8 +225,7 @@ function sessionIdOf(file?: string): string {
 }
 
 async function resolveSessionPath(id: string): Promise<string | undefined> {
-  const sessions = await SessionManager.listAll();
-  return sessions.find((s) => sessionIdOf(s.path) === id)?.path;
+  return sessionSummaryIndex.resolve(id);
 }
 
 /**
@@ -208,6 +245,17 @@ function broadcastTo(entry: SessionEntry, event: ServerEvent) {
   for (const ws of entry.clients) {
     if (ws.readyState === ws.OPEN) ws.send(data);
   }
+}
+
+const REPLAY_EVENT_LIMIT = 4096;
+
+function broadcastSessionEvent(entry: SessionEntry, payload: SessionEventPayload) {
+  const event = { ...payload, seq: ++entry.eventSeq } as SequencedServerEvent;
+  entry.replayEvents.push(event);
+  if (entry.replayEvents.length > REPLAY_EVENT_LIMIT) {
+    entry.replayEvents.splice(0, entry.replayEvents.length - REPLAY_EVENT_LIMIT);
+  }
+  broadcastTo(entry, event);
 }
 
 /** Expose a session in the URL (idempotent). Called on first message, on
@@ -237,6 +285,53 @@ function expandHome(p: string): string {
   return p;
 }
 
+/** Rebuild the browser's fixed tail window from the runtime's current leaf. */
+function refreshEntryFileState(entry: SessionEntry) {
+  entry.externalDecoder = new AppendedJsonlDecoder();
+  const file = entry.runtime.session.sessionFile;
+  if (!file) {
+    entry.snapshotMessageOffset = 0;
+    entry.historyCursor = null;
+    entry.historyHasMore = false;
+    entry.lastFileStat = undefined;
+    return;
+  }
+  try {
+    const page = readSessionHistoryPage(file, {
+      leafId: entry.runtime.session.sessionManager.getLeafId(),
+    });
+    const messageCount = serializeMessages(entry.runtime.session.messages).length;
+    entry.snapshotMessageOffset = Math.max(0, messageCount - page.messages.length);
+    entry.historyCursor = page.cursor;
+    entry.historyHasMore = page.hasMore;
+    const fileStat = statSync(file);
+    entry.lastFileStat = {
+      ino: fileStat.ino,
+      size: fileStat.size,
+      mtimeMs: fileStat.mtimeMs,
+    };
+  } catch {
+    entry.snapshotMessageOffset = 0;
+    entry.historyCursor = null;
+    entry.historyHasMore = false;
+    entry.lastFileStat = undefined;
+  }
+}
+
+/** Reset revisions and loaded history with one authoritative full baseline. */
+function broadcastFullSnapshotReset(entry: SessionEntry) {
+  entry.snapshotRevision += 1;
+  entry.eventSeq += 1;
+  entry.replayEvents = [];
+  const snapshot = currentSnapshot(entry);
+  broadcastTo(entry, {
+    type: "snapshot",
+    seq: entry.eventSeq,
+    revision: entry.snapshotRevision,
+    snapshot,
+  });
+}
+
 async function createEntry(id: string | null, cwd?: string): Promise<SessionEntry> {
   const path = id ? await resolveSessionPath(id) : undefined;
   // Opening an existing session keeps the old behavior (AGENT_CWD); only
@@ -258,7 +353,17 @@ async function createEntry(id: string | null, cwd?: string): Promise<SessionEntr
     published: id !== null,
     receivedPromptIds: new Map(),
     pendingExtensionUI: new Map(),
+    snapshotRevision: 0,
+    snapshotMessageOffset: 0,
+    historyCursor: null,
+    historyHasMore: false,
+    externalDecoder: new AppendedJsonlDecoder(),
+    eventSeq: 0,
+    replayEvents: [],
+    activeTools: new Map(),
   };
+  refreshEntryFileState(entry);
+  entry.lastSnapshot = buildSnapshot(entry);
   entries.set(entry.id, entry);
   bindSession(entry);
   await bindWebExtensions(entry);
@@ -292,9 +397,9 @@ setInterval(() => {
 }, 60_000).unref();
 
 /**
- * If the session file gains entries externally (a pi process in the terminal
- * etc.), reload the runtime so the view stays current. Streaming sessions are
- * left alone to protect an in-flight prompt response.
+ * Full compatibility fallback for file replacement, truncation, divergent
+ * branches, external model changes, or an SDK version without ingestible
+ * SessionManager internals.
  */
 async function reloadEntry(entry: SessionEntry): Promise<void> {
   if (entry.reloading) return;
@@ -315,54 +420,100 @@ async function reloadEntry(entry: SessionEntry): Promise<void> {
     });
     await runtime.switchSession(file);
     entry.runtime = runtime;
+    entry.activeTools.clear();
+    refreshEntryFileState(entry);
     bindSession(entry);
     await bindWebExtensions(entry);
     installEntryRuntimeRebind(entry);
-    broadcastSnapshot(entry);
+    // A replacement invalidates loaded history cursors, so reset every client
+    // with a full baseline rather than a suffix patch.
+    broadcastFullSnapshotReset(entry);
     sendCommandCatalog(entry);
   } finally {
     entry.reloading = false;
   }
 }
 
-/** Actual entry count in the file (excluding blank lines) */
-function countFileEntries(file: string): number {
-  const content = readFileSync(file, "utf8");
-  let count = 0;
-  for (const line of content.split("\n")) {
-    if (line.trim().length > 0) count++;
+function readFileRange(file: string, start: number, end: number): Buffer {
+  const fd = openSync(file, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(end - start);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = readSync(fd, buffer, bytesRead, buffer.length - bytesRead, start + bytesRead);
+      if (count === 0) break;
+      bytesRead += count;
+    }
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    closeSync(fd);
   }
-  return count;
+}
+
+async function syncExternalAppend(
+  entry: SessionEntry,
+  file: string,
+  previousSize: number,
+  fileStat: { ino: number; size: number; mtimeMs: number },
+): Promise<void> {
+  if (entry.syncingExternal) return;
+  entry.syncingExternal = true;
+  try {
+    const chunk = readFileRange(file, previousSize, fileStat.size);
+    const appended = entry.externalDecoder.push(chunk);
+    const result = applyExternalSessionEntries(entry.runtime.session, appended);
+    entry.lastFileStat = fileStat;
+    if (result.status === "reload") {
+      await reloadEntry(entry);
+      return;
+    }
+    if (result.status === "applied") {
+      broadcastSnapshot(entry);
+      sessionSummaryIndex.invalidate(file);
+    }
+  } finally {
+    entry.syncingExternal = false;
+  }
 }
 
 setInterval(() => {
   for (const entry of [...entries.values()]) {
     if (entry.clients.size === 0) continue;
     const file = entry.runtime.session.sessionFile;
-    if (!file || entry.reloading || entry.runtime.session.isStreaming) continue;
-    // Cheap stat first: only read the whole file when it actually changed.
-    // Long sessions grow to hundreds of KB — parsing that every 1.5s is a
-    // sustained disk/CPU cost (noticeable on battery-powered dev machines).
+    if (
+      !file ||
+      entry.reloading ||
+      entry.syncingExternal ||
+      entry.runtime.session.isStreaming
+    )
+      continue;
     let stat;
     try {
       stat = statSync(file);
     } catch {
       continue; // file not created yet (blank draft)
     }
-    const prev = entry.lastFileStat;
-    if (prev && prev.size === stat.size && prev.mtimeMs === stat.mtimeMs) continue;
-    entry.lastFileStat = { size: stat.size, mtimeMs: stat.mtimeMs };
-    let fileEntries = 0;
-    try {
-      fileEntries = countFileEntries(file);
-    } catch {
-      continue; // file not created yet (blank draft)
+    const nextStat = { ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs };
+    const previous = entry.lastFileStat;
+    if (!previous) {
+      // A draft's file was just created by this runtime; all entries are
+      // already in memory, so establish the append cursor without rereading.
+      entry.lastFileStat = nextStat;
+      continue;
     }
-    // More file entries than header(1) + in-memory entries → external append → reload
-    const memoryEntries = entry.runtime.session.sessionManager.getEntries().length + 1;
-    if (fileEntries > memoryEntries) {
+    if (
+      previous.ino === nextStat.ino &&
+      previous.size === nextStat.size &&
+      previous.mtimeMs === nextStat.mtimeMs
+    )
+      continue;
+    if (previous.ino !== nextStat.ino || nextStat.size <= previous.size) {
       void reloadEntry(entry).catch(() => {});
+      continue;
     }
+    void syncExternalAppend(entry, file, previous.size, nextStat).catch(() => {
+      void reloadEntry(entry).catch(() => {});
+    });
   }
 }, 1500).unref();
 
@@ -416,7 +567,9 @@ async function knownProjectRoots(): Promise<Set<string>> {
   const roots = new Set<string>([AGENT_CWD]);
   for (const entry of entries.values()) roots.add(entry.runtime.cwd);
   try {
-    for (const s of await SessionManager.listAll()) if (s.cwd) roots.add(s.cwd);
+    for (const session of await sessionSummaryIndex.list()) {
+      if (session.project.startsWith("/")) roots.add(session.project);
+    }
   } catch {
     /* keep the entry/AGENT_CWD roots */
   }
@@ -443,9 +596,14 @@ function buildSnapshot(entry: SessionEntry): UISnapshot {
   const session = entry.runtime.session;
   const model = session.model;
   const cwd = entry.runtime.cwd;
-  const messages = serializeMessages(session.messages);
+  const allMessages = serializeMessages(session.messages);
+  const messages = allMessages.slice(entry.snapshotMessageOffset);
   return {
     messages,
+    history: {
+      cursor: entry.historyCursor,
+      hasMore: entry.historyHasMore,
+    },
     isStreaming: session.isStreaming,
     model: model
       ? {
@@ -462,12 +620,54 @@ function buildSnapshot(entry: SessionEntry): UISnapshot {
     sessionId: entry.id,
     cwd,
     gitBranch: gitBranchAt(cwd),
-    activeTodo: getActiveTodo(messages),
+    activeTodo: getActiveTodo(allMessages),
+    activeTools: [...entry.activeTools].map(([toolCallId, toolName]) => ({
+      toolCallId,
+      toolName,
+    })),
   };
 }
 
-function broadcastSnapshot(entry: SessionEntry) {
-  broadcastTo(entry, { type: "snapshot", snapshot: buildSnapshot(entry) });
+function currentSnapshot(entry: SessionEntry): UISnapshot {
+  const snapshot = buildSnapshot(entry);
+  entry.lastSnapshot = snapshot;
+  return snapshot;
+}
+
+/** Send a complete baseline to a new/reconnected client without advancing it. */
+function sendFullSnapshot(entry: SessionEntry, ws: WebSocket) {
+  sendTo(ws, {
+    type: "snapshot",
+    seq: entry.eventSeq,
+    revision: entry.snapshotRevision,
+    snapshot: currentSnapshot(entry),
+  });
+}
+
+/** Replay a contiguous retained suffix, otherwise reset with a full baseline. */
+function sendEventsSince(entry: SessionEntry, ws: WebSocket, afterSeq: number): boolean {
+  const events = selectReplayEvents(entry.replayEvents, entry.eventSeq, afterSeq);
+  if (!events) {
+    sendFullSnapshot(entry, ws);
+    return false;
+  }
+  for (const event of events) sendTo(ws, event);
+  return true;
+}
+
+/**
+ * Replace only the changed suffix for clients already on this entry's current
+ * revision. Stable serializeMessages references make the common-prefix scan
+ * cheap, including the tool-result case where one older assistant message is
+ * rebuilt and everything before it remains shared.
+ */
+function broadcastSnapshot(entry: SessionEntry, override?: Partial<UISnapshot>) {
+  const previous = entry.lastSnapshot ?? buildSnapshot(entry);
+  const next = { ...buildSnapshot(entry), ...override };
+  const delta = createSnapshotDelta(previous, next, entry.snapshotRevision);
+  entry.snapshotRevision = delta.revision;
+  entry.lastSnapshot = next;
+  broadcastSessionEvent(entry, { type: "snapshot_delta", delta });
 }
 
 const BUILTIN_COMMANDS: UICommandInfo[] = [
@@ -622,7 +822,7 @@ function bindSession(entry: SessionEntry) {
   entry.unsubscribe?.();
   entry.unsubscribe = entry.runtime.session.subscribe((event) => {
     entry.lastActive = Date.now();
-    const broadcast = (e: ServerEvent) => broadcastTo(entry, e);
+    const broadcast = (event: SessionEventPayload) => broadcastSessionEvent(entry, event);
     switch (event.type) {
       case "message_update": {
         const e = event.assistantMessageEvent;
@@ -639,9 +839,11 @@ function bindSession(entry: SessionEntry) {
         broadcastSnapshot(entry);
         break;
       case "tool_execution_start":
+        entry.activeTools.set(event.toolCallId, event.toolName);
         broadcast({ type: "tool_start", toolCallId: event.toolCallId, toolName: event.toolName });
         break;
       case "tool_execution_end":
+        entry.activeTools.delete(event.toolCallId);
         broadcast({
           type: "tool_end",
           toolCallId: event.toolCallId,
@@ -654,11 +856,10 @@ function bindSession(entry: SessionEntry) {
         broadcast({ type: "agent_start" });
         break;
       case "agent_end": {
+        entry.activeTools.clear();
         broadcast({ type: "agent_end" });
-        // session.isStreaming can still be true right after agent_end — set it false explicitly
-        const snap = buildSnapshot(entry);
-        snap.isStreaming = false;
-        broadcast({ type: "snapshot", snapshot: snap });
+        // session.isStreaming can still be true right after agent_end — set it false explicitly.
+        broadcastSnapshot(entry, { isStreaming: false });
         break;
       }
     }
@@ -690,6 +891,12 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
   const runtime = entry.runtime;
   const session = runtime.session;
   switch (cmd.type) {
+    case "get_snapshot":
+      sendFullSnapshot(entry, ws);
+      return;
+    case "sync_events":
+      sendEventsSince(entry, ws, cmd.afterSeq);
+      return;
     case "prompt": {
       const text = cmd.text.trim();
       const images = (cmd.images ?? []).map((img) => ({
@@ -777,9 +984,8 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
     case "fork": {
       const result = await runtime.fork(cmd.entryId);
       if (result.cancelled) return;
-      bindSession(entry);
-      rekeyEntry(entry);
-      broadcastSnapshot(entry);
+      // AgentSessionRuntime's rebind callback has already refreshed the entry,
+      // history window, command catalog, and full snapshot baseline.
       sendTo(ws, { type: "forked", selectedText: result.selectedText });
       break;
     }
@@ -914,6 +1120,12 @@ async function bindWebExtensions(entry: SessionEntry) {
       },
       navigateTree: async (entryId, options) => {
         const result = await runtime.session.navigateTree(entryId, options);
+        if (!result.cancelled) {
+          refreshEntryFileState(entry);
+          const file = runtime.session.sessionFile;
+          if (file) sessionSummaryIndex.invalidate(file);
+          broadcastFullSnapshotReset(entry);
+        }
         return { cancelled: result.cancelled };
       },
       switchSession: (sessionPath, options) => runtime.switchSession(sessionPath, options),
@@ -930,10 +1142,13 @@ async function bindWebExtensions(entry: SessionEntry) {
 
 function installEntryRuntimeRebind(entry: SessionEntry) {
   entry.runtime.setRebindSession(async () => {
+    entry.activeTools.clear();
+    refreshEntryFileState(entry);
     await bindWebExtensions(entry);
     bindSession(entry);
     rekeyEntry(entry);
-    broadcastSnapshot(entry);
+    sessionSummaryIndex.invalidate();
+    broadcastFullSnapshotReset(entry);
     sendCommandCatalog(entry);
   });
 }
@@ -968,6 +1183,7 @@ async function deleteSession(id: string): Promise<{ ok: boolean; error?: string 
 
   try {
     unlinkSync(path);
+    sessionSummaryIndex.invalidate(path);
   } catch (err) {
     return { ok: false, error: `failed to delete file: ${String(err)}` };
   }
@@ -996,6 +1212,7 @@ async function renameSession(
       return { ok: false, error: `failed to rename: ${String(err)}` };
     }
   }
+  sessionSummaryIndex.invalidate(path);
   return { ok: true, name };
 }
 
@@ -1375,27 +1592,50 @@ const httpServer = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/sessions") {
-      const sessions = await SessionManager.listAll();
+      const sessions = await sessionSummaryIndex.list();
       // Which loaded runtimes are currently streaming (for the sidebar running dot)
       const streamingIds = new Set<string>();
       for (const entry of entries.values()) {
         if (entry.runtime.session.isStreaming) streamingIds.add(entry.id);
       }
-      const list: UISessionInfo[] = sessions
-        .sort((a, b) => b.modified.getTime() - a.modified.getTime())
-        .slice(0, 300)
-        .map((s) => ({
-          id: sessionIdOf(s.path),
-          path: s.path,
-          project: projectOf(s),
-          name: s.name,
-          firstMessage: s.firstMessage.slice(0, 200),
-          modified: s.modified.toISOString(),
-          messageCount: s.messageCount,
-          isStreaming: streamingIds.has(sessionIdOf(s.path)),
-        }));
+      const list: UISessionInfo[] = sessions.slice(0, 300).map((session) => ({
+        ...session,
+        project: projectOf({ cwd: session.project, path: session.path }),
+        isStreaming: streamingIds.has(session.id),
+      }));
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(list));
+      return;
+    }
+
+    const historyMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/history$/);
+    if (req.method === "GET" && historyMatch) {
+      const id = decodeURIComponent(historyMatch[1]!);
+      const path = await resolveSessionPath(id);
+      if (!path) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "session not found" }));
+        return;
+      }
+      try {
+        const cursor = url.searchParams.get("cursor") ?? undefined;
+        const loaded = entries.get(id);
+        const page = readSessionHistoryPage(path, {
+          cursor,
+          ...(!cursor && loaded
+            ? { leafId: loaded.runtime.session.sessionManager.getLeafId() }
+            : {}),
+        });
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+        });
+        res.end(JSON.stringify(page));
+      } catch (error) {
+        const invalidCursor = error instanceof Error && error.message === "invalid history cursor";
+        res.writeHead(invalidCursor ? 400 : 500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: invalidCursor ? "invalid history cursor" : "history read failed" }));
+      }
       return;
     }
 
@@ -1762,6 +2002,12 @@ wss.on("connection", (ws, req) => {
   const query = new URL(req.url ?? "/ws", "http://localhost").searchParams;
   const requested = query.get("session");
   const cwd = query.get("cwd") ?? undefined;
+  const sinceValue = query.get("since");
+  const parsedSince = sinceValue === null ? null : Number(sinceValue);
+  const since =
+    parsedSince !== null && Number.isSafeInteger(parsedSince) && parsedSince >= 0
+      ? parsedSince
+      : null;
   const queue: ClientCommand[] = [];
   let ready = false;
 
@@ -1786,7 +2032,45 @@ wss.on("connection", (ws, req) => {
     });
   });
 
-  acquireEntry(requested, cwd)
+  let preloaded = false;
+  const prepareEntry = async () => {
+    // A cold runtime switch synchronously parses the whole JSONL. Send a cheap
+    // tail page first, then yield once so the browser can paint while the SDK
+    // reconstructs the full agent context in the background.
+    if (requested && !entries.has(requested)) {
+      const path = await resolveSessionPath(requested);
+      if (path && ws.readyState === ws.OPEN) {
+        try {
+          const page = readSessionHistoryPage(path);
+          sendTo(ws, { type: "session_bound", sessionId: requested });
+          sendTo(ws, { type: "hello", version: PACKAGE_VERSION, updateNotes: RELEASE_NOTES });
+          sendTo(ws, {
+            type: "snapshot",
+            seq: 0,
+            revision: 0,
+            snapshot: {
+              messages: page.messages,
+              history: { cursor: page.cursor, hasMore: page.hasMore },
+              isStreaming: false,
+              model: null,
+              thinkingLevel: "off",
+              thinkingLevels: ["off"],
+              sessionFile: path,
+              sessionId: requested,
+            },
+          });
+          preloaded = true;
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        } catch {
+          // Fall through to the normal SDK baseline if the file changed while
+          // the tail page was being read.
+        }
+      }
+    }
+    return acquireEntry(requested, cwd);
+  };
+
+  prepareEntry()
     .then((entry) => {
       if (ws.readyState !== ws.OPEN) return;
       entry.clients.add(ws);
@@ -1794,11 +2078,14 @@ wss.on("connection", (ws, req) => {
       wsEntry.set(ws, entry);
       // Only existing (/s/:id) or already-published sessions bind immediately.
       // A `/` blank draft gets session_bound → URL rewrite on the first prompt.
-      if (entry.published || requested) {
+      if (!preloaded && (entry.published || requested)) {
         publishEntry(entry, ws);
       }
-      sendTo(ws, { type: "hello", version: PACKAGE_VERSION, updateNotes: RELEASE_NOTES });
-      sendTo(ws, { type: "snapshot", snapshot: buildSnapshot(entry) });
+      if (!preloaded) {
+        sendTo(ws, { type: "hello", version: PACKAGE_VERSION, updateNotes: RELEASE_NOTES });
+      }
+      if (preloaded || since === null) sendFullSnapshot(entry, ws);
+      else sendEventsSince(entry, ws, since);
       sendCommandCatalog(entry, ws);
       ready = true;
       for (const cmd of queue.splice(0)) {
