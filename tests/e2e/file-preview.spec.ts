@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const PROJECT_ROOT = "/tmp/pi-web-chat-file-preview-e2e/project";
+const MESSAGE_FILE_SESSION_ID = "e2e-file-links";
 
 async function login(page: Page) {
   await page.goto("/");
@@ -27,6 +28,22 @@ test("desktop file preview and @ reference are independent", async ({ page }) =>
   await expect(page.getByRole("tab", { name: "notes.txt" })).toHaveCount(0);
 });
 
+test("message file references use distinct links and open the file preview", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await login(page);
+  await page.goto(`/s/${MESSAGE_FILE_SESSION_ID}`);
+
+  const fileLink = page.getByRole("button", { name: "Preview README.md" });
+  const urlLink = page.getByRole("link", { name: "website" });
+  await expect(fileLink).toBeVisible();
+  await expect(fileLink).toHaveClass(/text-teal-700/);
+  await expect(urlLink).toBeVisible();
+  await expect(urlLink).not.toHaveClass(/text-teal-700/);
+
+  await fileLink.click();
+  await expect(page.getByRole("tab", { name: "README.md" })).toHaveAttribute("aria-selected", "true");
+});
+
 test("Git workspace shows changes and opens changed files in preview", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await login(page);
@@ -49,11 +66,14 @@ test("mobile commit detail is full-screen and expands one file diff at a time", 
   await expect(page.locator(`h2[title="${PROJECT_ROOT}"]`)).toHaveCount(0);
   await page.getByText("update preview files").click();
 
-  await expect(page.getByRole("heading", { name: "update preview files" })).toBeVisible();
-  await expect(page.getByText("README.md", { exact: true })).toBeVisible();
-  await expect(page.getByText("notes.txt", { exact: true })).toBeVisible();
+  await expect(page.locator("header h2")).toHaveText(/^[0-9a-f]{7}$/);
+  await expect(page.locator("pre").filter({ hasText: "update preview files" }).first()).toBeVisible();
+  const readmeDiff = page.locator('button[aria-expanded="false"]').filter({ hasText: "README.md" }).last();
+  const notesDiff = page.locator('button[aria-expanded="false"]').filter({ hasText: "notes.txt" }).last();
+  await expect(readmeDiff).toBeVisible();
+  await expect(notesDiff).toBeVisible();
   await expect(page.locator("[aria-expanded=true]")).toHaveCount(0);
-  await page.locator('button[aria-expanded="false"]').filter({ hasText: "README.md" }).last().click();
+  await readmeDiff.click();
   await expect(page.locator("[aria-expanded=true]")).toHaveCount(1);
   await expect(page.getByText("Changed in the working tree.", { exact: false })).toBeVisible();
   await page.getByRole("button", { name: "Back to Git" }).click();

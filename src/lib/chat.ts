@@ -747,6 +747,9 @@ export class ChatClient implements WorkspaceClient<ChatState> {
             ...this.state.activeTools,
             { toolCallId: event.toolCallId, toolName: event.toolName },
           ],
+          ...(event.activeTodo && this.state.snapshot
+            ? { snapshot: { ...this.state.snapshot, activeTodo: event.activeTodo } }
+            : {}),
         });
         break;
       case "tool_end":

@@ -57,8 +57,7 @@ export function MobileGitCommitDetail({
           <span aria-hidden>‹</span>
         </button>
         <div className="min-w-0 flex-1 px-2">
-          <h2 className="truncate text-sm font-medium text-ink" title={selection.subject}>{selection.subject}</h2>
-          <p className="truncate font-mono text-[10px] text-faint">{selection.hash}</p>
+          <h2 className="truncate font-mono text-sm font-semibold text-accent" title={selection.hash}>{selection.hash.slice(0, 7)}</h2>
         </div>
         <button
           type="button"

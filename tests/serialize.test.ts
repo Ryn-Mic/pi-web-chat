@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getActiveTodo, serializeMessages } from "../server/serialize.ts";
+import {
+  getActiveTodo,
+  getOptimisticActiveTodo,
+  serializeMessages,
+} from "../server/serialize.ts";
 
 function userMessage(text: string) {
   return { role: "user", content: [{ type: "text", text }] };
@@ -114,6 +118,37 @@ test("ANSI escapes are stripped and empty messages are dropped", () => {
   ]);
   assert.equal(out.length, 1);
   assert.equal(out[0]?.content[0]?.type === "text" ? out[0].content[0].text : "", "red plain");
+});
+
+test("todo update exposes the next active task before its result arrives", () => {
+  const tasks = [
+    { id: 1, subject: "one", status: "completed" },
+    { id: 2, subject: "two", status: "pending", activeForm: "old label" },
+  ];
+  const messages = serializeMessages([
+    assistantWithToolCall("c1", "todo", { action: "list" }),
+    toolResult("c1", "", { tasks }),
+  ]);
+
+  assert.deepEqual(
+    getOptimisticActiveTodo(messages, {
+      action: "update",
+      id: 2,
+      status: "in_progress",
+      activeForm: "doing two now",
+    }),
+    {
+      subject: "two",
+      activeForm: "doing two now",
+      status: "in_progress",
+      current: 2,
+      total: 2,
+    },
+  );
+  assert.equal(
+    getOptimisticActiveTodo(messages, { action: "update", id: 2, status: "completed" }),
+    undefined,
+  );
 });
 
 test("todo task lists survive the cache and feed getActiveTodo", () => {

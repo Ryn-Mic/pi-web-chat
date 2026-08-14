@@ -72,12 +72,15 @@ test("checkout refuses dirty worktrees and switches clean local branches", () =>
   assert.equal(status.branch, "main");
 });
 
-test("commit diff splits into file-sized patches and timestamps include seconds", () => {
+test("commit diff splits into file-sized patches and timestamps use yy/m/d", () => {
   const patches = splitCommitDiffByFile("diff --git a/one.txt b/one.txt\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/two.txt b/two.txt\n@@ -1 +1 @@\n-c\n+d");
   assert.equal(patches.length, 2);
   assert.match(patches[0]!, /one\.txt/);
   assert.match(patches[1]!, /two\.txt/);
-  assert.match(formatGitTimestamp("2026-08-13T12:34:56+08:00", "en-US"), /12:34:56/);
+  assert.match(
+    formatGitTimestamp("2026-08-13T12:34:56+08:00", "en-US"),
+    /^\d{2}\/\d{1,2}\/\d{1,2} \d{2}:\d{2}:\d{2}$/,
+  );
 });
 
 test("git root rejects a non-repository", () => {

@@ -1,10 +1,16 @@
 export function formatGitTimestamp(value: string, locale?: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(locale, {
-    dateStyle: "medium",
-    timeStyle: "medium",
+  const year = String(date.getFullYear() % 100).padStart(2, "0");
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const time = new Intl.DateTimeFormat(locale, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
   }).format(date);
+  return `${year}/${month}/${day} ${time}`;
 }
 
 /**

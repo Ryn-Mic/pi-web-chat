@@ -207,6 +207,51 @@ export function serializeMessages(messages: unknown[]): UIMessage[] {
   return out;
 }
 
+function latestTodoTasks(messages: UIMessage[]): UITodoTask[] | undefined {
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = messages[messageIndex];
+    if (message?.role !== "assistant") continue;
+    for (let blockIndex = message.content.length - 1; blockIndex >= 0; blockIndex -= 1) {
+      const block = message.content[blockIndex];
+      if (block?.type === "toolCall" && block.name === "todo" && block.result?.tasks?.length) {
+        return block.result.tasks;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Derive the next active task at tool start, before the todo result snapshot is
+ * available. Only an explicit transition to in_progress is optimistic; all
+ * other mutations wait for the authoritative details.tasks result.
+ */
+export function getOptimisticActiveTodo(
+  messages: UIMessage[],
+  args: unknown,
+): UIActiveTodo | undefined {
+  if (!args || typeof args !== "object") return undefined;
+  const input = args as { action?: unknown; id?: unknown; status?: unknown; activeForm?: unknown };
+  if (input.action !== "update" || input.status !== "in_progress" || typeof input.id !== "number") {
+    return undefined;
+  }
+
+  const tasks = latestTodoTasks(messages);
+  const current = tasks?.findIndex((task) => task.id === input.id) ?? -1;
+  const task = current >= 0 ? tasks?.[current] : undefined;
+  if (!task || !tasks) return undefined;
+  return {
+    subject: task.subject,
+    activeForm:
+      typeof input.activeForm === "string" && input.activeForm.trim()
+        ? input.activeForm
+        : task.activeForm,
+    status: "in_progress",
+    current: current + 1,
+    total: tasks.length,
+  };
+}
+
 /** Find the live or final completed task from the most recent todo snapshot. */
 export function getActiveTodo(messages: UIMessage[]): UIActiveTodo | undefined {
   for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {

@@ -358,7 +358,14 @@ export type ServerEvent =
   | { type: "delta"; seq: number; kind: "text" | "thinking"; delta: string }
   /** The agent closed its current reasoning block; keep it available but collapse it. */
   | { type: "thinking_end"; seq: number }
-  | { type: "tool_start"; seq: number; toolCallId: string; toolName: string }
+  | {
+      type: "tool_start";
+      seq: number;
+      toolCallId: string;
+      toolName: string;
+      /** Optimistic todo status derived from tool args before details.tasks arrives. */
+      activeTodo?: UIActiveTodo;
+    }
   | { type: "tool_end"; seq: number; toolCallId: string; toolName: string; isError: boolean }
   | { type: "agent_start"; seq: number }
   | { type: "agent_end"; seq: number }

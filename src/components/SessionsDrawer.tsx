@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UISessionInfo } from "../../shared/protocol";
 import { deleteSession, renameSession, useInvalidateSessions, useSessions } from "../lib/api";
+import { activityDotClass } from "../lib/activity";
 import { chatClient, useChat } from "../lib/chat";
 import { onRequestOpenSessionsDrawer } from "../lib/drawer";
 import { localeTag, useLocale, useT } from "../lib/i18n";
@@ -182,12 +183,11 @@ function SessionRow({
         title={`${title}\n${meta}`}
         className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 pl-2.5 text-left"
       >
-        {/* Running sessions get the same dot color as the header connection
-            indicator (emerald = connected/streaming) */}
+        {/* Persisted sessions use neutral gray when idle and green while running. */}
         <span
-          className={`size-2 shrink-0 rounded-full ${
-            session.isStreaming ? "bg-emerald-500/80 animate-pulse" : "bg-transparent"
-          }`}
+          className={`size-2 shrink-0 rounded-full ${activityDotClass(
+            session.isStreaming ? "running" : "idle",
+          )}`}
           aria-hidden
         />
         <ChatIcon />

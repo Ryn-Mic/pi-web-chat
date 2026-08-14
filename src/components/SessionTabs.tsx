@@ -1,4 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
+import { activityDotClass, connectionActivity } from "../lib/activity";
 import { chatClient, useChatTabs, type ChatTab } from "../lib/chat";
 import { useT } from "../lib/i18n";
 import { markFreshDraftRequested } from "../lib/resume";
@@ -65,15 +66,9 @@ export function SessionTabs() {
               className="flex min-w-0 items-center gap-1.5 px-2.5 py-1.5 text-left text-xs"
             >
               <span
-                className={`size-1.5 shrink-0 rounded-full ${
-                  running
-                    ? "animate-pulse bg-emerald-500/80"
-                    : tab.state.connection === "connected"
-                      ? "bg-emerald-500/50"
-                      : tab.state.connection === "connecting"
-                        ? "animate-pulse bg-amber-400"
-                        : "bg-red-500"
-                }`}
+                className={`size-1.5 shrink-0 rounded-full ${activityDotClass(
+                  connectionActivity(tab.state.connection, Boolean(running)),
+                )}`}
                 aria-hidden
               />
               <span className="truncate">{title}</span>

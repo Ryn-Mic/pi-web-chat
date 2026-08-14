@@ -141,7 +141,7 @@ function TreeNodeRow({
         title={node.path}
         aria-label={t("previewFile", { name: node.name })}
         aria-current={selected ? "true" : undefined}
-        className="flex min-h-11 min-w-0 flex-1 items-center gap-1.5 py-1.5 pr-1 text-left text-[13px]"
+        className="flex min-h-8 min-w-0 flex-1 items-center gap-1.5 py-1.5 pr-1 text-left text-[13px]"
       >
         <span className={`size-1.5 shrink-0 rounded-full ${selected ? "bg-accent" : "bg-transparent"}`} aria-hidden />
         <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
@@ -158,7 +158,7 @@ function TreeNodeRow({
         }}
         title={`@${node.path}`}
         aria-label={t("referenceFile", { name: node.name })}
-        className="flex size-11 shrink-0 items-center justify-center rounded-md text-xs font-medium text-faint transition-colors hover:bg-hover hover:text-ink"
+        className="flex size-8 shrink-0 items-center justify-center rounded-md text-xs font-medium text-faint transition-colors hover:bg-hover hover:text-ink"
       >
         @
       </button>

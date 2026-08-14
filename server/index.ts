@@ -31,6 +31,7 @@ import type {
   ServerEvent,
   UICustomModelsResponse,
   UICustomProvider,
+  UIActiveTodo,
   UIFileSearchResponse,
   UIModelDiscoveryRequest,
   UIExtensionInfo,
@@ -57,12 +58,13 @@ import {
   PreviewContextStore,
 } from "./preview-context.ts";
 import { readCustomModels, resolveIncomingApiKey, validateProviders, writeCustomModels } from "./models-config.ts";
-import { getActiveTodo, serializeMessages } from "./serialize.ts";
+import { getActiveTodo, getOptimisticActiveTodo, serializeMessages } from "./serialize.ts";
 import {
   AppendedJsonlDecoder,
   applyExternalSessionEntries,
 } from "./session-append.ts";
 import { readSessionHistoryPage } from "./session-history.ts";
+import { createCwdBoundCoreTools } from "./runtime-tools.ts";
 import { SessionSummaryIndex } from "./session-index.ts";
 import {
   checkoutGitBranch,
@@ -156,7 +158,12 @@ let modelRuntime = await ModelRuntime.create();
 const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
   const services = await createAgentSessionServices({ cwd });
   return {
-    ...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent })),
+    ...(await createAgentSessionFromServices({
+      services,
+      sessionManager,
+      sessionStartEvent,
+      customTools: createCwdBoundCoreTools(cwd, services.settingsManager),
+    })),
     services,
     diagnostics: services.diagnostics,
   };
@@ -208,6 +215,8 @@ interface SessionEntry {
   eventSeq: number;
   replayEvents: SequencedServerEvent[];
   activeTools: Map<string, string>;
+  /** In-progress todo updates visible before their tool result is appended. */
+  activeTodos: Map<string, UIActiveTodo>;
 }
 
 const entries = new Map<string, SessionEntry>();
@@ -361,6 +370,7 @@ async function createEntry(id: string | null, cwd?: string): Promise<SessionEntr
     eventSeq: 0,
     replayEvents: [],
     activeTools: new Map(),
+    activeTodos: new Map(),
   };
   refreshEntryFileState(entry);
   entry.lastSnapshot = buildSnapshot(entry);
@@ -421,6 +431,7 @@ async function reloadEntry(entry: SessionEntry): Promise<void> {
     await runtime.switchSession(file);
     entry.runtime = runtime;
     entry.activeTools.clear();
+    entry.activeTodos.clear();
     refreshEntryFileState(entry);
     bindSession(entry);
     await bindWebExtensions(entry);
@@ -620,7 +631,7 @@ function buildSnapshot(entry: SessionEntry): UISnapshot {
     sessionId: entry.id,
     cwd,
     gitBranch: gitBranchAt(cwd),
-    activeTodo: getActiveTodo(allMessages),
+    activeTodo: [...entry.activeTodos.values()].at(-1) ?? getActiveTodo(allMessages),
     activeTools: [...entry.activeTools].map(([toolCallId, toolName]) => ({
       toolCallId,
       toolName,
@@ -838,12 +849,27 @@ function bindSession(entry: SessionEntry) {
       case "message_end":
         broadcastSnapshot(entry);
         break;
-      case "tool_execution_start":
+      case "tool_execution_start": {
         entry.activeTools.set(event.toolCallId, event.toolName);
-        broadcast({ type: "tool_start", toolCallId: event.toolCallId, toolName: event.toolName });
+        const activeTodo =
+          event.toolName === "todo"
+            ? getOptimisticActiveTodo(
+                serializeMessages(entry.runtime.session.messages),
+                event.args,
+              )
+            : undefined;
+        if (activeTodo) entry.activeTodos.set(event.toolCallId, activeTodo);
+        broadcast({
+          type: "tool_start",
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          ...(activeTodo ? { activeTodo } : {}),
+        });
         break;
+      }
       case "tool_execution_end":
         entry.activeTools.delete(event.toolCallId);
+        entry.activeTodos.delete(event.toolCallId);
         broadcast({
           type: "tool_end",
           toolCallId: event.toolCallId,
@@ -857,6 +883,7 @@ function bindSession(entry: SessionEntry) {
         break;
       case "agent_end": {
         entry.activeTools.clear();
+        entry.activeTodos.clear();
         broadcast({ type: "agent_end" });
         // session.isStreaming can still be true right after agent_end — set it false explicitly.
         broadcastSnapshot(entry, { isStreaming: false });
@@ -1143,6 +1170,7 @@ async function bindWebExtensions(entry: SessionEntry) {
 function installEntryRuntimeRebind(entry: SessionEntry) {
   entry.runtime.setRebindSession(async () => {
     entry.activeTools.clear();
+    entry.activeTodos.clear();
     refreshEntryFileState(entry);
     await bindWebExtensions(entry);
     bindSession(entry);

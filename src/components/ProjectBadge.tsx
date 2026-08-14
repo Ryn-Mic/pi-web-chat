@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { UIActiveTodo } from "../../shared/protocol";
+import { activityDotClass } from "../lib/activity";
 
 /**
  * Compact project status badge for the header.
@@ -78,15 +79,13 @@ export function ActiveTodoBadge({
 }) {
   if (!todo) return null;
   const label = todo.activeForm ?? todo.subject;
-  const isCompleted = todo.status === "completed";
   const isPulsing = todo.status === "in_progress" && isStreaming;
+  const dotState = todo.status === "in_progress" ? "running" : "idle";
 
   return (
     <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden font-mono text-[10px] leading-none text-muted sm:text-xs">
       <span
-        className={`size-1.5 shrink-0 rounded-full ${isCompleted ? "bg-emerald-500" : "bg-accent"} ${
-          isPulsing ? "animate-pulse" : ""
-        }`}
+        className={`size-1.5 shrink-0 rounded-full ${activityDotClass(dotState, isPulsing)}`}
         aria-hidden
       />
       <ScrollingLabel label={label} />

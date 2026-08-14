@@ -307,6 +307,41 @@ test("ordinary state updates notify subscribers once per microtask", async () =>
   }
 });
 
+test("todo tool start exposes optimistic active status immediately", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, {
+      type: "snapshot",
+      revision: 0,
+      snapshot: {
+        messages: [],
+        isStreaming: true,
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+      },
+    });
+    emit(client, {
+      type: "tool_start",
+      toolCallId: "todo-1",
+      toolName: "todo",
+      activeTodo: {
+        subject: "Fix latency",
+        activeForm: "fixing latency",
+        status: "in_progress",
+        current: 2,
+        total: 3,
+      },
+    });
+
+    assert.equal(client.state.snapshot?.activeTodo?.subject, "Fix latency");
+    assert.equal(client.state.snapshot?.activeTodo?.activeForm, "fixing latency");
+    assert.equal(client.state.activeTools[0]?.toolCallId, "todo-1");
+  } finally {
+    restore();
+  }
+});
+
 test("the first delta of a stream is not held for a full flush window", async () => {
   const { client, restore } = createConnectedClient();
   try {

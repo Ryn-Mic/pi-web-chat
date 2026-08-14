@@ -146,11 +146,14 @@ function CommitSection({ commits, onSelect }: { commits: UIGitCommit[]; onSelect
       <div className="space-y-0.5">
         {commits.map((commit) => (
           <button key={commit.hash} type="button" onClick={(event) => onSelect(commit, event.currentTarget)} className="flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-hover" title={`${commit.hash} ${commit.subject}`}>
-            <span className="flex min-w-0 items-center gap-2 text-[11px]">
+            <span className="grid w-full min-w-0 grid-cols-[3.75rem_minmax(0,1fr)] gap-x-2 text-[11px]">
               <span className="shrink-0 font-mono text-accent">{commit.shortHash}</span>
               <span className="truncate text-muted">{commit.subject}</span>
             </span>
-            <span className="pl-12 text-[10px] text-faint">{commit.author} · {formatGitTimestamp(commit.date)}</span>
+            <span className="grid w-full min-w-0 grid-cols-[3.75rem_minmax(0,1fr)] gap-x-2 text-[10px] text-faint">
+              <span aria-hidden />
+              <span className="truncate">{commit.author} · {formatGitTimestamp(commit.date)}</span>
+            </span>
           </button>
         ))}
       </div>
@@ -195,13 +198,14 @@ export function CommitDiffFiles({ data }: { data: UIGitCommitDetail }) {
 
 export function GitCommitContent({ data }: { data: UIGitCommitDetail }) {
   const t = useT();
+  const message = data.body ? `${data.subject}\n\n${data.body}` : data.subject;
   return (
     <div className="space-y-3 text-xs text-muted">
+      <pre className="whitespace-pre-wrap font-sans text-ink">{message}</pre>
       <div>
         <p>{data.author} · {formatGitTimestamp(data.date)}</p>
         <p className="mt-1 break-all font-mono text-[10px] text-faint">{data.hash}</p>
       </div>
-      {data.body && <pre className="whitespace-pre-wrap font-sans">{data.body}</pre>}
       <h4 className="pt-1 text-[10px] font-semibold uppercase tracking-wider text-faint">{t("gitChangedFiles")}</h4>
       <CommitDiffFiles data={data} />
     </div>
@@ -218,8 +222,7 @@ function CommitDetail({ cwd, hash, onClose }: { cwd: string; hash: string; onClo
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
         <button type="button" onClick={onClose} aria-label={t("gitBackToLog")} title={t("gitBackToLog")} className="flex size-7 items-center justify-center rounded text-muted hover:bg-hover hover:text-ink">←</button>
         <div className="min-w-0 flex-1">
-          <h3 className="truncate text-sm font-semibold text-ink">{data.subject}</h3>
-          <p className="truncate font-mono text-[10px] text-faint">{formatGitTimestamp(data.date)}</p>
+          <h3 className="truncate font-mono text-sm font-semibold text-accent" title={data.hash}>{data.hash.slice(0, 7)}</h3>
         </div>
       </div>
       <div className="thin-scroll flex-1 overflow-y-auto p-3">

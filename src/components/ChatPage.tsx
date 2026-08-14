@@ -1,5 +1,6 @@
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { activityDotClass, connectionActivity } from "../lib/activity";
 import { chatClient, useChat } from "../lib/chat";
 import { requestOpenFilesDrawer, requestOpenSessionsDrawer } from "../lib/drawer";
 import { setFilesPanelOpen, useFilesPanelOpen } from "../lib/filetree";
@@ -17,7 +18,7 @@ import { Composer } from "./Composer";
 import { ExtensionUIHost } from "./ExtensionUIHost";
 import { FilesDrawer } from "./FileTreePanel";
 import { MobileGitCommitDetail, type MobileGitCommitSelection } from "./MobileGitCommitDetail";
-import { FileWorkspaceSidebar } from "./FileWorkspaceSidebar";
+import { FileWorkspaceSidebar, openWorkspacePreview } from "./FileWorkspaceSidebar";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { ProjectBadge } from "./ProjectBadge";
 import { MessageList } from "./MessageList";
@@ -34,17 +35,6 @@ function NewSessionIcon() {
       <path d="M12 5v14M5 12h14" strokeLinecap="round" />
     </svg>
   );
-}
-
-function connectionDotClass(connection: "connecting" | "connected" | "disconnected"): string {
-  switch (connection) {
-    case "connected":
-      return "bg-emerald-500/80";
-    case "connecting":
-      return "bg-amber-400 animate-pulse";
-    case "disconnected":
-      return "bg-red-500";
-  }
 }
 
 function connectionLabel(
@@ -167,6 +157,10 @@ export function ChatPage() {
   // overlay drawer below. aria-pressed only describes the desktop toggle, so
   // on mobile it stays unset (the drawer has no pressed state).
   const isDesktop = window.matchMedia("(min-width: 768px)").matches;
+  const previewMessageFile = useCallback((file: MobilePreviewSelection) => {
+    if (window.matchMedia("(min-width: 768px)").matches) openWorkspacePreview(file);
+    else setMobilePreview(file);
+  }, []);
 
   // #root is the flex/dvh shell; fill it (no position:fixed — iOS 26 safe).
   return (
@@ -191,7 +185,7 @@ export function ChatPage() {
               </span>
             )}
             <span
-              className={`size-1.5 shrink-0 rounded-full ${connectionDotClass(connection)}`}
+              className={`size-1.5 shrink-0 rounded-full ${activityDotClass(connectionActivity(connection, isStreaming))}`}
               title={connectionLabel(connection, t)}
               aria-label={connectionLabel(connection, t)}
             />
@@ -261,6 +255,8 @@ export function ChatPage() {
               historyLoading={historyLoading}
               onLoadOlder={() => chatClient.loadOlderMessages()}
               containerRef={messageListRef}
+              cwd={snapshot?.cwd}
+              onPreviewFile={previewMessageFile}
             />
             {updateAvailable && (
               <div

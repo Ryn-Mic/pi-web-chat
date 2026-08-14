@@ -7,7 +7,12 @@ import { useT } from "../lib/i18n";
 import { sameToolCallBlock, todoCallSummary, type ToolCallBlock } from "../lib/toolCall";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { DiffView } from "./DiffView";
-import { Markdown, streamdownPlugins } from "./Markdown";
+import {
+  Markdown,
+  PlainTextFileLinks,
+  streamdownPlugins,
+  type PreviewMessageFile,
+} from "./Markdown";
 import { Streamdown } from "streamdown";
 
 /** todo 工具: 状态 → 표시 색/심볼 */
@@ -306,9 +311,13 @@ function Thinking({
 function Blocks({
   blocks,
   markdown,
+  cwd,
+  onPreviewFile,
 }: {
   blocks: UIContentBlock[];
   markdown: boolean;
+  cwd?: string;
+  onPreviewFile?: PreviewMessageFile;
 }) {
   const t = useT();
   return (
@@ -317,10 +326,15 @@ function Blocks({
         switch (b.type) {
           case "text":
             return markdown ? (
-              <Markdown key={i} text={b.text} />
+              <Markdown
+                key={i}
+                text={b.text}
+                cwd={cwd}
+                onPreviewFile={onPreviewFile}
+              />
             ) : (
               <div key={i} className="whitespace-pre-wrap leading-relaxed">
-                {b.text}
+                <PlainTextFileLinks text={b.text} cwd={cwd} onPreviewFile={onPreviewFile} />
               </div>
             );
           case "thinking":
@@ -422,11 +436,15 @@ const Message = memo(function Message({
   message,
   index,
   isRoundSummary,
+  cwd,
+  onPreviewFile,
 }: {
   message: UIMessage;
   index?: number;
-  /** 本轮任务的总结消息 (最后一条 assistant 消息) — 展示复制按钮 */
+  /** This turn's final assistant message shows copy actions. */
   isRoundSummary: boolean;
+  cwd?: string;
+  onPreviewFile?: PreviewMessageFile;
 }) {
   const text = copyableText(message.content);
   if (message.role === "user") {
@@ -436,7 +454,7 @@ const Message = memo(function Message({
         data-msg-index={index}
       >
         <div className="user-bubble relative min-w-0 max-w-[85%] break-words rounded-2xl bg-bubble px-4 py-2.5 whitespace-pre-wrap text-ink sm:max-w-[75%]">
-          <div className="chat-message-text"><Blocks blocks={message.content} markdown={false} /></div>
+          <div className="chat-message-text"><Blocks blocks={message.content} markdown={false} cwd={cwd} onPreviewFile={onPreviewFile} /></div>
         </div>
         {text && (
           <MessageActions
@@ -449,7 +467,7 @@ const Message = memo(function Message({
   }
   return (
     <div className="group/message min-w-0">
-      <div className="chat-message-text min-w-0"><Blocks blocks={message.content} markdown /></div>
+      <div className="chat-message-text min-w-0"><Blocks blocks={message.content} markdown cwd={cwd} onPreviewFile={onPreviewFile} /></div>
       {message.errorMessage && (
         <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600 dark:border-red-900 dark:bg-red-950/50 dark:text-red-400">
           {message.errorMessage}
@@ -472,6 +490,8 @@ export function MessageList({
   historyLoading,
   onLoadOlder,
   containerRef,
+  cwd,
+  onPreviewFile,
 }: {
   messages: UIMessage[];
   streamText: string;
@@ -484,6 +504,8 @@ export function MessageList({
   onLoadOlder: () => Promise<boolean>;
   /** Scroll container (owned externally for message-anchor jumps) */
   containerRef: React.RefObject<HTMLDivElement | null>;
+  cwd?: string;
+  onPreviewFile?: PreviewMessageFile;
 }) {
   const t = useT();
   const chatFontSize = useChatFontSize();
@@ -575,6 +597,8 @@ export function MessageList({
               message={m}
               index={m.role === "user" ? i : undefined}
               isRoundSummary={isRoundSummary(i)}
+              cwd={cwd}
+              onPreviewFile={onPreviewFile}
             />
           ))}
           {streamThinking && (
@@ -587,7 +611,12 @@ export function MessageList({
           {streamText && (
             <div className="chat-message-text min-w-0">
               {/* Streamdown handles incomplete markdown natively — no manual escaping */}
-              <Markdown text={streamText} streaming />
+              <Markdown
+                text={streamText}
+                streaming
+                cwd={cwd}
+                onPreviewFile={onPreviewFile}
+              />
             </div>
           )}
           {activeTools.map((tool) => (
