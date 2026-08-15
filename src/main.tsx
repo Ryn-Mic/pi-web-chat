@@ -12,6 +12,7 @@ import { ChatPage } from "./components/ChatPage";
 import { LoginPage } from "./components/LoginPage";
 import { LoadingIndicator } from "./components/LoadingIndicator";
 import { checkAuth, useAuthStatus } from "./lib/auth";
+import { installChunkLoadRecovery } from "./lib/chunk-recovery";
 import { initLocale, t } from "./lib/i18n";
 import { initTheme } from "./lib/theme";
 import { initViewportLock } from "./lib/viewport";
@@ -74,6 +75,7 @@ function AuthGate() {
 initViewportLock();
 initTheme();
 initLocale();
+installChunkLoadRecovery();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
