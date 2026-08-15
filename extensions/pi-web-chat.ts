@@ -30,6 +30,7 @@ const TOKEN_FILE = join(STATE_DIR, "token");
 const DEFAULT_PORT = "3141";
 const DEFAULT_HOST = "127.0.0.1";
 const LAN_HOST = "0.0.0.0";
+const MANAGED_DAEMON_ENV = "PI_WEB_DAEMON_MANAGED";
 
 type StartResult =
   | { ok: true; port: string; host: string; already: boolean; pid: number }
@@ -186,6 +187,7 @@ function startServer(port: string, host: string, token?: string): StartResult {
       ...process.env,
       PORT: port,
       HOST: host,
+      [MANAGED_DAEMON_ENV]: "1",
       ...(token ? { PI_WEB_TOKEN: token } : {}),
     },
     detached: true,
@@ -440,7 +442,7 @@ function defaultHost(): string {
 }
 
 /** Parse port/host tokens shared by `pi --web ...` and `/web ...`. */
-function parseWebOptions(
+export function parseWebOptions(
   tokens: string[],
   defaults: { port: string; host: string } = {
     port: defaultPort(),
@@ -487,32 +489,32 @@ function parseWebOptions(
       continue;
     }
 
-    if (token === "--lan" || token === "--public" || token === "lan" || token === "public") {
+    if (arg === "--lan" || arg === "--public" || arg === "lan" || arg === "public") {
       host = LAN_HOST;
       hostExplicit = true;
       continue;
     }
 
-    if (token === "--host" || token === "-H" || token === "host") {
+    if (arg === "--host" || arg === "-H" || arg === "host") {
       const value = tokens[++i];
       if (!value || value.startsWith("-")) {
-        return { error: `${token} requires an address (e.g. 0.0.0.0)` };
+        return { error: `${arg} requires an address (e.g. 0.0.0.0)` };
       }
       host = value;
       hostExplicit = true;
       continue;
     }
 
-    if (token.startsWith("--host=")) {
-      const value = token.slice("--host=".length);
+    if (arg.startsWith("--host=")) {
+      const value = arg.slice("--host=".length);
       if (!value) return { error: "--host requires an address (e.g. 0.0.0.0)" };
       host = value;
       hostExplicit = true;
       continue;
     }
 
-    if (token.startsWith("-H=")) {
-      const value = token.slice("-H=".length);
+    if (arg.startsWith("-H=")) {
+      const value = arg.slice("-H=".length);
       if (!value) return { error: "-H requires an address (e.g. 0.0.0.0)" };
       host = value;
       hostExplicit = true;

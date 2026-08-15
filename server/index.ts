@@ -7,7 +7,6 @@ import {
   readSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createServer, type IncomingMessage } from "node:http";
@@ -49,6 +48,7 @@ import type {
 } from "../shared/protocol.ts";
 import { createSnapshotDelta } from "../shared/snapshot.ts";
 import { auth, authStartupInfo } from "./auth.ts";
+import { writeManagedDaemonState } from "./daemon-state.ts";
 import { selectReplayEvents } from "./event-replay.ts";
 import { handleDesktopFileContent, streamStaticFile } from "./file-content.ts";
 import { listDir, PathEscapeError, searchFiles } from "./files.ts";
@@ -2179,14 +2179,15 @@ httpServer.listen(PORT, HOST, () => {
     `pi-web-chat server: http://${displayHost}:${PORT}  (bind ${HOST}, chat cwd: ${AGENT_CWD})`,
   );
 
-  // The extension writes pid/port/host right after spawning; overwrite them
-  // here (after a successful bind) to avoid a stale pid from a port-conflict
-  // crash lingering and looping the next start.
+  // Only a managed `pi --web` daemon owns the shared pid/port/host files.
+  // Source/dev servers can bind any other port without changing what a later
+  // `pi --web status|restart` considers the production service.
   try {
-    mkdirSync(DAEMON_STATE_DIR, { recursive: true });
-    writeFileSync(join(DAEMON_STATE_DIR, "pi-web-chat.pid"), `${process.pid}\n`, "utf8");
-    writeFileSync(join(DAEMON_STATE_DIR, "pi-web-chat.port"), `${PORT}\n`, "utf8");
-    writeFileSync(join(DAEMON_STATE_DIR, "pi-web-chat.host"), `${HOST}\n`, "utf8");
+    writeManagedDaemonState(DAEMON_STATE_DIR, {
+      pid: process.pid,
+      port: PORT,
+      host: HOST,
+    });
   } catch {
     /* state files are auxiliary — the server still works without them */
   }
@@ -2201,10 +2202,21 @@ httpServer.listen(PORT, HOST, () => {
   }
 });
 
-// Flush sessions (login state) to disk on restart
-process.on("SIGTERM", () => {
+let shuttingDown = false;
+
+// Flush login state, close live sockets, and restore the signal's expected
+// behavior. Registering a signal listener suppresses Node's default exit, so
+// merely flushing here would leave dev servers running after Ctrl-C.
+function shutDown(): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
   auth.flushSessions();
-});
-process.on("SIGINT", () => {
-  auth.flushSessions();
-});
+  for (const client of wss.clients) client.terminate();
+  wss.close();
+  httpServer.close(() => process.exit(0));
+  httpServer.closeAllConnections();
+  setTimeout(() => process.exit(0), 1_000).unref();
+}
+
+process.once("SIGTERM", shutDown);
+process.once("SIGINT", shutDown);
