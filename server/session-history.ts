@@ -1,6 +1,6 @@
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import type { UIHistoryPage } from "../shared/protocol.ts";
-import { serializeMessages } from "./serialize.ts";
+import { recordSessionMessageCompletions, serializeMessages } from "./serialize.ts";
 
 const READ_CHUNK_BYTES = 64 * 1024;
 const DEFAULT_PAGE_MESSAGES = 50;
@@ -10,6 +10,7 @@ type SessionEntry = {
   type: string;
   id?: string;
   parentId?: string | null;
+  timestamp?: string;
   message?: unknown;
 };
 
@@ -149,8 +150,9 @@ export function readSessionHistoryPage(
       }
     }
 
-    const messages = branchEntries
-      .reverse()
+    const orderedEntries = branchEntries.reverse();
+    recordSessionMessageCompletions(orderedEntries);
+    const messages = orderedEntries
       .filter((entry) => entry.type === "message")
       .map((entry) => entry.message);
     // Only expose another page when this read stopped deliberately at its

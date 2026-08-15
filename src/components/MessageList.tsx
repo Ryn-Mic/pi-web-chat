@@ -5,6 +5,11 @@ import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
 import { buildEditDiffFromArgs, isUnifiedDiff } from "../lib/diff";
 import { useT } from "../lib/i18n";
 import { sameToolCallBlock, todoCallSummary, type ToolCallBlock } from "../lib/toolCall";
+import {
+  formatTurnCompletedAt,
+  isAssistantTurnComplete,
+  splitAssistantTurnCompletion,
+} from "../lib/turn-completion";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { DiffView } from "./DiffView";
 import {
@@ -432,21 +437,61 @@ function MessageActions({ text, onReuse }: { text: string; onReuse?: () => void 
   );
 }
 
+function AssistantTurnFooter({
+  text,
+  summary,
+  completedAt,
+}: {
+  text: string;
+  summary?: string;
+  completedAt?: number;
+}) {
+  const completedLabel =
+    typeof completedAt === "number" ? formatTurnCompletedAt(completedAt) : "";
+  const completedDateTime =
+    completedLabel && typeof completedAt === "number"
+      ? new Date(completedAt).toISOString()
+      : undefined;
+  return (
+    <div className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-faint">
+      <div className="shrink-0">
+        <CopyButton text={text} />
+      </div>
+      {summary && (
+        <span className="min-w-0 truncate" title={summary}>
+          {summary}
+        </span>
+      )}
+      {completedLabel && completedDateTime && (
+        <time
+          className="ml-auto shrink-0 font-mono text-[11px] tabular-nums"
+          dateTime={completedDateTime}
+        >
+          {completedLabel}
+        </time>
+      )}
+    </div>
+  );
+}
+
 const Message = memo(function Message({
   message,
   index,
-  isRoundSummary,
+  isTurnComplete,
   cwd,
   onPreviewFile,
 }: {
   message: UIMessage;
   index?: number;
-  /** This turn's final assistant message shows copy actions. */
-  isRoundSummary: boolean;
+  /** Only a settled turn shows assistant completion metadata and copy. */
+  isTurnComplete: boolean;
   cwd?: string;
   onPreviewFile?: PreviewMessageFile;
 }) {
-  const text = copyableText(message.content);
+  const completion =
+    message.role === "assistant" ? splitAssistantTurnCompletion(message.content) : null;
+  const content = completion?.content ?? message.content;
+  const text = copyableText(content);
   if (message.role === "user") {
     return (
       <div
@@ -467,14 +512,18 @@ const Message = memo(function Message({
   }
   return (
     <div className="group/message min-w-0">
-      <div className="chat-message-text min-w-0"><Blocks blocks={message.content} markdown cwd={cwd} onPreviewFile={onPreviewFile} /></div>
+      <div className="chat-message-text min-w-0"><Blocks blocks={content} markdown cwd={cwd} onPreviewFile={onPreviewFile} /></div>
       {message.errorMessage && (
         <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600 dark:border-red-900 dark:bg-red-950/50 dark:text-red-400">
           {message.errorMessage}
         </div>
       )}
-      {isRoundSummary && text && (
-        <MessageActions text={text} />
+      {isTurnComplete && text && (
+        <AssistantTurnFooter
+          text={text}
+          summary={completion?.summary}
+          completedAt={message.completedAt ?? message.timestamp}
+        />
       )}
     </div>
   );
@@ -509,13 +558,6 @@ export function MessageList({
 }) {
   const t = useT();
   const chatFontSize = useChatFontSize();
-  // 一轮任务以 user 消息为界; 每个 user 消息后的最后一条 assistant 消息就是该轮总结
-  const isRoundSummary = (i: number): boolean => {
-    const m = messages[i];
-    if (!m || m.role !== "assistant") return false;
-    const next = messages[i + 1];
-    return next === undefined || next.role === "user";
-  };
   const stickToBottom = useRef(true);
   const chatStyle = {
     "--chat-font-size": `${chatFontSizePixels(chatFontSize)}px`,
@@ -596,7 +638,7 @@ export function MessageList({
               key={i}
               message={m}
               index={m.role === "user" ? i : undefined}
-              isRoundSummary={isRoundSummary(i)}
+              isTurnComplete={isAssistantTurnComplete(messages, i, isStreaming)}
               cwd={cwd}
               onPreviewFile={onPreviewFile}
             />

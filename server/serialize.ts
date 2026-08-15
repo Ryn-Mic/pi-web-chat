@@ -36,6 +36,31 @@ type CachedMessage = {
 /** Serialized UI messages, keyed on the source message. */
 const uiBySource = new WeakMap<object, CachedMessage>();
 
+/** True message completion times, including timestamps restored from session entries. */
+const completedAtBySource = new WeakMap<object, number>();
+
+export function recordMessageCompletion(message: unknown, completedAt = Date.now()): void {
+  if (!message || typeof message !== "object" || !Number.isFinite(completedAt)) return;
+  completedAtBySource.set(message, completedAt);
+  // message_end can arrive after an earlier snapshot serialized this object.
+  uiBySource.delete(message);
+}
+
+export function recordSessionMessageCompletions(entries: unknown[]): void {
+  for (const value of entries) {
+    if (!value || typeof value !== "object") continue;
+    const entry = value as { type?: unknown; timestamp?: unknown; message?: unknown };
+    if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") continue;
+    const completedAt =
+      typeof entry.timestamp === "number"
+        ? entry.timestamp
+        : typeof entry.timestamp === "string"
+          ? Date.parse(entry.timestamp)
+          : Number.NaN;
+    recordMessageCompletion(entry.message, completedAt);
+  }
+}
+
 /** Strip ANSI escape sequences (color/style codes left by extensions like pi-claude-code-ui) */
 function stripAnsi(text: string): string {
   // SGR/cursor control: ESC [ ... (terminator a-zA-Z or @~)
@@ -151,6 +176,7 @@ function serializeMessage(
       content: blocks,
       errorMessage: typeof m.errorMessage === "string" ? m.errorMessage : undefined,
       timestamp: typeof m.timestamp === "number" ? m.timestamp : undefined,
+      completedAt: completedAtBySource.get(m),
     };
   }
 

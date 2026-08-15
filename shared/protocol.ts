@@ -45,6 +45,8 @@ export interface UIMessage {
   errorMessage?: string;
   /** Message creation time in Unix milliseconds. */
   timestamp?: number;
+  /** Assistant message completion time in Unix milliseconds. */
+  completedAt?: number;
 }
 
 export interface UIModel {

@@ -3,6 +3,8 @@ import { test } from "node:test";
 import {
   getActiveTodo,
   getOptimisticActiveTodo,
+  recordMessageCompletion,
+  recordSessionMessageCompletions,
   serializeMessages,
 } from "../server/serialize.ts";
 
@@ -118,6 +120,32 @@ test("ANSI escapes are stripped and empty messages are dropped", () => {
   ]);
   assert.equal(out.length, 1);
   assert.equal(out[0]?.content[0]?.type === "text" ? out[0].content[0].text : "", "red plain");
+});
+
+test("assistant completion time invalidates an earlier cached serialization", () => {
+  const assistant = { role: "assistant", content: [{ type: "text", text: "done" }] };
+  const before = serializeMessages([assistant]);
+  assert.equal(before[0]?.completedAt, undefined);
+
+  recordMessageCompletion(assistant, 1_786_331_830_345);
+  const after = serializeMessages([assistant]);
+
+  assert.notEqual(after[0], before[0]);
+  assert.equal(after[0]?.completedAt, 1_786_331_830_345);
+});
+
+test("assistant completion time is restored from a persisted session entry", () => {
+  const assistant = { role: "assistant", content: [{ type: "text", text: "done" }] };
+  recordSessionMessageCompletions([
+    {
+      type: "message",
+      timestamp: "2026-08-14T09:05:07.000Z",
+      message: assistant,
+    },
+  ]);
+
+  const out = serializeMessages([assistant]);
+  assert.equal(out[0]?.completedAt, Date.parse("2026-08-14T09:05:07.000Z"));
 });
 
 test("todo update exposes the next active task before its result arrives", () => {

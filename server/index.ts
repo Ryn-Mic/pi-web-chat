@@ -58,7 +58,13 @@ import {
   PreviewContextStore,
 } from "./preview-context.ts";
 import { readCustomModels, resolveIncomingApiKey, validateProviders, writeCustomModels } from "./models-config.ts";
-import { getActiveTodo, getOptimisticActiveTodo, serializeMessages } from "./serialize.ts";
+import {
+  getActiveTodo,
+  getOptimisticActiveTodo,
+  recordMessageCompletion,
+  recordSessionMessageCompletions,
+  serializeMessages,
+} from "./serialize.ts";
 import {
   AppendedJsonlDecoder,
   applyExternalSessionEntries,
@@ -352,6 +358,7 @@ async function createEntry(id: string | null, cwd?: string): Promise<SessionEntr
     sessionManager: SessionManager.create(sessionCwd),
   });
   if (path) await runtime.switchSession(path);
+  recordSessionMessageCompletions(runtime.session.sessionManager.getEntries());
   const entry: SessionEntry = {
     id: sessionIdOf(runtime.session.sessionFile),
     runtime,
@@ -429,6 +436,7 @@ async function reloadEntry(entry: SessionEntry): Promise<void> {
       sessionManager: SessionManager.create(AGENT_CWD),
     });
     await runtime.switchSession(file);
+    recordSessionMessageCompletions(runtime.session.sessionManager.getEntries());
     entry.runtime = runtime;
     entry.activeTools.clear();
     entry.activeTodos.clear();
@@ -479,6 +487,7 @@ async function syncExternalAppend(
       return;
     }
     if (result.status === "applied") {
+      recordSessionMessageCompletions(entry.runtime.session.sessionManager.getEntries());
       broadcastSnapshot(entry);
       sessionSummaryIndex.invalidate(file);
     }
@@ -847,6 +856,7 @@ function bindSession(entry: SessionEntry) {
         break;
       }
       case "message_end":
+        recordMessageCompletion(event.message);
         broadcastSnapshot(entry);
         break;
       case "tool_execution_start": {
@@ -1171,6 +1181,7 @@ function installEntryRuntimeRebind(entry: SessionEntry) {
   entry.runtime.setRebindSession(async () => {
     entry.activeTools.clear();
     entry.activeTodos.clear();
+    recordSessionMessageCompletions(entry.runtime.session.sessionManager.getEntries());
     refreshEntryFileState(entry);
     await bindWebExtensions(entry);
     bindSession(entry);
