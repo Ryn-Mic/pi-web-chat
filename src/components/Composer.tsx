@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { UIImageAttachment } from "../../shared/protocol";
+import type { UIImageAttachment, UIMessage, UIMessageAnchor } from "../../shared/protocol";
 import { chatClient, useChat } from "../lib/chat";
 import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
 import { getComposerDraft, setComposerDraft } from "../lib/composer-drafts";
@@ -64,10 +64,25 @@ async function fileToImage(file: File): Promise<PendingImage | null> {
 
 export function Composer({
   isStreaming,
+  sessionId,
+  messages,
+  historyHasMore,
+  historyLoading,
+  onLoadMessageAnchors,
+  onLoadHistoryThroughUserMessage,
   containerRef,
   tabKey,
 }: {
   isStreaming: boolean;
+  sessionId: string | null;
+  messages: UIMessage[];
+  historyHasMore: boolean;
+  historyLoading: boolean;
+  onLoadMessageAnchors: () => Promise<UIMessageAnchor[] | null>;
+  onLoadHistoryThroughUserMessage: (
+    ordinal: number,
+    totalUserMessages: number,
+  ) => Promise<boolean>;
   containerRef: React.RefObject<HTMLDivElement | null>;
   tabKey: string;
 }) {
@@ -474,7 +489,12 @@ export function Composer({
               {hasContext && <ContextRing percent={contextPercent} />}
             </span>
             <MessageAnchors
-              messages={snapshot?.messages ?? []}
+              sessionId={sessionId}
+              messages={messages}
+              historyHasMore={historyHasMore}
+              historyLoading={historyLoading}
+              onLoadMessageAnchors={onLoadMessageAnchors}
+              onLoadHistoryThroughUserMessage={onLoadHistoryThroughUserMessage}
               containerRef={containerRef}
               compact
             />

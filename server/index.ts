@@ -70,6 +70,7 @@ import {
   applyExternalSessionEntries,
 } from "./session-append.ts";
 import { readSessionHistoryPage } from "./session-history.ts";
+import { createSessionUserMessageAnchors } from "./session-anchors.ts";
 import { createCwdBoundCoreTools } from "./runtime-tools.ts";
 import { SessionSummaryIndex } from "./session-index.ts";
 import {
@@ -1674,6 +1675,31 @@ const httpServer = createServer(async (req, res) => {
         const invalidCursor = error instanceof Error && error.message === "invalid history cursor";
         res.writeHead(invalidCursor ? 400 : 500, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: invalidCursor ? "invalid history cursor" : "history read failed" }));
+      }
+      return;
+    }
+
+    const anchorsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/anchors$/);
+    if (req.method === "GET" && anchorsMatch) {
+      const id = decodeURIComponent(anchorsMatch[1]!);
+      const path = await resolveSessionPath(id);
+      if (!path) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "session not found" }));
+        return;
+      }
+      try {
+        const loaded = entries.get(id);
+        const manager = loaded?.runtime.session.sessionManager ?? SessionManager.open(path);
+        const anchors = createSessionUserMessageAnchors(manager.getBranch());
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+        });
+        res.end(JSON.stringify({ anchors }));
+      } catch {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "message anchor read failed" }));
       }
       return;
     }

@@ -571,6 +571,101 @@ test("prepends an older history page and advances its cursor", async () => {
   }
 });
 
+test("fetches lightweight message anchors without loading transcript pages", async () => {
+  const previousFetch = globalThis.fetch;
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, { type: "session_bound", sessionId: "session-a" });
+    emit(client, {
+      type: "snapshot",
+      revision: 0,
+      snapshot: {
+        messages: [{ role: "assistant", content: [{ type: "text", text: "latest" }] }],
+        history: { cursor: "cursor-2", hasMore: true },
+        isStreaming: false,
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+      },
+    });
+    let requested = "";
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      requested = String(url);
+      return new Response(
+        JSON.stringify({
+          anchors: [
+            { id: "u1", ordinal: 1, text: "oldest" },
+            { id: "u2", ordinal: 2, text: "latest" },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    assert.deepEqual(await client.loadMessageAnchors(), [
+      { id: "u1", ordinal: 1, text: "oldest" },
+      { id: "u2", ordinal: 2, text: "latest" },
+    ]);
+    assert.match(requested, /session-a\/anchors$/);
+    assert.deepEqual(client.state.historicalMessages, []);
+    assert.equal(client.state.historyHasMore, true);
+  } finally {
+    globalThis.fetch = previousFetch;
+    restore();
+  }
+});
+
+test("loads history only through the selected user-message page", async () => {
+  const previousFetch = globalThis.fetch;
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, { type: "session_bound", sessionId: "session-a" });
+    emit(client, {
+      type: "snapshot",
+      revision: 0,
+      snapshot: {
+        messages: [
+          { role: "user", content: [{ type: "text", text: "latest" }] },
+          { role: "assistant", content: [{ type: "text", text: "latest answer" }] },
+        ],
+        history: { cursor: "cursor-2", hasMore: true },
+        isStreaming: false,
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+      },
+    });
+    const requested: string[] = [];
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const value = String(url);
+      requested.push(value);
+      if (!value.includes("cursor=cursor-2")) {
+        throw new Error(`unexpected extra history request: ${value}`);
+      }
+      return new Response(
+        JSON.stringify({
+          messages: [
+            { role: "user", content: [{ type: "text", text: "middle" }] },
+            { role: "assistant", content: [{ type: "text", text: "middle answer" }] },
+          ],
+          cursor: "cursor-1",
+          hasMore: true,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    assert.equal(await client.loadHistoryThroughUserMessage(2, 3), true);
+    assert.equal(requested.length, 1);
+    assert.equal(client.state.historicalMessages[0]?.content[0]?.text, "middle");
+    assert.equal(client.state.historyCursor, "cursor-1");
+    assert.equal(client.state.historyHasMore, true, "the oldest page remains unloaded");
+  } finally {
+    globalThis.fetch = previousFetch;
+    restore();
+  }
+});
+
 test("ignores an older history response after switching sessions", async () => {
   const previousFetch = globalThis.fetch;
   const { client, restore } = createConnectedClient();

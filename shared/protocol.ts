@@ -76,6 +76,22 @@ export interface UIHistoryPage extends UIHistoryState {
   messages: UIMessage[];
 }
 
+/** Lightweight persisted user-message metadata used by the jump navigator. */
+export interface UIMessageAnchor {
+  /** Stable session entry id. */
+  id: string;
+  /** One-based position among user messages on the active branch. */
+  ordinal: number;
+  /** Collapsed text preview; message bodies remain in paged history. */
+  text: string;
+  /** Session entry time in Unix milliseconds. */
+  timestamp?: number;
+}
+
+export interface UIMessageAnchorsResponse {
+  anchors: UIMessageAnchor[];
+}
+
 export interface UISnapshot {
   messages: UIMessage[];
   /** Older messages are loaded separately so live snapshot offsets stay stable. */

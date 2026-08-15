@@ -1,5 +1,5 @@
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { activityDotClass, connectionActivity } from "../lib/activity";
 import { chatClient, useChat } from "../lib/chat";
 import { requestOpenFilesDrawer, requestOpenSessionsDrawer } from "../lib/drawer";
@@ -76,6 +76,20 @@ export function ChatPage() {
   } =
     useChat();
   const isStreaming = snapshot?.isStreaming ?? false;
+  const persistedMessages = useMemo(
+    () => [...historicalMessages, ...(snapshot?.messages ?? [])],
+    [historicalMessages, snapshot?.messages],
+  );
+  const messages = useMemo(
+    () => [...persistedMessages, ...optimisticMessages],
+    [optimisticMessages, persistedMessages],
+  );
+  const loadMessageAnchors = useCallback(() => chatClient.loadMessageAnchors(), []);
+  const loadHistoryThroughUserMessage = useCallback(
+    (ordinal: number, totalUserMessages: number) =>
+      chatClient.loadHistoryThroughUserMessage(ordinal, totalUserMessages),
+    [],
+  );
   const activeTabKey = chatClient.activeTabKey ?? "unbound";
   const sidebarPinned = useSidebarPinned();
   const showConnectingOverlay = connection !== "connected" && !snapshot;
@@ -241,11 +255,7 @@ export function ChatPage() {
         ) : (
           <>
             <MessageList
-              messages={[
-                ...historicalMessages,
-                ...(snapshot?.messages ?? []),
-                ...optimisticMessages,
-              ]}
+              messages={messages}
               streamText={streamText}
               streamThinking={streamThinking}
               streamThinkingComplete={streamThinkingComplete}
@@ -327,6 +337,12 @@ export function ChatPage() {
               key={activeTabKey}
               tabKey={activeTabKey}
               isStreaming={isStreaming}
+              sessionId={sessionId}
+              messages={persistedMessages}
+              historyHasMore={historyHasMore}
+              historyLoading={historyLoading}
+              onLoadMessageAnchors={loadMessageAnchors}
+              onLoadHistoryThroughUserMessage={loadHistoryThroughUserMessage}
               containerRef={messageListRef}
             />
           </>

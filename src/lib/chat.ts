@@ -7,6 +7,8 @@ import type {
   UIExtensionUIRequest,
   UIExtensionUIResponse,
   UIHistoryPage,
+  UIMessageAnchor,
+  UIMessageAnchorsResponse,
   UIMessage,
   UISnapshot,
 } from "../../shared/protocol";
@@ -533,6 +535,63 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     }
   }
 
+  /** Fetch lightweight user-message metadata without loading transcript pages. */
+  async loadMessageAnchors(): Promise<UIMessageAnchor[] | null> {
+    const sessionId = this.state.sessionId;
+    if (!sessionId) return [];
+    try {
+      const response = await fetch(
+        `/api/sessions/${encodeURIComponent(sessionId)}/anchors`,
+        { headers: authHeaders() },
+      );
+      if (!response.ok) throw new Error(`message anchor request failed: ${response.status}`);
+      const body = (await response.json()) as UIMessageAnchorsResponse;
+      if (this.state.sessionId !== sessionId || !Array.isArray(body.anchors)) return null;
+      return body.anchors;
+    } catch {
+      return null;
+    }
+  }
+
+  private loadedPersistedUserMessages(): number {
+    const live = this.state.snapshot?.messages ?? [];
+    return [...this.state.historicalMessages, ...live].reduce(
+      (count, message) => count + (message.role === "user" ? 1 : 0),
+      0,
+    );
+  }
+
+  /** Load only enough older pages to make one indexed user message available. */
+  async loadHistoryThroughUserMessage(
+    ordinal: number,
+    totalUserMessages: number,
+  ): Promise<boolean> {
+    if (
+      !Number.isSafeInteger(ordinal) ||
+      !Number.isSafeInteger(totalUserMessages) ||
+      ordinal < 1 ||
+      ordinal > totalUserMessages
+    ) {
+      return false;
+    }
+    const sessionId = this.state.sessionId;
+    const requiredLoadedUsers = totalUserMessages - ordinal + 1;
+    while (
+      sessionId !== null &&
+      this.state.sessionId === sessionId &&
+      this.loadedPersistedUserMessages() < requiredLoadedUsers &&
+      this.state.historyHasMore
+    ) {
+      const pageLoaded = await this.loadOlderMessages();
+      if (!pageLoaded) break;
+    }
+    return (
+      sessionId !== null &&
+      this.state.sessionId === sessionId &&
+      this.loadedPersistedUserMessages() >= requiredLoadedUsers
+    );
+  }
+
   send(cmd: ClientCommand): boolean {
     const socketOpen = this.ws?.readyState === WebSocket.OPEN;
     if (cmd.type === "prompt") {
@@ -962,6 +1021,22 @@ class ChatWorkspaceClient {
 
   loadOlderMessages(): Promise<boolean> {
     return this.workspace.getActiveClient()?.loadOlderMessages() ?? Promise.resolve(false);
+  }
+
+  loadMessageAnchors(): Promise<UIMessageAnchor[] | null> {
+    const client = this.workspace.getActiveClient();
+    return client?.loadMessageAnchors() ?? Promise.resolve([]);
+  }
+
+  loadHistoryThroughUserMessage(
+    ordinal: number,
+    totalUserMessages: number,
+  ): Promise<boolean> {
+    const client = this.workspace.getActiveClient();
+    return (
+      client?.loadHistoryThroughUserMessage(ordinal, totalUserMessages) ??
+      Promise.resolve(false)
+    );
   }
 
   refillComposer(text: string) {
