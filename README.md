@@ -87,11 +87,12 @@ pi-web-chat 最初是 [pi](https://pi.dev) 的 Web 扩展。现在，它在保�
 # 安装 pi；已经安装可跳过
 npm i -g @earendil-works/pi-coding-agent
 
-# 安装当前 GitHub Release
-pi install git:github.com/Ryn-Mic/pi-web-chat@v0.1.106
-```
+# 安装最新稳定版
+pi install npm:pi-web-chat
 
-> npm 上的新版同步完成后，也可以使用 `pi install npm:pi-web-chat`。在此之前，建议使用上面的 GitHub Release，避免安装到原项目的旧版本。
+# 或安装当前 GitHub Release
+pi install git:github.com/Ryn-Mic/pi-web-chat@v0.1.107
+```
 
 ### 2. 启动 Web 服务
 

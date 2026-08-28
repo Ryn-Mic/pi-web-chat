@@ -202,7 +202,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           TARBALL: release-artifact/${{ needs.package.outputs.tarball }}
-        run: npm publish "${TARBALL}" --access public --provenance --ignore-scripts
+        run: npm publish "${GITHUB_WORKSPACE}/${TARBALL}" --access public --provenance --ignore-scripts
 
       - name: npm publishing summary
         if: always()
