@@ -13,9 +13,9 @@
 npm i -g @earendil-works/pi-coding-agent
 
 # 2) 安装 pi-web-chat
-pi install npm:pi-web-chat
+pi install npm:@ryn-mic/web-chat
 # pi install /path/to/pi-web-chat          # 本地路径
-# pi install git:github.com/Ryn-Mic/pi-web-chat@v0.1.106
+# pi install git:github.com/Ryn-Mic/pi-web-chat@v0.1.108
 
 # 3) 仅启动 Web UI 守护进程（不打开 TUI，立即返回 shell）
 pi --web

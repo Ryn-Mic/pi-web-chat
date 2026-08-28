@@ -24,7 +24,7 @@ npm run pack:check          # build + npm pack --dry-run (배포물 확인)
 ### 사용자 설치 (pi package)
 
 ```bash
-pi install /path/to/pi-web-chat   # 또는 git:… / npm:pi-web-chat
+pi install /path/to/pi-web-chat   # 또는 git:… / npm:@ryn-mic/web-chat
 pi --web                     # 웹 UI 데몬만 기동, TUI 안 뜸, 셸 즉시 복귀
 pi --web status
 pi --web stop

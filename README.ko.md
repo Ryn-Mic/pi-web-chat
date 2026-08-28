@@ -13,9 +13,9 @@ pi 코딩 에이전트용 웹 UI (OpenWebUI 스타일). 모바일 지원.
 npm i -g @earendil-works/pi-coding-agent
 
 # 2) pi-web-chat 패키지 설치
-pi install npm:pi-web-chat
+pi install npm:@ryn-mic/web-chat
 # pi install /path/to/pi-web-chat          # 로컬
-# pi install git:github.com/Ryn-Mic/pi-web-chat@v0.1.106
+# pi install git:github.com/Ryn-Mic/pi-web-chat@v0.1.108
 
 # 3) 웹 UI만 백그라운드 기동 (TUI 안 뜸, 바로 셸 복귀)
 pi --web

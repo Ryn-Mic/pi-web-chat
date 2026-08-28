@@ -1,10 +1,13 @@
 {
-  "name": "pi-web-chat",
-  "version": "0.1.107",
+  "name": "@ryn-mic/web-chat",
+  "version": "0.1.108",
   "description": "Mobile-friendly Web UI for pi and Codex coding agents",
   "type": "module",
   "license": "MIT",
-  "author": "minsoo.lee <preinpost@gmail.com>",
+  "author": "ryn-mic",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Ryn-Mic/pi-web-chat.git"
