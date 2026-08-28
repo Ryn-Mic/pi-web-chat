@@ -91,7 +91,7 @@ npm i -g @earendil-works/pi-coding-agent
 pi install npm:@ryn-mic/web-chat
 
 # 或安装当前 GitHub Release
-pi install git:github.com/Ryn-Mic/pi-web-chat@v0.1.108
+pi install git:github.com/Ryn-Mic/pi-web-chat@v0.1.109
 ```
 
 npm 包名是 `@ryn-mic/web-chat`；产品名与本地命令仍为 `pi-web-chat`，启动方式仍是 `pi --web`。
@@ -219,8 +219,11 @@ Pi 模型认证沿用 `~/.pi/agent/auth.json`；请先在 pi CLI 中完成登录
 
 ## 开发与发布
 
+工程约束见 [AGENTS.md](AGENTS.md)，完整资料入口见 [docs/README.md](docs/README.md)。
+
 ```bash
 npm install
+npm run notes:check
 npm run typecheck
 npm test
 npm run build
@@ -248,6 +251,8 @@ Release 工作流可以由 `v*` tag 自动触发，也可以在 **Actions → Re
 4. 检测 GitHub Actions Secret `NPM_TOKEN` 是否已配置：已配置时尝试发布到 npm；未配置时跳过 npm，仅保留 GitHub Release。
 
 如果相同 npm 版本已经存在，工作流也会安全跳过重复发布。
+
+普通 commit、分支 push、Pull Request 和 `main` 合并不会触发发布。不需要重新打包或发布时，不创建/推送 `v*` tag，也不要手动运行 Release workflow。CI 中的 `pack:check` 与 `npm pack --dry-run` 仅验证包是否可构建，不会上传 GitHub Release 或发布 npm。
 
 <details>
 <summary><strong>技术栈与目录</strong></summary>

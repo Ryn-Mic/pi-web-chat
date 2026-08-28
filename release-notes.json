@@ -1,4 +1,9 @@
 {
+  "0.1.109": [
+    "建立不可直接推送 main 的版本分支交付规范：每项新需求从最新 origin/main 创建独立 v<semver> 分支，验证后提交并推送，再通过 Pull Request 合并。",
+    "项目内引入 write-notes-like-deepseek 决策留痕流程与 CI 格式门禁，并新增统一文档索引，明确用户文档、工程规范、发布事实与历史设计资料的权威边界。",
+    "确立 GrokBot 表情与 Morphicons 功能图标标准，补齐动效、可访问性、渐进迁移和例外规则，以及 LaoA-GrokBot 的 MIT 第三方归属。"
+  ],
   "0.1.108": [
     "npm 包迁移为公开作用域包 @ryn-mic/web-chat，作者元数据更新为 ryn-mic，解决原包名由上游维护者持有而无法发布的问题。",
     "同步更新 npm 与 GitHub Release 安装示例；产品名、pi-web-chat 命令和 pi --web 启动方式保持不变。",
