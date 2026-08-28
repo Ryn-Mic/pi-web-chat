@@ -1,4 +1,9 @@
 {
+  "0.1.107": [
+    "默认 README 改为专业中文首页，新增 Codex 移动端实机截图，并明确当前仍由 pi 安装和启动、同一 Web 服务可按新会话选择 pi 或 Codex。",
+    "修复 GitHub Actions 将 npm tarball 相对路径误识别为 Git 仓库的问题；配置 NPM_TOKEN 后可按绝对文件路径发布到 npm。",
+    "更新 npm 包描述与关键词，准确体现 pi、Codex、移动优先与 PWA 定位。"
+  ],
   "0.1.106": [
     "完善 GitHub Actions CI 与发布流程：版本标签会执行测试、构建与打包并上传 GitHub Release；仅在配置 NPM_TOKEN 时发布 npm，未配置时安全跳过。",
     "文件树搜索改用防抖的有界项目搜索，避免递归展开目录触发请求风暴；Codex 只读观战会同步纯工具输出变化，空会话也会正确显示所选 Agent。",

@@ -1,7 +1,7 @@
 {
   "name": "pi-web-chat",
-  "version": "0.1.106",
-  "description": "Web UI for the pi coding agent (OpenWebUI-style, mobile-friendly)",
+  "version": "0.1.107",
+  "description": "Mobile-friendly Web UI for pi and Codex coding agents",
   "type": "module",
   "license": "MIT",
   "author": "minsoo.lee <preinpost@gmail.com>",
@@ -17,6 +17,9 @@
     "pi-package",
     "pi",
     "pi-coding-agent",
+    "codex",
+    "coding-agent",
+    "pwa",
     "web-ui",
     "chat"
   ],
