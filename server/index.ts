@@ -51,7 +51,11 @@ import type {
 } from "../shared/protocol.ts";
 import { createSnapshotDelta } from "../shared/snapshot.ts";
 import { auth, authStartupInfo } from "./auth.ts";
-import { writeManagedDaemonState } from "./daemon-state.ts";
+import {
+  MANAGED_DAEMON_INSTANCE_ENV,
+  isManagedDaemon,
+  writeManagedDaemonState,
+} from "./daemon-state.ts";
 import { selectReplayEvents } from "./event-replay.ts";
 import { handleDesktopFileContent, streamStaticFile } from "./file-content.ts";
 import { listDir, PathEscapeError, searchFiles } from "./files.ts";
@@ -149,13 +153,16 @@ let codexModelsCache: { at: number; models: CodexModelInfo[] } | null = null;
 let codexThreadsCache: { at: number; threads: CodexThreadInfo[] } | null = null;
 let codexRemoteStatusCache: { at: number; status: CodexRemoteStatus } | null = null;
 
-/** Daemon state file dir (same STATE_DIR as extensions/pi-web-chat.ts) */
+/** Daemon state file dir (shared by the npm CLI and legacy Pi extension). */
 const TEST_STATE_DIR = process.env.NODE_ENV === "test"
   ? process.env.PI_WEB_TEST_STATE_DIR?.trim()
   : undefined;
 const DAEMON_STATE_DIR = TEST_STATE_DIR
   ? resolve(TEST_STATE_DIR)
   : join(HOME, ".pi", "web-chat");
+const MANAGED_INSTANCE_ID = isManagedDaemon()
+  ? process.env[MANAGED_DAEMON_INSTANCE_ENV]?.trim()
+  : undefined;
 
 /** Short-lived mobile preview capability store. Cleanup timer lives here so the
  * store itself stays testable without a background interval. */
@@ -2176,7 +2183,7 @@ async function reloadModelProviders(providers: UICustomProvider[]): Promise<stri
       }
     }
   } catch (err) {
-    return `models.json saved, but live reload failed (restart pi --web to apply): ${
+    return `models.json saved, but live reload failed (restart pi-web-chat to apply): ${
       err instanceof Error ? err.message : String(err)
     }`;
   }
@@ -2363,13 +2370,22 @@ const httpServer = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
 
   try {
-    // Lightweight readiness probe (used by `pi --web` before opening the browser).
+    // Lightweight readiness probe used by managed launchers before opening the browser.
     if (url.pathname === "/api/health") {
       res.writeHead(200, {
         "content-type": "application/json",
         "cache-control": "no-store",
       });
-      res.end(JSON.stringify({ ok: true, version: PACKAGE_VERSION }));
+      res.end(
+        JSON.stringify({
+          ok: true,
+          version: PACKAGE_VERSION,
+          service: "pi-web-chat",
+          ...(MANAGED_INSTANCE_ID
+            ? { managed: { instanceId: MANAGED_INSTANCE_ID, pid: process.pid } }
+            : {}),
+        }),
+      );
       return;
     }
 
@@ -3158,7 +3174,7 @@ httpServer.on("error", (err: NodeJS.ErrnoException) => {
       `pi-web-chat: port ${PORT} is already in use — another pi-web-chat server or process is listening.`,
     );
     console.error(
-      `pi-web-chat: run \`pi --web status\` / \`pi --web stop\`, or remove stale ~/.pi/web-chat/pi-web-chat.pid, then retry.`,
+      `pi-web-chat: run \`pi-web-chat status\` / \`pi-web-chat stop\` (legacy: \`pi --web ...\`), or remove stale ~/.pi/web-chat/pi-web-chat.pid, then retry.`,
     );
     process.exit(1);
   }
@@ -3171,9 +3187,9 @@ httpServer.listen(PORT, HOST, () => {
     `pi-web-chat server: http://${displayHost}:${PORT}  (bind ${HOST}, chat cwd: ${AGENT_CWD})`,
   );
 
-  // Only a managed `pi --web` daemon owns the shared pid/port/host files.
+  // Only a managed npm CLI or legacy Pi launcher owns shared pid/port/host files.
   // Source/dev servers can bind any other port without changing what a later
-  // `pi --web status|restart` considers the production service.
+  // Managed status/restart commands treat this as the production service.
   try {
     writeManagedDaemonState(DAEMON_STATE_DIR, {
       pid: process.pid,

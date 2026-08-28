@@ -1,4 +1,10 @@
 {
+  "0.1.110": [
+    "新增独立 npm 安装与启动路径：全局安装 @ryn-mic/web-chat 后可直接使用 pi-web-chat 管理 start、status、stop、显式端口 restart 与 token，无需先通过 pi install 或 pi --web 代理。",
+    "独立 CLI 与原 pi --web、/web 兼容入口共享同一 daemon manager、3141 端口保护及 ~/.pi/web-chat 状态；可安全识别并在重启时升级旧 daemon，不迁移认证、会话或服务协议，也不会启动相互不可见的第二套主体。",
+    "新增 pi-web-chat doctor 与启动前 Agent 探测，明确区分包内 Pi runtime、外部 Pi CLI 和 Codex CLI；单个 CLI 缺失只提示对应能力，不阻断另一 Agent。",
+    "将 Node.js 要求校准为 22.19 或更高版本，与当前 Pi SDK 的真实运行时要求一致。"
+  ],
   "0.1.109": [
     "建立不可直接推送 main 的版本分支交付规范：每项新需求从最新 origin/main 创建独立 v<semver> 分支，验证后提交并推送，再通过 Pull Request 合并。",
     "项目内引入 write-notes-like-deepseek 决策留痕流程与 CI 格式门禁，并新增统一文档索引，明确用户文档、工程规范、发布事实与历史设计资料的权威边界。",

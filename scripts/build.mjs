@@ -3,6 +3,7 @@
  * Production build for pi-web-chat package:
  *   dist/public/**  — Vite frontend
  *   dist/index.js   — bundled Node server
+ *   dist/cli.js     — bundled standalone daemon CLI
  */
 import { execSync } from "node:child_process";
 import {
@@ -295,8 +296,22 @@ await esbuild.build({
   bundle: true,
   platform: "node",
   format: "esm",
-  target: "node20",
+  target: "node22",
   // Keep runtime packages external so pi's / npm's copies resolve normally.
+  packages: "external",
+  legalComments: "none",
+  logLevel: "info",
+});
+
+console.log("▸ bundling standalone CLI (esbuild)…");
+await esbuild.build({
+  absWorkingDir: root,
+  entryPoints: [join(root, "cli/entry.ts")],
+  outfile: join(dist, "cli.js"),
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node22",
   packages: "external",
   legalComments: "none",
   logLevel: "info",
@@ -309,6 +324,7 @@ writeFileSync(
     {
       builtAt: new Date().toISOString(),
       entry: "index.js",
+      cli: "cli.js",
       publicDir: "public",
     },
     null,
@@ -322,5 +338,8 @@ if (!existsSync(join(publicDist, "index.html"))) {
 if (!existsSync(join(dist, "index.js"))) {
   failBuild("dist/index.js missing");
 }
+if (!existsSync(join(dist, "cli.js"))) {
+  failBuild("dist/cli.js missing");
+}
 
-console.log("✓ build complete → dist/index.js + dist/public/");
+console.log("✓ build complete → dist/index.js + dist/cli.js + dist/public/");

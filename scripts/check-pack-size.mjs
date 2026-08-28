@@ -4,6 +4,14 @@ import { fileURLToPath } from "node:url";
 
 export const MAX_PACKED_BYTES = 150 * 1024 * 1024;
 export const MAX_UNPACKED_BYTES = 500 * 1024 * 1024;
+export const REQUIRED_RUNTIME_FILES = [
+  "bin/pi-web-chat.mjs",
+  "dist/cli.js",
+  "dist/index.js",
+  "extensions/agent-binaries.ts",
+  "extensions/daemon-manager.ts",
+  "extensions/pi-web-chat.ts",
+];
 
 export function assertPackSizeWithinLimits({ size, unpackedSize }) {
   if (size > MAX_PACKED_BYTES) {
@@ -11,6 +19,14 @@ export function assertPackSizeWithinLimits({ size, unpackedSize }) {
   }
   if (unpackedSize > MAX_UNPACKED_BYTES) {
     throw new Error(`unpacked size ${unpackedSize} exceeds ${MAX_UNPACKED_BYTES}`);
+  }
+}
+
+export function assertRequiredPackFiles(files) {
+  const names = new Set((files ?? []).map((file) => file?.path).filter(Boolean));
+  const missing = REQUIRED_RUNTIME_FILES.filter((file) => !names.has(file));
+  if (missing.length > 0) {
+    throw new Error(`npm package is missing runtime files: ${missing.join(", ")}`);
   }
 }
 
@@ -36,6 +52,7 @@ export function main() {
     throw new Error("npm pack returned invalid size metadata");
   }
   assertPackSizeWithinLimits(result);
+  assertRequiredPackFiles(result.files);
   console.log(
     `package size: ${mib(result.size)} MiB packed, ${mib(result.unpackedSize)} MiB unpacked, ${result.entryCount ?? result.files?.length ?? 0} files`,
   );

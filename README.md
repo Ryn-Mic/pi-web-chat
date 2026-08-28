@@ -9,7 +9,7 @@
 <p>
   <a href="https://github.com/Ryn-Mic/pi-web-chat/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Ryn-Mic/pi-web-chat/actions/workflows/ci.yml/badge.svg?branch=main"></a>
   <a href="https://github.com/Ryn-Mic/pi-web-chat/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/Ryn-Mic/pi-web-chat?style=flat-square"></a>
-  <img alt="Node.js >= 20" src="https://img.shields.io/badge/Node.js-%E2%89%A520-339933?style=flat-square&logo=node.js&logoColor=white">
+  <img alt="Node.js >= 22.19" src="https://img.shields.io/badge/Node.js-%E2%89%A522.19-339933?style=flat-square&logo=node.js&logoColor=white">
   <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/Ryn-Mic/pi-web-chat?style=flat-square"></a>
 </p>
 
@@ -35,10 +35,10 @@
 
 ## 它是什么
 
-pi-web-chat 最初是 [pi](https://pi.dev) 的 Web 扩展。现在，它在保留原有安装和启动入口的同时，加入了原生 Codex `app-server` 集成：一个 Web 服务即可创建、恢复和控制两类 Agent 会话。
+pi-web-chat 最初是 [pi](https://pi.dev) 的 Web 扩展。现在，它是可独立安装和启动的 npm 应用，同时保留原有 Pi 扩展入口；一个 Web 服务即可创建、恢复和控制 Pi 与 Codex 两类 Agent 会话。
 
 > [!IMPORTANT]
-> 当前版本仍通过 `pi install` 安装、通过 `pi --web` 启动，默认新会话也仍使用 **pi**。Codex 是已经集成到同一 Web 工作台中的可选后端；本项目目前不是独立的 Codex 启动器。
+> 推荐通过 npm 全局安装并运行 `pi-web-chat`。包内 Pi SDK 是 Pi 会话的权威 runtime；Codex 会话复用本机已安装并登录的 `codex` CLI。`pi install`、`pi --web` 与 `/web` 继续作为兼容入口，并管理同一个 daemon。
 
 启动后，你可以在网页设置中为**新会话**选择 pi 或 Codex。已有会话保留各自的后端，pi 与 Codex 标签页可以同时在线、独立运行和恢复。
 
@@ -48,7 +48,7 @@ pi-web-chat 最初是 [pi](https://pi.dev) 的 Web 扩展。现在，它在保�
   <tr>
     <td width="50%" valign="top">
       <strong>◈ 一个入口，双 Agent</strong><br>
-      同一个 <code>pi --web</code> daemon 同时承载 pi SDK 会话与 Codex 原生线程；新会话按需选择，现有会话互不串线。
+      同一个 <code>pi-web-chat</code> daemon 同时承载 Pi SDK 会话与 Codex 原生线程；新会话按需选择，现有会话互不串线。
     </td>
     <td width="50%" valign="top">
       <strong>⌘ 原生 Codex 体验</strong><br>
@@ -79,37 +79,34 @@ pi-web-chat 最初是 [pi](https://pi.dev) 的 Web 扩展。现在，它在保�
 
 ## 快速开始
 
-### 1. 安装 pi 与 pi-web-chat
+### 1. 独立安装 pi-web-chat
 
-需要 Node.js 20 或更高版本。
+需要 Node.js 22.19 或更高版本。
 
 ```bash
-# 安装 pi；已经安装可跳过
-npm i -g @earendil-works/pi-coding-agent
-
-# 安装最新稳定版
-pi install npm:@ryn-mic/web-chat
-
-# 或安装当前 GitHub Release
-pi install git:github.com/Ryn-Mic/pi-web-chat@v0.1.109
+# npm 会同时安装 Web Chat 所需的 Pi SDK runtime
+npm install -g @ryn-mic/web-chat
 ```
 
-npm 包名是 `@ryn-mic/web-chat`；产品名与本地命令仍为 `pi-web-chat`，启动方式仍是 `pi --web`。
+npm 包名是 `@ryn-mic/web-chat`，安装后的命令是 `pi-web-chat`。不需要先安装 Pi CLI，也不需要执行 `pi install`。
 
-### 2. 启动 Web 服务
+### 2. 检测 Agent 并启动 Web 服务
 
 ```bash
-pi --web
+pi-web-chat doctor
+pi-web-chat
 # pi-web-chat started — http://127.0.0.1:3141
 ```
 
-`pi --web` 只启动后台 Web daemon，不会打开 pi TUI，并会立即把终端控制权交还给你。如果服务已经运行，它会再次打印访问地址。
+`doctor` 区分包内 Pi runtime、外部 Pi CLI 与 Codex CLI。默认启动会再次显示简洁探测结果，然后在后台启动 daemon、打开浏览器并立即把终端控制权交还给你。如果服务已经运行，它只会打印现有地址，不会启动第二套服务。
+
+外部 `pi` 命令是可选的：未安装时，Pi 会话仍使用 npm 包内的 SDK 正常工作。Codex 会话需要本机 `codex` 命令；未安装或不可用时，Web Chat 与 Pi 会话仍可启动。
 
 ### 3. 可选：启用 Codex 会话
 
 先确保本机 `codex` 命令可用并已完成 `codex login`，然后：
 
-1. 仍然运行 `pi --web`，无需更换启动命令；
+1. 运行 `pi-web-chat`；
 2. 打开网页左侧会话抽屉，进入「设置」；
 3. 将「新会话使用的 Agent」切换为 **Codex**；
 4. 新建会话。已有 pi 会话不会被转换或中断。
@@ -119,8 +116,8 @@ pi --web
 | 项目 | pi | Codex |
 |---|---|---|
 | 是否默认 | 是 | 否，按需选择 |
-| 启动入口 | `pi --web` | 仍由同一个 `pi --web` 服务承载 |
-| 本机准备 | 配置 pi 的模型与认证 | 安装 Codex 并执行 `codex login` |
+| 启动入口 | `pi-web-chat` | 由同一个 `pi-web-chat` 服务承载 |
+| 本机准备 | npm 包已包含 Pi SDK；配置模型与认证 | 安装 Codex 并执行 `codex login` |
 | 会话标识 | pi session / JSONL | 原生 Codex `threadId` |
 | Web 能力 | 流式消息、工具、模型、思考档位、运行中追加指令（steering）、中止 | 流式轮次、工具与计划、模型与推理档位、运行中追加指令、中止、审批、用户问题、MCP 表单 |
 
@@ -136,7 +133,7 @@ Codex 传输默认为 `auto`：优先连接已运行的共享 Codex daemon，不
 
 ```bash
 codex remote-control start
-pi --web
+pi-web-chat 3141 restart
 ```
 
 > Codex 线程遵循单写者约束：当另一客户端正在占用线程时，Web Chat 会以只读 observer 观察；占用释放后再自动升级并接续。`standalone` 描述的是传输连接方式，不代表每个会话都会单独启动一个操作系统进程；会话仍由原生 `threadId` 隔离。
@@ -156,17 +153,32 @@ pi --web
 ## 常用命令
 
 ```bash
-pi --web status              # 查看 daemon 状态
-pi --web stop                # 停止服务
-pi --web 3141 restart        # 明确使用生产端口重启
-pi --web 3200                # 使用自定义端口
-pi --web --lan               # 监听 0.0.0.0，允许局域网访问
-pi --web --host 0.0.0.0      # 显式指定监听地址
-pi --web --token my-secret   # 指定访问令牌
-pi --web rftoken             # 立即轮换访问令牌
+pi-web-chat status              # 查看 daemon 状态
+pi-web-chat stop                # 停止服务
+pi-web-chat 3141 restart        # 明确使用生产端口重启
+pi-web-chat 3200                # 使用自定义端口
+pi-web-chat --lan               # 监听 0.0.0.0，允许局域网访问
+pi-web-chat --host 0.0.0.0      # 显式指定监听地址
+pi-web-chat --token my-secret   # 指定访问令牌
+pi-web-chat rftoken             # 立即轮换访问令牌
+pi-web-chat doctor              # 检测 Pi runtime / Pi CLI / Codex CLI
 ```
 
-也可以在 pi 会话中使用扩展命令：
+托管 `restart` 必须显式给出端口，避免过期 daemon 状态把生产服务移动到错误 listener。
+
+### 兼容 Pi 扩展入口
+
+已有 Pi 工作流无需迁移：
+
+```bash
+pi install npm:@ryn-mic/web-chat
+pi --web
+pi --web status
+pi --web stop
+pi --web 3141 restart
+```
+
+也可以在 Pi 会话中使用扩展命令：
 
 ```text
 /web
@@ -177,11 +189,19 @@ pi --web rftoken             # 立即轮换访问令牌
 /web restart
 ```
 
+独立 CLI、`pi --web` 与 `/web` 使用同一套 daemon manager 和 `~/.pi/web-chat/` 状态；任一入口启动的服务都可由另一个入口查询或停止。
+
+从旧版本升级时，launcher 会识别尚未写入 `pi-web-chat.instance` 的健康
+`pi --web` daemon。只有旧 health、state PID、实际监听 PID 与 Node 服务入口全部
+一致时才会停止或重启它；无法证明进程身份时会保留服务和状态并明确报错，不会按
+PID 猜测杀进程。下一次成功重启会自动切换到新的实例身份，不需要迁移会话或认证。
+
 daemon 状态文件位于 `~/.pi/web-chat/`：
 
 - `pi-web-chat.pid`
 - `pi-web-chat.port`
 - `pi-web-chat.host`
+- `pi-web-chat.instance`（跨 npm/Pi 安装副本验证同一托管进程）
 - `pi-web-chat.log`
 
 ## 安全与远程访问
@@ -207,6 +227,8 @@ daemon 状态文件位于 `~/.pi/web-chat/`：
 | `PI_WEB_2FA` | 开启 | 设为 `off` 可关闭 TOTP 第二因素 |
 | `PI_WEB_CWD` | `~/.pi/web-chat` | 新会话默认工作目录 |
 | `PI_WEB_AGENT` | `pi` | 新会话默认 Agent：`pi` 或 `codex` |
+| `PI_WEB_NO_OPEN` | 未设置 | 设为 `1` 时独立 CLI 启动后不自动打开浏览器 |
+| `PI_WEB_PI_BIN` | `pi` | 仅用于检测外部 Pi CLI；不会替换包内 Pi SDK runtime |
 | `PI_WEB_CODEX_BIN` | `codex` | Codex 可执行文件路径 |
 | `PI_WEB_CODEX_MODEL` | 未设置 | 可选的默认 Codex 模型 ID；未设置时从原生 `model/list` 读取 |
 | `PI_WEB_CODEX_TRANSPORT` | `auto` | `auto`、`proxy` 或 `standalone` |
@@ -214,6 +236,10 @@ daemon 状态文件位于 `~/.pi/web-chat/`：
 | `PI_WEB_CODEX_APPROVAL` | `on-request` | `on-request`、`untrusted` 或 `never` |
 
 Pi 模型认证沿用 `~/.pi/agent/auth.json`；请先在 pi CLI 中完成登录或 API Key 配置。Codex 认证由本机 Codex CLI 管理。
+
+若 `PI_WEB_PI_BIN` 或 `PI_WEB_CODEX_BIN` 使用相对路径，launcher 会以执行
+`pi-web-chat` 时的当前目录为基准解析一次，再把绝对路径传给后台 daemon，避免
+Agent 会话工作目录变化后找不到同一个可执行文件。
 
 </details>
 
@@ -239,7 +265,7 @@ npm run dev
 
 > 如果受保护的本地生产服务已占用 `3141`，不要同时运行默认 `npm run dev`；请先停止生产服务，或为调试服务选择其他端口。
 
-生产构建产物为 `dist/index.js` 与 `dist/public/`，均由 `npm run build` 生成，请勿直接编辑。
+生产构建产物为 `dist/index.js`、`dist/cli.js` 与 `dist/public/`，均由 `npm run build` 生成，请勿直接编辑。
 
 ### GitHub Actions Release
 
@@ -261,14 +287,17 @@ Release 工作流可以由 `v*` tag 自动触发，也可以在 **Actions → Re
 - **Web**：React 19、TanStack Router / Query、Base UI、Tailwind CSS v4、Vite、PWA
 
 ```text
-bin/pi-web-chat.mjs        CLI 入口
-extensions/pi-web-chat.ts  pi 扩展入口：--web 与 /web
-server/                    HTTP、WebSocket、Pi/Codex 会话、文件与 Git 服务
-shared/                    服务端与客户端协议、增量快照
-src/                       React 前端
-scripts/build.mjs          Vite 前端与 esbuild 服务端打包
-dist/index.js              生成的服务端产物
-dist/public/               生成的前端产物
+bin/pi-web-chat.mjs           npm bin 入口
+cli/                          独立命令、Agent 探测与输出适配
+extensions/daemon-manager.ts  新旧入口共享的 daemon 生命周期
+extensions/pi-web-chat.ts     Pi 兼容入口：--web 与 /web
+server/                       HTTP、WebSocket、Pi/Codex 会话、文件与 Git 服务
+shared/                       服务端与客户端协议、增量快照
+src/                          React 前端
+scripts/build.mjs             Vite 前端与 esbuild 服务端/CLI 打包
+dist/index.js                 生成的服务端产物
+dist/cli.js                   生成的独立 CLI 产物
+dist/public/                  生成的前端产物
 ```
 
 </details>
