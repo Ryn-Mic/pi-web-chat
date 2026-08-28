@@ -1,4 +1,9 @@
 {
+  "0.1.108": [
+    "npm 包迁移为公开作用域包 @ryn-mic/web-chat，作者元数据更新为 ryn-mic，解决原包名由上游维护者持有而无法发布的问题。",
+    "同步更新 npm 与 GitHub Release 安装示例；产品名、pi-web-chat 命令和 pi --web 启动方式保持不变。",
+    "Release workflow 兼容 npm pack --json 的数组与包名键对象两种输出格式，确保作用域包能稳定生成发布资产。"
+  ],
   "0.1.107": [
     "默认 README 改为专业中文首页，新增 Codex 移动端实机截图，并明确当前仍由 pi 安装和启动、同一 Web 服务可按新会话选择 pi 或 Codex。",
     "修复 GitHub Actions 将 npm tarball 相对路径误识别为 Git 仓库的问题；配置 NPM_TOKEN 后可按绝对文件路径发布到 npm。",

@@ -85,7 +85,20 @@ jobs:
         run: |
           set -euo pipefail
           npm pack --ignore-scripts --json > "${RUNNER_TEMP}/npm-pack.json"
-          TARBALL="$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))[0].filename" "${RUNNER_TEMP}/npm-pack.json")"
+          TARBALL="$(node -e '
+            const fs = require("fs");
+            const parsed = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const candidate = Array.isArray(parsed) ? parsed[0] : parsed;
+            const metadata = candidate && typeof candidate.filename === "string"
+              ? candidate
+              : candidate && typeof candidate === "object"
+                ? Object.values(candidate)[0]
+                : null;
+            if (!metadata || typeof metadata.filename !== "string") {
+              throw new Error("npm pack returned invalid filename metadata");
+            }
+            process.stdout.write(metadata.filename);
+          ' "${RUNNER_TEMP}/npm-pack.json")"
           test -f "${TARBALL}"
           sha256sum "${TARBALL}" > "${TARBALL}.sha256"
           echo "tarball=${TARBALL}" >> "${GITHUB_OUTPUT}"
