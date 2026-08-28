@@ -1,6 +1,6 @@
 {
   "name": "@ryn-mic/web-chat",
-  "version": "0.1.109",
+  "version": "0.1.110",
   "description": "Mobile-friendly Web UI for pi and Codex coding agents",
   "type": "module",
   "license": "MIT",
@@ -61,7 +61,7 @@
     ]
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": "0.80.10",
     "@file-viewer/core": "^2.2.8",
     "@file-viewer/react-full": "^2.2.8",
     "ignore": "^7.0.6",
@@ -114,6 +114,6 @@
     "wait-on": "^9.0.10"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.19.0"
   }
 }

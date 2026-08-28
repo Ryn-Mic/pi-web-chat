@@ -3,8 +3,8 @@
 ## 项目范围
 
 - 本项目为 pi 与 Codex coding agent 提供移动端友好的 Web UI。
-- 运行栈为 Node.js 20+、pi SDK、HTTP/WebSocket、React 19、TanStack Router/Query、Tailwind CSS、Vite 与 PWA。
-- `dist/index.js` 和 `dist/public/` 是 `npm run build` 生成的发布产物，禁止直接编辑。
+- 运行栈为 Node.js 22.19+、pi SDK、HTTP/WebSocket、React 19、TanStack Router/Query、Tailwind CSS、Vite 与 PWA。
+- `dist/index.js`、`dist/cli.js` 和 `dist/public/` 是 `npm run build` 生成的发布产物，禁止直接编辑。
 - 本文件是 Agent 与贡献者的强制工程规范；完整文档分类与权威性见 [文档索引](docs/README.md)。
 
 ## 文档入口
@@ -18,7 +18,9 @@
 
 ## 架构地图
 
-- `extensions/pi-web-chat.ts`：pi package 入口；实现 `pi --web` 与 `/web`，管理托管 daemon 及状态文件。
+- `bin/pi-web-chat.mjs`、`cli/`：独立 npm 命令、Agent CLI 探测与输出适配。
+- `extensions/daemon-manager.ts`：独立 CLI 与 Pi 兼容入口共享的托管 daemon 生命周期及状态文件。
+- `extensions/pi-web-chat.ts`：pi package 兼容入口；实现 `pi --web` 与 `/web`。
 - `server/index.ts`：HTTP API、WebSocket、认证、会话 runtime、静态资源与优雅退出。
 - `server/session-*.ts`、`server/serialize.ts`：JSONL 索引、活动分支分页/同步与 UI 序列化。
 - `server/files.ts`、`server/file-content.ts`、`server/git.ts`：受 cwd 约束的文件、预览与 Git API。
@@ -35,7 +37,7 @@
 - JSONL 会话有分支且可能很大。只操作活动分支，保留 tool-call/result 配对并分页读取；日常 UI 操作不得全量重解析 transcript。
 - `isStreaming` 只是提示。停止任务前必须结合 session API、JSONL 事件/mtime、进程状态和上游错误诊断。
 - 所有 API 与 WebSocket 路由必须保留认证及 cwd/path 授权。不得打印、提交或返回 access token、TOTP secret、API key 与会话凭据。
-- 仅 `pi --web` 启动的 daemon 可更新 `~/.pi/web-chat/pi-web-chat.{pid,port,host}`；调试服务不得写入托管状态。
+- 仅独立 `pi-web-chat` CLI 或 Pi 兼容入口启动的托管 daemon 可更新 `~/.pi/web-chat/pi-web-chat.{pid,port,host,instance}`；调试服务不得写入托管状态。
 - 必须保持 PWA、文件预览隔离、缓存和懒加载边界；构建仍须通过 `scripts/build.mjs` 的门禁。
 
 ## Git 与版本交付
@@ -90,14 +92,14 @@
 
 ## 运行时与端口安全
 
-- **`pi --web restart` 必须显式写为 `pi --web 3141 restart`；禁止裸执行，以免沿用过期 daemon 端口。**
+- **托管 restart 必须显式写出端口：优先使用 `pi-web-chat 3141 restart`，兼容入口使用 `pi --web 3141 restart`；禁止裸执行。**
 - `3141` 是受保护的生产端口。重启后必须验证：
-  - `pi --web status` 显示 `127.0.0.1:3141`；
+  - `pi-web-chat status`（或兼容的 `pi --web status`）显示 `127.0.0.1:3141`；
   - `curl -fsS http://127.0.0.1:3141/api/health` 返回 HTTP 200 与目标版本；
   - `lsof -nP -iTCP:3141 -sTCP:LISTEN` 显示托管服务。
 - 调试使用其他端口，例如 `PORT=3242 npm run dev:server` 与 `PI_WEB_DEV_PORT=3242 npm run dev:web`。
 - 生产 3141 运行时不得执行默认 `npm run dev`。只可按已知 PID/session 停止调试进程，之后确认调试端口释放且 3141 健康。
-- 本地生产交付前先构建；如用户授权刷新安装，运行 `pi update /Users/ryn/Documents/tmp/pi-web-chat --approve --force`，再执行 `pi --web 3141 restart`。
+- 本地生产交付前先构建；如用户授权刷新独立安装，安装目标 npm 包后执行 `pi-web-chat 3141 restart`。仅在继续使用 Pi 扩展安装时运行 `pi update /Users/ryn/Documents/tmp/pi-web-chat --approve --force` 与 `pi --web 3141 restart`。
 
 ## 完成定义
 
