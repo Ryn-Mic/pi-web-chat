@@ -46,6 +46,8 @@
 - 每次交付都必须递增 patch 版本；同步 `package.json`、`package-lock.json` 顶层与根 package 两处版本，并在 `release-notes.json` 添加同版本用户可见说明。
 - 完成实现、决策记录和必要验证后，提交并 push 版本分支到远程仓库。新需求本身授权这一分支交付步骤，但不自动授权合并、打 tag 或发布。
 - 需要合并时，必须创建 PR、等待远程检查成功，再通过 PR 合入 `main`；需要发布时，tag 只能指向已合入 `main` 的提交。
+- commit、版本分支 push、PR 和 `main` 合并都不是发布触发器。只有 push `v*` tag，或手动运行 Release workflow 并指定已有 tag，才会重新打包并创建 GitHub Release/npm 发布。
+- 某次提交不需要重新打包或发布时，不创建/推送 tag，也不手动运行 Release workflow。`npm run pack:check` 与 CI 中的 `npm pack --dry-run` 只是验证，不会上传产物或发布 npm。
 - 版本分支与发布 tag 同名时，合并后先删除远程版本分支再创建 tag；若短暂共存，Git 命令必须显式使用 `refs/heads/...` 或 `refs/tags/...`，避免 ref 歧义。
 
 ## 决策留痕
