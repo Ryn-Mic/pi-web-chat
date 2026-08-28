@@ -6,26 +6,31 @@ import {
   Outlet,
   RouterProvider,
 } from "@tanstack/react-router";
-import { StrictMode } from "react";
+import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { ChatPage } from "./components/ChatPage";
-import { initLocale } from "./lib/i18n";
+import { LoginPage } from "./components/LoginPage";
+import { LoadingIndicator } from "./components/LoadingIndicator";
+import { checkAuth, useAuthStatus } from "./lib/auth";
+import { installChunkLoadRecovery } from "./lib/chunk-recovery";
+import { initLocale, t } from "./lib/i18n";
 import { initTheme } from "./lib/theme";
 import { initViewportLock } from "./lib/viewport";
+import "streamdown/styles.css";
 import "./styles.css";
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
 });
 
-/** 새 대화 초안 — 첫 메시지 전송 시 서버 session_bound 로 /s/$sessionId 교체 */
+/** Fresh chat draft — the server sends session_bound on the first message and the URL switches to /s/$sessionId */
 const chatRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: ChatPage,
 });
 
-/** 세션별 딥링크 */
+/** Per-session deep link */
 const sessionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/s/$sessionId",
@@ -44,14 +49,38 @@ declare module "@tanstack/react-router" {
 
 const queryClient = new QueryClient();
 
+/** Auth gate: verify the session token before entering the app (login screen when unauthenticated) */
+function AuthGate() {
+  const status = useAuthStatus();
+
+  useEffect(() => {
+    if (status !== "checking") return;
+    void checkAuth();
+    // Retry every 3s while the server is starting up
+    const timer = setInterval(() => void checkAuth(), 3000);
+    return () => clearInterval(timer);
+  }, [status]);
+
+  if (status === "unauthenticated") return <LoginPage />;
+  if (status === "checking") {
+    return (
+      <div className="flex h-full items-center justify-center bg-canvas">
+        <LoadingIndicator label={t("loading")} size="lg" />
+      </div>
+    );
+  }
+  return <RouterProvider router={router} />;
+}
+
 initViewportLock();
 initTheme();
 initLocale();
+installChunkLoadRecovery();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <AuthGate />
     </QueryClientProvider>
   </StrictMode>,
 );

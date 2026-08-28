@@ -6,6 +6,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execFileSync, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -25,9 +26,11 @@ const PID_FILE = join(STATE_DIR, "pi-web-chat.pid");
 const PORT_FILE = join(STATE_DIR, "pi-web-chat.port");
 const HOST_FILE = join(STATE_DIR, "pi-web-chat.host");
 const LOG_FILE = join(STATE_DIR, "pi-web-chat.log");
+const TOKEN_FILE = join(STATE_DIR, "token");
 const DEFAULT_PORT = "3141";
 const DEFAULT_HOST = "127.0.0.1";
 const LAN_HOST = "0.0.0.0";
+const MANAGED_DAEMON_ENV = "PI_WEB_DAEMON_MANAGED";
 
 type StartResult =
   | { ok: true; port: string; host: string; already: boolean; pid: number }
@@ -96,7 +99,50 @@ function describeServer(port: string, host: string, pid: number): string {
   return `${urlFor(port, host)}${bindNote} (pid ${pid})`;
 }
 
-function startServer(port: string, host: string): StartResult {
+/**
+ * Find the PID listening on the given port (best effort; null when unavailable).
+ * Uses lsof (macOS/Linux). Falls back to null on other platforms or errors.
+ */
+function pidOnPort(port: string): number | null {
+  try {
+    const out = execFileSync("lsof", ["-tiTCP:" + port, "-sTCP:LISTEN"], {
+      encoding: "utf8",
+      timeout: 2_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const pid = Number(out.trim().split(/\s+/)[0]);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a PID's command line marks it as one of our server processes. */
+function isOurServerProcess(pid: number): boolean {
+  try {
+    const out = execFileSync("ps", ["-o", "command=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 2_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return /pi-web-chat|dist[\/\\]index\.js/.test(out);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * An orphaned server (its pid file was lost/stale) may still hold the port.
+ * Rebuild the state files so the daemon can be managed again (stop/restart).
+ */
+function adoptOrphanedServer(port: string, host: string, pid: number): void {
+  mkdirSync(STATE_DIR, { recursive: true });
+  writeFileSync(PID_FILE, `${pid}\n`, "utf8");
+  writeFileSync(PORT_FILE, `${port}\n`, "utf8");
+  writeFileSync(HOST_FILE, `${host}\n`, "utf8");
+}
+
+function startServer(port: string, host: string, token?: string): StartResult {
   if (!existsSync(SERVER)) {
     return {
       ok: false,
@@ -116,12 +162,34 @@ function startServer(port: string, host: string): StartResult {
     };
   }
 
+  // Port open but no (valid) pid file. If the listener is our own server — an
+  // orphan whose state files were lost — adopt it instead of failing.
+  if (isPortListening(port, host)) {
+    const occupant = pidOnPort(port);
+    if (occupant !== null && isOurServerProcess(occupant)) {
+      adoptOrphanedServer(port, host, occupant);
+      return { ok: true, port, host, already: true, pid: occupant };
+    }
+    return {
+      ok: false,
+      error: `port ${port} is already in use by another process${
+        occupant !== null ? ` (pid ${occupant})` : ""
+      } — not pi-web-chat`,
+    };
+  }
+
   mkdirSync(STATE_DIR, { recursive: true });
   const logFd = openSync(LOG_FILE, "a");
 
   const child = spawn(process.execPath, [SERVER], {
     cwd: ROOT,
-    env: { ...process.env, PORT: port, HOST: host },
+    env: {
+      ...process.env,
+      PORT: port,
+      HOST: host,
+      [MANAGED_DAEMON_ENV]: "1",
+      ...(token ? { PI_WEB_TOKEN: token } : {}),
+    },
     detached: true,
     stdio: ["ignore", logFd, logFd],
   });
@@ -131,9 +199,10 @@ function startServer(port: string, host: string): StartResult {
     return { ok: false, error: "failed to spawn server process" };
   }
 
-  writeFileSync(PID_FILE, `${child.pid}\n`, "utf8");
-  writeFileSync(PORT_FILE, `${port}\n`, "utf8");
-  writeFileSync(HOST_FILE, `${host}\n`, "utf8");
+  // The pid/port/host files are written by the server itself after a
+  // successful bind (server/index.ts listen callback). Writing them here first
+  // would leave the pid of a port-conflict-dead process behind and loop the
+  // next start with EADDRINUSE.
   return { ok: true, port, host, already: false, pid: child.pid };
 }
 
@@ -163,11 +232,47 @@ function sleepSync(ms: number): void {
   }
 }
 
+/**
+ * Check whether something is already listening on the given host:port (sync).
+ * Checked before spawning to avoid an EADDRINUSE crash / pid-file race.
+ */
+function isPortListening(port: string, host: string): boolean {
+  const target =
+    host === "0.0.0.0" || host === "::" || host === "[::]" || host === "localhost"
+      ? "127.0.0.1"
+      : host.replace(/^\[|\]$/g, "");
+  const script = `
+const net = require("net");
+const s = net.connect(Number(process.argv[1]), process.argv[2]);
+s.once("connect", () => { s.destroy(); process.exit(0); });
+s.once("error", () => process.exit(1));
+s.setTimeout(800, () => { s.destroy(); process.exit(1); });
+`;
+  try {
+    execFileSync(process.execPath, ["-e", script, port, target], {
+      stdio: "ignore",
+      timeout: 2_000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function stopServer(opts: { waitMs?: number } = {}): {
   stopped: boolean;
   pid?: number;
 } {
-  const pid = readPid();
+  let pid = readPid();
+  // No pid file: our server may still hold the port as an orphan (lost state
+  // files). Find and stop it too.
+  if (pid === null) {
+    const occupant = pidOnPort(readPort());
+    if (occupant !== null && isOurServerProcess(occupant)) {
+      pid = occupant;
+    }
+  }
+
   if (pid === null) {
     clearStateFiles();
     return { stopped: false };
@@ -314,7 +419,7 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
   }
 }
 
-type DaemonAction = "start" | "stop" | "status" | "restart";
+type DaemonAction = "start" | "stop" | "status" | "restart" | "rftoken";
 
 type ParsedWebArgs = {
   action: DaemonAction;
@@ -324,6 +429,8 @@ type ParsedWebArgs = {
   portExplicit: boolean;
   /** True when user explicitly set host / --lan. */
   hostExplicit: boolean;
+  /** Access token for the web UI (passed as PI_WEB_TOKEN). */
+  token?: string;
 };
 
 function defaultPort(): string {
@@ -335,7 +442,7 @@ function defaultHost(): string {
 }
 
 /** Parse port/host tokens shared by `pi --web ...` and `/web ...`. */
-function parseWebOptions(
+export function parseWebOptions(
   tokens: string[],
   defaults: { port: string; host: string } = {
     port: defaultPort(),
@@ -348,66 +455,84 @@ function parseWebOptions(
   let portExplicit = false;
   let hostExplicit = false;
   let sawAction = false;
+  let token: string | undefined;
 
   for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i]!;
+    const arg = tokens[i]!;
 
     if (
-      token === "stop" ||
-      token === "status" ||
-      token === "restart" ||
-      token === "--restart"
+      arg === "stop" ||
+      arg === "status" ||
+      arg === "restart" ||
+      arg === "rftoken" ||
+      arg === "--restart"
     ) {
-      if (sawAction) return { error: `unexpected extra action '${token}'` };
-      action = token === "--restart" ? "restart" : token;
+      if (sawAction) return { error: `unexpected extra action '${arg}'` };
+      action = arg === "--restart" ? "restart" : arg;
       sawAction = true;
       continue;
     }
 
-    if (token === "--lan" || token === "--public" || token === "lan" || token === "public") {
+    if (arg === "--token" || arg === "-t") {
+      const value = tokens[++i];
+      if (!value || value.startsWith("-")) {
+        return { error: `${arg} requires a value` };
+      }
+      token = value;
+      continue;
+    }
+
+    if (arg.startsWith("--token=")) {
+      const value = arg.slice("--token=".length);
+      if (!value) return { error: "--token requires a value" };
+      token = value;
+      continue;
+    }
+
+    if (arg === "--lan" || arg === "--public" || arg === "lan" || arg === "public") {
       host = LAN_HOST;
       hostExplicit = true;
       continue;
     }
 
-    if (token === "--host" || token === "-H" || token === "host") {
+    if (arg === "--host" || arg === "-H" || arg === "host") {
       const value = tokens[++i];
       if (!value || value.startsWith("-")) {
-        return { error: `${token} requires an address (e.g. 0.0.0.0)` };
+        return { error: `${arg} requires an address (e.g. 0.0.0.0)` };
       }
       host = value;
       hostExplicit = true;
       continue;
     }
 
-    if (token.startsWith("--host=")) {
-      const value = token.slice("--host=".length);
+    if (arg.startsWith("--host=")) {
+      const value = arg.slice("--host=".length);
       if (!value) return { error: "--host requires an address (e.g. 0.0.0.0)" };
       host = value;
       hostExplicit = true;
       continue;
     }
 
-    if (token.startsWith("-H=")) {
-      const value = token.slice("-H=".length);
+    if (arg.startsWith("-H=")) {
+      const value = arg.slice("-H=".length);
       if (!value) return { error: "-H requires an address (e.g. 0.0.0.0)" };
       host = value;
       hostExplicit = true;
       continue;
     }
 
-    if (/^\d+$/.test(token)) {
-      port = token;
+    if (/^\d+$/.test(arg)) {
+      port = arg;
       portExplicit = true;
       continue;
     }
 
     return {
-      error: `unknown argument '${token}' (use port, --host <addr>, --lan, stop, status, restart)`,
+      error: `unknown argument '${arg}' (use port, --host <addr>, --lan, --token <value>, stop, status, restart, rftoken)`,
     };
   }
 
-  return { action, port, host, portExplicit, hostExplicit };
+  return { action, port, host, portExplicit, hostExplicit, token };
 }
 
 /** Parse `pi --web [stop|status|port] [--host <addr>|--lan]` from raw argv. */
@@ -426,7 +551,7 @@ function parseWebDaemonArgs(argv: string[] = process.argv): {
 
   const tokens: string[] = [];
 
-  // Allow --host/--lan/--restart before --web; later tokens (after --web) override.
+  // Allow --host/--lan/--restart/--token before --web; later tokens (after --web) override.
   for (let i = 0; i < idx; i++) {
     const arg = argv[i]!;
     if (arg === "--lan" || arg === "--public" || arg === "--restart") {
@@ -445,6 +570,20 @@ function parseWebDaemonArgs(argv: string[] = process.argv): {
     }
     if (arg.startsWith("--host=") || arg.startsWith("-H=")) {
       tokens.push(arg);
+      continue;
+    }
+    if (arg === "--token" || arg === "-t") {
+      const value = argv[i + 1];
+      if (value && !value.startsWith("-")) {
+        tokens.push(arg, value);
+        i++;
+      } else {
+        tokens.push(arg);
+      }
+      continue;
+    }
+    if (arg.startsWith("--token=")) {
+      tokens.push(arg);
     }
   }
 
@@ -461,8 +600,11 @@ function parseWebDaemonArgs(argv: string[] = process.argv): {
       arg !== "--restart" &&
       arg !== "--host" &&
       arg !== "-H" &&
+      arg !== "--token" &&
+      arg !== "-t" &&
       !arg.startsWith("--host=") &&
-      !arg.startsWith("-H=")
+      !arg.startsWith("-H=") &&
+      !arg.startsWith("--token=")
     ) {
       break;
     }
@@ -474,11 +616,14 @@ function parseWebDaemonArgs(argv: string[] = process.argv): {
   return { enabled: true, ...parsed };
 }
 
-/** Resolve port/host for start/restart, keeping previous bind on bare restart. */
+/** Resolve port/host for start/restart, keeping the previous bind on bare
+ * restart. The state files are authoritative even when the pid file is stale
+ * (crashed/stopped daemon) — a restart must never silently move to another
+ * port, or browsers that cached the old URL would lose the server. */
 function resolveLaunchTarget(parsed: ParsedWebArgs): { port: string; host: string } {
-  const running = readPid() !== null;
-  const prevPort = running ? readPort() : null;
-  const prevHost = running ? readHost() : null;
+  // readPort/readHost already fall back to env/defaults when no file exists.
+  const prevPort = readPort();
+  const prevHost = readHost();
   return {
     port: parsed.portExplicit ? parsed.port : (prevPort ?? parsed.port),
     host: parsed.hostExplicit ? parsed.host : (prevHost ?? parsed.host),
@@ -488,9 +633,9 @@ function resolveLaunchTarget(parsed: ParsedWebArgs): { port: string; host: strin
 function launchDaemon(
   port: string,
   host: string,
-  opts: { openBrowser: boolean; verb: "started" | "restarted" },
+  opts: { openBrowser: boolean; verb: "started" | "restarted"; token?: string },
 ): void {
-  const result = startServer(port, host);
+  const result = startServer(port, host, opts.token);
   if (!result.ok) {
     console.error(`pi-web-chat: ${result.error}`);
     process.exit(1);
@@ -517,14 +662,36 @@ function launchDaemon(
   console.log(`pi-web-chat ${opts.verb} — ${summary}`);
   if (!isLoopbackHost(result.host)) {
     console.log(
-      "  warning: bound beyond loopback with no app auth — use only on trusted networks",
+      "  warning: bound beyond loopback — auth (token + 2FA) is enforced",
     );
   }
   console.log(`  stop:    pi --web stop`);
-  console.log(`  restart: pi --web restart`);
+  console.log(`  restart: pi --web ${result.port} restart`);
   console.log(`  status:  pi --web status`);
+  console.log(`  agents:  pi + Codex (select per new session in Web settings)`);
   console.log(`  logs:    ${LOG_FILE}`);
+  console.log(`  auth:    token & 2FA — see ${LOG_FILE} (or ~/.pi/web-chat/token)`);
   if (opts.openBrowser) openBrowser(url);
+}
+
+/** Rotate the access token: generate a new one and write it to the file
+ * (a running server also picks it up from the next login on) */
+function rotateToken(): string {
+  const token = randomBytes(32).toString("hex");
+  writeFileSync(TOKEN_FILE, token + "\n", { mode: 0o600 });
+  return token;
+}
+
+function handleRotateToken(ctx?: { ui: { notify: (msg: string, kind?: string) => void } }): void {
+  const token = rotateToken();
+  const msg = `pi-web-chat: access token rotated — ${token} (stored in ${TOKEN_FILE}, applies on next login)`;
+  if (ctx) ctx.ui.notify(msg, "info");
+  else console.log(msg);
+}
+
+export function managedRestartPortError(action: string, portExplicit: boolean): string | undefined {
+  if (action !== "restart" || portExplicit) return undefined;
+  return `managed restart requires an explicit port; use pi --web ${DEFAULT_PORT} restart`;
 }
 
 function runDaemonAndExit(): void {
@@ -535,6 +702,15 @@ function runDaemonAndExit(): void {
   }
 
   const { action } = parsed;
+
+  // Managed restarts must name the production port explicitly. Reading a
+  // stale daemon state file here can otherwise move or revive the wrong
+  // listener while still printing a successful restart message.
+  const restartPortError = managedRestartPortError(action, parsed.portExplicit);
+  if (restartPortError) {
+    console.error(`pi-web-chat: ${restartPortError}`);
+    process.exit(1);
+  }
 
   if (action === "stop") {
     const { stopped, pid } = stopServer({ waitMs: 3_000 });
@@ -552,19 +728,24 @@ function runDaemonAndExit(): void {
     process.exit(0);
   }
 
+  if (action === "rftoken") {
+    handleRotateToken();
+    process.exit(0);
+  }
+
   if (action === "restart") {
     const { port, host } = resolveLaunchTarget(parsed);
     const { stopped, pid } = stopServer({ waitMs: 5_000 });
     if (stopped) {
       console.log(`pi-web-chat stopped (pid ${pid})`);
     }
-    launchDaemon(port, host, { openBrowser: true, verb: "restarted" });
+    launchDaemon(port, host, { openBrowser: true, verb: "restarted", token: parsed.token });
     process.exit(0);
   }
 
   // start
   const { port, host } = resolveLaunchTarget(parsed);
-  launchDaemon(port, host, { openBrowser: true, verb: "started" });
+  launchDaemon(port, host, { openBrowser: true, verb: "started", token: parsed.token });
   // Detached server keeps running; do not open pi TUI.
   process.exit(0);
 }
@@ -572,7 +753,7 @@ function runDaemonAndExit(): void {
 export default function (pi: ExtensionAPI) {
   pi.registerFlag("web", {
     description:
-      "Start pi-web-chat UI in background and exit (no TUI). Options: [port] [--host <addr>|--lan] [stop|status|restart]",
+      "Start pi-web-chat UI in background and exit (no TUI). Options: [port] [--host <addr>|--lan] [stop|status|restart|rftoken]",
     type: "boolean",
     default: false,
   });
@@ -584,9 +765,15 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerFlag("lan", {
-    description: "With --web, bind pi-web-chat to 0.0.0.0 (LAN access; no app auth)",
+    description: "With --web, bind pi-web-chat to 0.0.0.0 (LAN access; token + 2FA auth)",
     type: "boolean",
     default: false,
+  });
+
+  pi.registerFlag("token", {
+    description:
+      "Access token for pi-web-chat when used with --web (default: auto-generated and stored in ~/.pi/web-chat/token)",
+    type: "string",
   });
 
   pi.registerFlag("restart", {
@@ -637,13 +824,18 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      if (action === "rftoken") {
+        handleRotateToken(ctx);
+        return;
+      }
+
       if (action === "restart") {
         const { port, host } = resolveLaunchTarget(parsed);
         const { stopped, pid } = stopServer({ waitMs: 5_000 });
         if (stopped) {
           ctx.ui.notify(`pi-web-chat stopped (pid ${pid})`, "info");
         }
-        const result = startServer(port, host);
+        const result = startServer(port, host, parsed.token);
         if (!result.ok) {
           ctx.ui.notify(`pi-web-chat: ${result.error}`, "error");
           return;
@@ -656,7 +848,7 @@ export default function (pi: ExtensionAPI) {
         }
         const summary = describeServer(result.port, result.host, result.pid);
         const warning = !isLoopbackHost(result.host)
-          ? " — warning: non-loopback bind, no app auth"
+          ? " — warning: non-loopback bind, auth enforced"
           : "";
         ctx.ui.notify(`pi-web-chat restarted — ${summary}${warning}`, "info");
         return;
@@ -664,7 +856,7 @@ export default function (pi: ExtensionAPI) {
 
       // start
       const { port, host } = resolveLaunchTarget(parsed);
-      const result = startServer(port, host);
+      const result = startServer(port, host, parsed.token);
       if (!result.ok) {
         ctx.ui.notify(`pi-web-chat: ${result.error}`, "error");
         return;
@@ -682,7 +874,7 @@ export default function (pi: ExtensionAPI) {
       const summary = describeServer(result.port, result.host, result.pid);
       const warning =
         !result.already && !isLoopbackHost(result.host)
-          ? " — warning: non-loopback bind, no app auth"
+          ? " — warning: non-loopback bind, auth enforced"
           : "";
       ctx.ui.notify(
         result.already

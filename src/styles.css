@@ -1,13 +1,24 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
-@import "highlight.js/styles/github-dark.css";
 
-/* class 기반 다크모드 (html.dark) */
+/* Streamdown (streaming markdown) utility classes */
+@source "../node_modules/streamdown/dist/*.js";
+
+/* JetBrainsMono Nerd Font (Medium, converted to woff2 locally for packaging) */
+@font-face {
+  font-family: "JetBrainsMono Nerd Font";
+  src: url("/fonts/JetBrainsMonoNerdFont-Medium.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Class-based dark mode (html.dark) */
 @custom-variant dark (&:where(.dark, .dark *));
 
 /*
- * Claude / ChatGPT desktop 스타일 토큰.
- * 실제 색은 --c-* 에서 오고, .dark 에서 값만 갈아끼운다.
+ * Claude / ChatGPT desktop-style tokens.
+ * Actual colors come from --c-* and only the values are swapped in .dark.
  */
 @theme {
   --color-canvas: var(--c-canvas);
@@ -27,6 +38,9 @@
   --font-sans:
     ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
     "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", sans-serif;
+  --font-mono:
+    "JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
 }
 
 :root {
@@ -36,7 +50,7 @@
   --composer-pad-top: 0.5rem;
   --composer-safe-bottom-max: 34px;
 
-  /* light — Claude 특유의 따뜻한 아이보리 */
+  /* light — Claude's warm ivory */
   --c-canvas: #faf9f5;
   --c-sidebar: #f2f0e9;
   --c-card: #ffffff;
@@ -50,6 +64,19 @@
   --c-bubble: #f0eee6;
   --c-hover: rgba(0, 0, 0, 0.045);
   --c-selected: rgba(0, 0, 0, 0.075);
+
+  /* shadcn-style tokens consumed by Streamdown components (mapped to theme) */
+  --background: var(--c-canvas);
+  --foreground: var(--c-ink);
+  --card: var(--c-card);
+  --card-foreground: var(--c-ink);
+  --muted: var(--c-bubble);
+  --muted-foreground: var(--c-muted);
+  --border: var(--c-line);
+  --input: var(--c-line);
+  --primary: var(--c-accent);
+  --primary-foreground: var(--c-accent-ink);
+  --radius: 0.625rem;
 }
 
 .dark {
@@ -66,12 +93,23 @@
   --c-bubble: #373734;
   --c-hover: rgba(255, 255, 255, 0.06);
   --c-selected: rgba(255, 255, 255, 0.1);
+
+  --background: var(--c-canvas);
+  --foreground: var(--c-ink);
+  --card: var(--c-card);
+  --card-foreground: var(--c-ink);
+  --muted: var(--c-bubble);
+  --muted-foreground: var(--c-muted);
+  --border: var(--c-line);
+  --input: var(--c-line);
+  --primary: var(--c-accent);
+  --primary-foreground: var(--c-accent-ink);
 }
 
 /*
- * Lock the page: body is fixed to the screen so iOS can't scroll the whole
- * app up when the keyboard opens. #root stays in normal flow (not fixed —
- * that truncates content on iOS 26+) and is sized from visualViewport.
+ * The document stays fixed for standalone-PWA bounds, while iOS is allowed to
+ * pan its visual viewport for the keyboard. #root stays in normal flow (not
+ * fixed — that truncates content on iOS 26+).
  */
 html,
 body {
@@ -85,15 +123,25 @@ body {
 }
 
 body {
+  /* Closed state: let the browser define the standalone app's drawable bounds.
+     A fixed height based on screen/innerHeight can overrun or undershoot them. */
   position: fixed;
   inset: 0;
+  height: auto;
   @apply bg-canvas text-ink antialiased;
 }
 
+/* Safari reserves the final home-indicator strip outside the fixed app box.
+   Let the composer use its own bottom padding, but do not send controls into
+   the native strip: a larger offset visibly clips the bottom control row. */
+html.ua-ios.ua-standalone body {
+  bottom: -0.5rem;
+}
+
 #root {
-  height: 100dvh;
-  height: var(--app-height, 100dvh);
-  max-height: var(--app-height, 100dvh);
+  /* Fill the browser-controlled viewport (or the keyboard viewport above). */
+  height: 100%;
+  max-height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -101,23 +149,255 @@ body {
 
 @media (max-width: 640px) {
   textarea,
-  input {
-    font-size: 16px;
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
+    /* Prevent iOS focus zoom, which also pans a fixed app away from the
+       keyboard. Utility classes elsewhere may specify a smaller desktop size,
+       so this needs to win on mobile. */
+    font-size: 16px !important;
   }
+
 }
 
 .composer-textarea {
   scrollbar-width: none;
   -ms-overflow-style: none;
+  font-size: var(--composer-font-size, 15px);
 }
 .composer-textarea::-webkit-scrollbar {
   display: none;
 }
 
-/* 얇은 스크롤바 (데스크톱 앱 느낌) */
+/* GrokBot-style agent bot (LaoA GrokBot, MIT). The body silhouette + antenna
+   sit behind the eyes; every eye path shares the same 48-point structure, so
+   changing `d` morphs smoothly between states. The body tints with the status
+   color (currentColor) at low opacity, so it reads as a background for the
+   expressive eyes. */
+.agent-eyes {
+  display: block;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.agent-eyes__body {
+  fill: color-mix(in srgb, currentColor 14%, transparent);
+  stroke: color-mix(in srgb, currentColor 28%, transparent);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  transition: fill 0.35s ease, stroke 0.35s ease;
+}
+.agent-eyes__path {
+  fill: currentColor;
+  transition: d 0.45s cubic-bezier(0.4, 0, 0.2, 1), fill 0.35s ease;
+}
+
+/* Morphicons keeps the action shape continuous; the pending arc adds only a
+   restrained rotation while the remote command is awaiting acknowledgement. */
+.remote-action-icon--pending {
+  animation: remote-action-pending 1.1s linear infinite;
+  transform-origin: center;
+}
+@keyframes remote-action-pending {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Refresh spin animation for tactile reload triggers */
+.refresh-action-icon--spinning {
+  animation: refresh-spin 0.75s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-origin: center;
+}
+@keyframes refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Agent identity badge: pi = π (theme accent), Codex = ⌘ (amber). The badge
+   tints with currentColor so callers pick the tone via a text-* utility, and
+   an SVG <text> glyph avoids emoji-font rendering differences across platforms. */
+.agent-icon {
+  display: block;
+}
+.agent-icon__badge {
+  fill: color-mix(in srgb, currentColor 10%, transparent);
+  stroke: color-mix(in srgb, currentColor 28%, transparent);
+  stroke-width: 1.2;
+}
+.agent-icon__glyph {
+  fill: currentColor;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Occasional GrokBot motions (LaoA GrokBot stateMotion, scaled to small
+   sizes via percentages / small fixed values). Each runs ~0.9-1s. */
+@keyframes agent-eyes-motion-bounce {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  40% {
+    transform: translateY(-16%) scale(0.96, 1.04);
+  }
+  65% {
+    transform: translateY(3%) scale(1.04, 0.96);
+  }
+}
+@keyframes agent-eyes-motion-tilt {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  35% {
+    transform: rotate(-14deg) translate(-6%, 4%);
+  }
+  70% {
+    transform: rotate(7deg);
+  }
+}
+@keyframes agent-eyes-motion-scan {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  30% {
+    transform: translateX(-14%);
+  }
+  70% {
+    transform: translateX(14%);
+  }
+}
+@keyframes agent-eyes-motion-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.07, 0.93);
+  }
+  65% {
+    transform: scale(0.95, 1.06);
+  }
+}
+@keyframes agent-eyes-motion-glitch {
+  0%,
+  100% {
+    transform: translate(0);
+  }
+  25% {
+    transform: translate(-6%, 2%);
+  }
+  50% {
+    transform: translate(7%, -2%);
+  }
+  75% {
+    transform: translate(-3%, 1%);
+  }
+}
+.agent-eyes--motion-bounce {
+  animation: agent-eyes-motion-bounce 0.95s ease;
+}
+.agent-eyes--motion-tilt {
+  animation: agent-eyes-motion-tilt 0.9s ease;
+}
+.agent-eyes--motion-scan {
+  animation: agent-eyes-motion-scan 0.95s ease;
+}
+.agent-eyes--motion-pulse {
+  animation: agent-eyes-motion-pulse 0.9s ease;
+}
+.agent-eyes--motion-glitch {
+  animation: agent-eyes-motion-glitch 0.7s steps(2);
+}
+.agent-eyes--blink .agent-eyes__path {
+  animation: agent-eyes-blink 0.24s ease-in-out;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@keyframes agent-eyes-blink {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  45% {
+    transform: scaleY(0.08);
+  }
+}
+
+
+/* User-message anchor jump highlight (fades out after 1.6s) */
+@keyframes anchor-flash {
+  0% {
+    outline-color: var(--c-accent);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+.anchor-flash {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+  border-radius: 0.75rem;
+  animation: anchor-flash 1.6s ease-out forwards;
+}
+
+/* Thin scrollbar (desktop-app feel) */
 .thin-scroll {
   scrollbar-width: thin;
   scrollbar-color: var(--c-faint) transparent;
+}
+
+/* Slowly reveal long branch/todo labels without moving their leading icons. */
+@keyframes badge-marquee {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+  45%,
+  68% {
+    transform: translateX(calc(-1 * var(--badge-marquee-distance)));
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+.badge-marquee {
+  animation: badge-marquee 14s ease-in-out 1.2s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .badge-marquee {
+    animation: none;
+  }
+  .agent-eyes__path {
+    transition: none;
+  }
+  .remote-action-icon--pending {
+    animation: none;
+  }
+  .agent-eyes--blink .agent-eyes__path {
+    animation: none;
+  }
+  .agent-eyes--motion-bounce,
+  .agent-eyes--motion-tilt,
+  .agent-eyes--motion-scan,
+  .agent-eyes--motion-pulse,
+  .agent-eyes--motion-glitch {
+    animation: none;
+  }
+}
+
+/* Fade the right edge of truncated inline text (tool summaries etc.) */
+.fade-x {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 2.5rem), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 2.5rem), transparent);
+}
+.fade-x-compact {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 1.5rem), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 1.5rem), transparent);
 }
 .thin-scroll::-webkit-scrollbar {
   width: 8px;
@@ -133,8 +413,7 @@ body {
 }
 
 /*
- * Bottom bar: floor padding + capped home-indicator inset. When the keyboard
- * is open there is no home indicator, so drop the safe-area entirely.
+ * Bottom bar: floor padding + capped home-indicator inset.
  */
 .composer-bar {
   padding-top: var(--composer-pad-top);
@@ -142,14 +421,138 @@ body {
   padding-right: var(--composer-pad-x);
   padding-bottom: max(
     0.5rem,
-    min(var(--composer-safe-bottom-max), env(safe-area-inset-bottom, 0px))
+    min(var(--composer-safe-bottom-max), var(--safe-bottom, env(safe-area-inset-bottom, 0px)))
   );
 }
-html.ua-keyboard .composer-bar {
+/* A standalone app's fixed viewport already stops above the native bottom
+   region. Applying the inset again leaves a visibly doubled gap. */
+html.ua-standalone .composer-bar {
   padding-bottom: 0.5rem;
 }
 
-/* 마크다운 본문 색을 토큰에 맞춤 (라이트/다크 자동) */
+/* Streamdown tables keep their natural column width. On narrow screens the
+   wrapper becomes a touch-scroll surface instead of forcing every cell to
+   wrap into tall rows. */
+[data-streamdown="table-wrapper"] {
+  gap: 0.375rem !important;
+  padding: 0.375rem !important;
+}
+[data-streamdown="table-wrapper"] > div:last-child {
+  max-width: 100%;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x pan-y;
+}
+[data-streamdown="table"] {
+  width: max-content !important;
+  min-width: 100% !important;
+}
+[data-streamdown="table-header-cell"],
+[data-streamdown="table-cell"] {
+  padding: 0.375rem 0.625rem !important;
+  white-space: nowrap;
+}
+
+/* The controls sit on a solid compact surface rather than floating over table
+   content. Direct-child selectors leave copy/download dropdown menus roomy. */
+[data-streamdown="table-wrapper"] > div:first-child:not(:last-child) {
+  align-self: flex-end;
+  min-height: 1.5rem;
+  gap: 0.25rem !important;
+  padding: 0.125rem 0.25rem;
+  border: 1px solid var(--c-line);
+  border-radius: 0.375rem;
+  background-color: var(--c-card);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+[data-streamdown="table-wrapper"] > div:first-child:not(:last-child) > button,
+[data-streamdown="table-wrapper"] > div:first-child:not(:last-child) > div > button {
+  display: flex;
+  width: 1.25rem;
+  height: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0.125rem !important;
+  border-radius: 0.25rem;
+}
+[data-streamdown="table-wrapper"] > div:first-child:not(:last-child) > button svg,
+[data-streamdown="table-wrapper"] > div:first-child:not(:last-child) > div > button svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+/* Fullscreen tables start below the app header instead of covering it. */
+[data-streamdown="table-fullscreen"] {
+  top: max(3.25rem, calc(var(--safe-top) + 2.75rem)) !important;
+  background-color: var(--c-canvas) !important;
+}
+[data-streamdown="table-fullscreen"] > div > div:first-child {
+  padding: 0.5rem !important;
+}
+
+/* Compact Streamdown code header and action controls. The action row is an
+   overlay supplied by Streamdown, so its parent needs the matching height. */
+[data-streamdown="code-block"] {
+  gap: 0.375rem !important;
+  padding: 0.375rem !important;
+}
+[data-streamdown="code-block-header"] {
+  height: 1.5rem !important;
+  font-size: 0.6875rem !important;
+}
+[data-streamdown="code-block-header"] > span {
+  margin-left: 0.125rem !important;
+}
+[data-streamdown="code-block"] > div:has(> [data-streamdown="code-block-actions"]) {
+  height: 1.5rem !important;
+  margin-top: -1.875rem !important;
+}
+[data-streamdown="code-block-actions"] {
+  gap: 0.125rem !important;
+  padding: 0.125rem 0.25rem !important;
+  border: 1px solid var(--c-line);
+  background-color: var(--c-card) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  backdrop-filter: none;
+}
+[data-streamdown="code-block-actions"] button {
+  display: flex;
+  width: 1.25rem;
+  height: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0.125rem !important;
+  border-radius: 0.25rem;
+}
+[data-streamdown="code-block-actions"] button svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+[data-streamdown="code-block-body"] {
+  padding: 0.5rem 0.625rem 0.5rem 0.25rem !important;
+}
+[data-streamdown="code-block-body"] pre {
+  min-width: max-content;
+}
+[data-streamdown="code-block-body"] code > span {
+  display: block;
+  min-width: max-content;
+}
+[data-streamdown="code-block-body"] code > span::before {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: 0.875rem !important;
+  margin-right: 0.25rem !important;
+  background-color: var(--c-canvas);
+  box-shadow: 2px 0 var(--c-canvas);
+  color: var(--c-faint) !important;
+  font-size: 0.625rem !important;
+}
+
+/* Markdown body colors follow the tokens (light/dark automatic) */
 .prose {
   --tw-prose-body: var(--c-ink);
   --tw-prose-headings: var(--c-ink);
@@ -162,16 +565,75 @@ html.ua-keyboard .composer-bar {
   --tw-prose-quotes: var(--c-muted);
   --tw-prose-quote-borders: var(--c-line);
   --tw-prose-captions: var(--c-muted);
-  --tw-prose-code: var(--c-ink);
+  --tw-prose-code: #62aeee;
   --tw-prose-th-borders: var(--c-line);
   --tw-prose-td-borders: var(--c-line);
+  /* Long URLs/paths don't overflow (pre scrolls on its own below) */
+  overflow-wrap: break-word;
+  min-width: 0;
 }
 
 .prose pre {
-  @apply rounded-xl border border-neutral-800 bg-[#0d1117] text-[13px];
+  @apply overflow-x-auto rounded-xl border border-neutral-800 bg-[#0d1117] font-mono text-[13px];
 }
 
 .prose :not(pre) > code {
-  background-color: var(--c-bubble);
-  @apply rounded px-1.5 py-0.5 text-[13px] font-normal before:content-none after:content-none;
+  background-color: transparent;
+  color: #62aeee;
+  @apply rounded px-1.5 py-0.5 font-mono text-[13px] font-normal before:content-none after:content-none;
+}
+
+/* Streamdown assigns inline code its own bg-muted utility. Target its stable
+   data attribute so fenced code blocks keep their dark syntax background. */
+[data-streamdown="inline-code"] {
+  background-color: transparent !important;
+  color: #62aeee !important;
+}
+
+/* Conversation typography stays dense without sacrificing code/table spacing.
+   The size variable is set on MessageList from the persisted settings value. */
+.chat-message-text {
+  font-size: var(--chat-font-size, 15px);
+}
+.message-markdown > :first-child {
+  margin-top: 0;
+}
+.message-markdown > :last-child {
+  margin-bottom: 0;
+}
+.message-markdown p {
+  margin-top: 0.625rem;
+  margin-bottom: 0.625rem;
+}
+.message-markdown [data-streamdown="heading-1"],
+.message-markdown [data-streamdown="heading-2"],
+.message-markdown [data-streamdown="heading-3"],
+.message-markdown [data-streamdown="heading-4"],
+.message-markdown [data-streamdown="heading-5"],
+.message-markdown [data-streamdown="heading-6"] {
+  margin-top: 1rem !important;
+  margin-bottom: 0.375rem !important;
+}
+.message-markdown [data-streamdown="unordered-list"],
+.message-markdown [data-streamdown="ordered-list"] {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding-left: 1.25rem;
+  list-style-position: outside;
+}
+.message-markdown [data-streamdown="unordered-list"] > li,
+.message-markdown [data-streamdown="ordered-list"] > li {
+  padding-left: 0.25rem !important;
+  padding-top: 0.125rem;
+  padding-bottom: 0.125rem;
+}
+.message-markdown [data-streamdown="blockquote"] {
+  margin-top: 0.75rem;
+  margin-bottom: 0.75rem;
+  padding-left: 0.75rem;
+}
+.message-markdown [data-streamdown="code-block"],
+.message-markdown [data-streamdown="table-wrapper"] {
+  margin-top: 0.75rem;
+  margin-bottom: 0.75rem;
 }

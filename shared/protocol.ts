@@ -1,4 +1,23 @@
-/** 서버 <-> 클라이언트 공용 프로토콜 타입 */
+/** Shared server <-> client protocol types */
+
+/** Todo 工具의 작업 하나 (toolResult details.tasks 의 부분 집합) */
+export interface UITodoTask {
+  id: number;
+  subject: string;
+  status: string;
+  activeForm?: string;
+}
+
+/** The task currently being worked on, summarized for the composer status row. */
+export interface UIActiveTodo {
+  subject: string;
+  activeForm?: string;
+  /** Current task state; completed is emitted for a fully completed todo list. */
+  status: "in_progress" | "completed";
+  /** One-based position of the active task in the todo list. */
+  current: number;
+  total: number;
+}
 
 export type UIContentBlock =
   | { type: "text"; text: string }
@@ -8,8 +27,15 @@ export type UIContentBlock =
       id: string;
       name: string;
       args: unknown;
-      /** 페어링된 tool result (있으면) */
-      result?: { text: string; isError: boolean };
+      /** Paired tool result (when present) */
+      result?: {
+        text: string;
+        isError: boolean;
+        /** Actual diff returned by some tools (e.g. edit, details.diff) */
+        diff?: string;
+        /** Full task list snapshot from the todo tool (details.tasks) */
+        tasks?: UITodoTask[];
+      };
     }
   | { type: "image"; dataUrl?: string };
 
@@ -17,6 +43,10 @@ export interface UIMessage {
   role: "user" | "assistant" | "custom";
   content: UIContentBlock[];
   errorMessage?: string;
+  /** Message creation time in Unix milliseconds. */
+  timestamp?: number;
+  /** Assistant message completion time in Unix milliseconds. */
+  completedAt?: number;
 }
 
 export interface UIModel {
@@ -24,30 +54,193 @@ export interface UIModel {
   id: string;
   name?: string;
   reasoning?: boolean;
+  /** Reasoning levels advertised by the provider for this exact model. */
+  thinkingLevels?: UIThinkingLevel[];
+  /** Provider-selected default reasoning level. */
+  defaultThinkingLevel?: UIThinkingLevel;
 }
 
-export type UIThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type UIThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+
+/** Session context usage (SDK getContextUsage) */
+export interface UIContextUsage {
+  /** Tokens in context (null when unknown, e.g. right after compaction) */
+  tokens: number | null;
+  contextWindow: number;
+  percent: number | null;
+}
+
+export interface UIHistoryState {
+  /** Opaque server cursor for the page immediately before snapshot.messages. */
+  cursor: string | null;
+  hasMore: boolean;
+}
+
+export interface UIHistoryPage extends UIHistoryState {
+  messages: UIMessage[];
+}
+
+/** Lightweight persisted user-message metadata used by the jump navigator. */
+export interface UIMessageAnchor {
+  /** Stable session entry id. */
+  id: string;
+  /** One-based position among user messages on the active branch. */
+  ordinal: number;
+  /** Collapsed text preview; message bodies remain in paged history. */
+  text: string;
+  /** Session entry time in Unix milliseconds. */
+  timestamp?: number;
+}
+
+export interface UIMessageAnchorsResponse {
+  anchors: UIMessageAnchor[];
+}
+
+export type UIAgentKind = "pi" | "codex";
+
+export interface UIActiveTool {
+  toolCallId: string;
+  toolName: string;
+  /** Arguments are retained across reconnects while the item is running. */
+  args?: unknown;
+  /** Incremental command/MCP/file output retained across reconnects. */
+  output?: string;
+}
+
+export interface UICodexQuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface UICodexQuestion {
+  id: string;
+  header: string;
+  question: string;
+  options?: UICodexQuestionOption[];
+  allowOther?: boolean;
+  secret?: boolean;
+}
+
+/** A blocking app-server request that must be decided by a real user. */
+export type UICodexInteraction =
+  | {
+      id: string;
+      kind: "command_approval";
+      command: string;
+      cwd?: string;
+      reason?: string;
+      details?: unknown;
+      allowSessionApproval?: boolean;
+    }
+  | {
+      id: string;
+      kind: "file_approval";
+      reason?: string;
+      grantRoot?: string;
+      changes?: unknown;
+      allowSessionApproval?: boolean;
+    }
+  | {
+      id: string;
+      kind: "user_input";
+      questions: UICodexQuestion[];
+    }
+  | {
+      id: string;
+      kind: "mcp_elicitation";
+      serverName: string;
+      message: string;
+      mode: "form" | "url";
+      url?: string;
+      schema?: unknown;
+    }
+  | {
+      id: string;
+      kind: "permissions_approval";
+      cwd?: string;
+      reason?: string;
+      permissions: unknown;
+    };
+
+export interface UICodexInteractionResponse {
+  id: string;
+  action: "accept" | "accept_for_session" | "decline" | "cancel" | "submit";
+  /** request_user_input answers, keyed by question id. */
+  answers?: Record<string, string[]>;
+  /** MCP form response content. */
+  content?: unknown;
+  /** Permission grants may be scoped to one turn or the whole session. */
+  scope?: "turn" | "session";
+}
+
+export interface UICodexState {
+  threadId?: string;
+  /** Whether this Web server is attached to Codex's shared app-server daemon. */
+  transport: "shared" | "standalone" | "connecting" | "unavailable";
+  remoteControl?: "disabled" | "connecting" | "connected" | "errored";
+  /** True while attached read-only because another client owns the active turn.
+   * The session is visible and auto-upgrades to interactive once it frees up. */
+  observer?: boolean;
+}
 
 export interface UISnapshot {
   messages: UIMessage[];
+  /** Older messages are loaded separately so live snapshot offsets stay stable. */
+  history?: UIHistoryState;
   isStreaming: boolean;
   model: UIModel | null;
   thinkingLevel: UIThinkingLevel;
-  /** 현재 모델이 지원하는 thinking level 목록 */
+  /** Thinking levels the current model supports */
   thinkingLevels: UIThinkingLevel[];
   sessionFile?: string;
-  /** URL(/s/:id)에 쓰는 세션 식별자 */
+  /** Session identifier used in URL (/s/:id) */
   sessionId?: string;
+  /** Backend agent serving this session. */
+  agent?: UIAgentKind;
+  /** Context usage (null for unsupported models) */
+  context?: UIContextUsage | null;
+  /** Session working directory (project display in the header) */
+  cwd?: string;
+  /** Current branch when the cwd is a git repo, otherwise null */
+  gitBranch?: string | null;
+  /** Current todo task, when the latest todo snapshot has an active item. */
+  activeTodo?: UIActiveTodo;
+  /** Authoritative in-flight tools for full snapshot/reconnect recovery. */
+  activeTools?: UIActiveTool[];
+  /** Blocking Codex requests survive WebSocket reconnects until explicitly resolved. */
+  pendingInteractions?: UICodexInteraction[];
+  /** Codex-native connection/thread state. */
+  codex?: UICodexState;
+}
+
+/** Snapshot fields that are always replaced atomically by an incremental update. */
+export type UISnapshotMetadata = Omit<UISnapshot, "messages">;
+
+/** Replace messages[from..] on top of one exact full-snapshot revision. */
+export interface UISnapshotDelta {
+  baseRevision: number;
+  revision: number;
+  from: number;
+  messages: UIMessage[];
+  snapshot: UISnapshotMetadata;
 }
 
 export interface UISessionInfo {
-  /** URL(/s/:id)에 쓰는 세션 식별자 */
+  /** Session identifier used in URL (/s/:id) */
   id: string;
   path: string;
+  /** Project directory the session belongs to (for display, ~-shortened) */
+  project: string;
   name?: string;
   firstMessage: string;
   modified: string;
   messageCount: number;
+  /** Whether a loaded runtime for this session is streaming (running dot in sidebar) */
+  isStreaming?: boolean;
+  /** Backend agent serving this persisted session. */
+  agent?: UIAgentKind;
+  /** Native Codex identity carried only by legacy bridge records. */
+  codexThreadId?: string;
 }
 
 export interface UIForkPoint {
@@ -55,39 +248,167 @@ export interface UIForkPoint {
   text: string;
 }
 
-export interface UIExtensionInfo {
-  /** 표시용 이름 (파일명 또는 패키지 내 경로) */
+/** One entry in a project directory listing (single level). */
+export interface UITreeNode {
   name: string;
-  /** 패키지 확장이면 패키지명 (예: "pi-subagents") */
+  /** Path relative to the project root (POSIX separators) */
+  path: string;
+  type: "dir" | "file";
+  /** Whether a dir has displayable children (drives the expand chevron) */
+  hasChildren?: boolean;
+  /** Dir exists but is unreadable (EACCES) */
+  inaccessible?: boolean;
+}
+
+export interface UITreeResponse {
+  /** Project root, ~-shortened for display */
+  root: string;
+  /** The listed directory, relative ("" = root) */
+  path: string;
+  nodes: UITreeNode[];
+  truncated?: boolean;
+}
+
+/** Git working tree file status. */
+export interface UIGitFile {
+  path: string;
+  oldPath?: string;
+  index: string;
+  worktree: string;
+  kind: "modified" | "added" | "deleted" | "renamed" | "untracked" | "conflicted";
+}
+
+export interface UIGitStatus {
+  root: string;
+  branch: string | null;
+  head: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  staged: UIGitFile[];
+  unstaged: UIGitFile[];
+  untracked: UIGitFile[];
+  conflicted: UIGitFile[];
+  isDirty: boolean;
+}
+
+export interface UIGitBranch {
+  name: string;
+  commit: string;
+  upstream: string | null;
+  current: boolean;
+}
+
+export interface UIGitCommit {
+  hash: string;
+  shortHash: string;
+  author: string;
+  email: string;
+  date: string;
+  subject: string;
+  body: string;
+}
+
+export interface UIGitCommitFile {
+  path: string;
+  oldPath?: string;
+  status: string;
+}
+
+export interface UIGitCommitDetail extends UIGitCommit {
+  files: UIGitCommitFile[];
+  diff: string;
+}
+
+export interface UIGitDiff {
+  path: string;
+  diff: string;
+}
+
+/** A file/dir hit from project-wide search. */
+export interface UIFileMatch {
+  name: string;
+  path: string;
+  type: "dir" | "file";
+}
+
+export interface UIFileSearchResponse {
+  root: string;
+  query: string;
+  matches: UIFileMatch[];
+  /** Walk hit its safety cap — results may be incomplete */
+  partial?: boolean;
+}
+
+export interface UIExtensionInfo {
+  /** Display name (filename or in-package path) */
+  name: string;
+  /** Package name for package extensions (e.g. "pi-subagents") */
   packageName?: string;
-  /** 홈디렉토리를 ~ 로 축약한 경로 */
+  /** Home-relative path with ~ abbreviation */
   path: string;
   scope: "user" | "project" | "temporary";
-  /** 등록된 커스텀 툴 이름 */
+  /** Registered custom tool names */
   tools: string[];
-  /** 등록된 슬래시 커맨드 */
+  /** Registered slash commands */
   commands: string[];
-  /** 등록된 플래그 */
+  /** Registered flags */
   flags: string[];
-  /** 핸들러가 등록된 이벤트 이름 */
+  /** Event names with registered handlers */
   events: string[];
+}
+
+/** A slash command available in the current session. */
+export interface UICommandInfo {
+  /** Invokable name without the leading slash. */
+  name: string;
+  description?: string;
+  /** Commands are grouped by where pi loaded them from. */
+  source: "builtin" | "extension" | "prompt" | "skill";
+  /** Resource scope for non-built-in commands. */
+  scope?: "user" | "project" | "temporary";
+  /** Short hint shown after completing a command with arguments. */
+  argumentHint?: string;
+}
+
+export type UIClientAction =
+  | { action: "open_settings" }
+  | { action: "open_model" }
+  | { action: "open_fork" }
+  | { action: "open_sessions" }
+  | { action: "new_session" }
+  | { action: "copy_text"; text: string };
+
+export type UIExtensionUIRequest =
+  | { id: string; method: "select"; title: string; options: string[] }
+  | { id: string; method: "confirm"; title: string; message: string }
+  | { id: string; method: "input"; title: string; placeholder?: string }
+  | { id: string; method: "editor"; title: string; prefill?: string };
+
+export interface UIExtensionUIResponse {
+  id: string;
+  cancelled?: boolean;
+  value?: string;
+  confirmed?: boolean;
 }
 
 export interface UIExtensionsResponse {
   extensions: UIExtensionInfo[];
-  /** 로드에 실패한 확장 */
+  /** Extensions that failed to load */
   errors: { path: string; error: string }[];
 }
 
-/** ~/.pi/agent/models.json 의 커스텀 모델 (편집 가능한 필드만 노출) */
+/** Custom models from ~/.pi/agent/models.json (only editable fields are exposed) */
 export interface UICustomModel {
   id: string;
   name?: string;
   reasoning?: boolean;
   contextWindow?: number;
   maxTokens?: number;
-  /** 입력 모달리티 (기본 ["text"]) */
+  /** Input modalities (default ["text"]) */
   input?: ("text" | "image")[];
+  /** Provider-native names for the supported thinking strengths. */
+  thinkingLevelMap?: Partial<Record<UIThinkingLevel, string | null>>;
 }
 
 export type UICustomApi =
@@ -97,50 +418,97 @@ export type UICustomApi =
   | "google-generative-ai";
 
 export interface UICustomProvider {
-  /** models.json 의 providers 키 (예: "ollama") */
+  /** providers key in models.json (e.g. "ollama") */
   key: string;
   baseUrl: string;
   api: UICustomApi;
-  /** 값 또는 "$ENV_VAR" 형식 */
+  /** A value or "$ENV_VAR" */
   apiKey?: string;
   models: UICustomModel[];
 }
 
+/** The provider connection details used to discover remote model ids. */
+export type UIModelDiscoveryRequest = Pick<UICustomProvider, "baseUrl" | "api" | "apiKey"> & {
+  /** providers key — lets the server restore a masked apiKey to the stored key */
+  key?: string;
+};
+
+export interface UIModelDiscoveryResponse {
+  models: string[];
+}
+
 export interface UICustomModelsResponse {
-  /** ~ 로 축약한 models.json 경로 */
+  /** models.json path, ~-shortened */
   path: string;
   providers: UICustomProvider[];
-  /** 파싱 실패 시 메시지 (이 경우 편집 저장은 위험하므로 UI에서 경고) */
+  /** Message when parsing failed (saving is then risky, so the UI warns) */
   parseError?: string;
-  /** 저장 후 재시작 없이 반영되지 않은 경우의 안내 */
+  /** Notice when the change is not reflected without a restart */
   warning?: string;
 }
 
 export interface UIImageAttachment {
-  /** base64 (data URL 아님) */
+  /** base64 (not a data URL) */
   data: string;
   mimeType: string;
 }
 
 export type ServerEvent =
-  | { type: "snapshot"; snapshot: UISnapshot }
+  | { type: "snapshot"; seq: number; revision: number; snapshot: UISnapshot }
+  | { type: "snapshot_delta"; seq: number; delta: UISnapshotDelta }
+  /** The server accepted a prompt command before starting the agent run. */
+  | { type: "prompt_received"; requestId: string }
+  /** Sent after a client abort command has been processed by the session. */
+  | { type: "abort_complete" }
+  | {
+      type: "hello";
+      /** Server build version — prompts a reload when different from the client __APP_VERSION__ */
+      version: string;
+      /** User-facing descriptions for the server build version. */
+      updateNotes?: string[];
+    }
   /**
-   * 이 연결이 URL에 공개된 세션.
-   * 기존 /s/:id 접속 시 즉시, `/` 초안은 첫 prompt 때 전송 → 클라이언트는 /s/:id 로 교체.
-   * 포크 등으로 id가 바뀌면 다시 전송.
+   * Session this connection is bound to in the URL.
+   * Sent immediately on an existing /s/:id connect; for a `/` draft it is sent
+   * on the first prompt → the client switches to /s/:id. Re-sent when the id
+   * changes (e.g. fork).
    */
   | { type: "session_bound"; sessionId: string }
-  | { type: "delta"; kind: "text" | "thinking"; delta: string }
-  | { type: "tool_start"; toolCallId: string; toolName: string }
-  | { type: "tool_end"; toolCallId: string; toolName: string; isError: boolean }
-  | { type: "agent_start" }
-  | { type: "agent_end" }
+  | { type: "delta"; seq: number; kind: "text" | "thinking"; delta: string }
+  /** The agent closed its current reasoning block; keep it available but collapse it. */
+  | { type: "thinking_end"; seq: number }
+  | {
+      type: "tool_start";
+      seq: number;
+      toolCallId: string;
+      toolName: string;
+      args?: unknown;
+      /** Optimistic todo status derived from tool args before details.tasks arrives. */
+      activeTodo?: UIActiveTodo;
+    }
+  | { type: "tool_progress"; seq: number; toolCallId: string; delta: string }
+  | { type: "tool_end"; seq: number; toolCallId: string; toolName: string; isError: boolean }
+  | { type: "agent_start"; seq: number }
+  | { type: "agent_end"; seq: number }
   | { type: "forked"; selectedText?: string }
-  | { type: "error"; message: string };
+  | { type: "command_catalog"; commands: UICommandInfo[] }
+  | { type: "command_result"; message: string }
+  | { type: "client_action"; action: UIClientAction }
+  | { type: "extension_ui_request"; request: UIExtensionUIRequest }
+  | { type: "codex_interaction"; interaction: UICodexInteraction }
+  | { type: "codex_interaction_resolved"; id: string }
+  | { type: "error"; message: string; requestId?: string };
 
 export type ClientCommand =
-  | { type: "prompt"; text: string; images?: UIImageAttachment[] }
+  | { type: "prompt"; text: string; images?: UIImageAttachment[]; requestId?: string }
+  /** Ask the server to reset incremental snapshot state after a revision gap. */
+  | { type: "get_snapshot" }
+  /** Replay events strictly after seq, or fall back to a full snapshot. */
+  | { type: "sync_events"; afterSeq: number }
   | { type: "abort" }
   | { type: "set_model"; provider: string; id: string }
   | { type: "set_thinking_level"; level: UIThinkingLevel }
-  | { type: "fork"; entryId: string };
+  | { type: "fork"; entryId: string }
+  | { type: "get_commands" }
+  | { type: "codex_interaction_response"; response: UICodexInteractionResponse }
+  | { type: "extension_ui_response"; response: UIExtensionUIResponse };

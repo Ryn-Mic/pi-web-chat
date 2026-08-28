@@ -2,8 +2,13 @@ import { Menu } from "@base-ui-components/react/menu";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UIModel } from "../../shared/protocol";
 import { useModels } from "../lib/api";
-import { chatClient } from "../lib/chat";
+import { chatClient, useChat } from "../lib/chat";
 import { useT } from "../lib/i18n";
+import { LoadingIndicator } from "./LoadingIndicator";
+
+function modelLabel(model: UIModel) {
+  return model.name?.trim() || model.id;
+}
 
 function matchesQuery(model: UIModel, q: string) {
   if (!q) return true;
@@ -11,19 +16,28 @@ function matchesQuery(model: UIModel, q: string) {
   return hay.includes(q);
 }
 
-export function ModelMenu({ current }: { current: UIModel | null }) {
+export function ModelMenu({ current, openToken = 0 }: { current: UIModel | null; openToken?: number }) {
   const t = useT();
-  const { data: models } = useModels();
+  const { snapshot } = useChat();
+  const { data: models, isPending, isFetching } = useModels(snapshot?.agent);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return (models ?? []).filter((m) => matchesQuery(m, q));
+    return (models ?? [])
+      .filter((m) => matchesQuery(m, q))
+      .sort((a, b) => {
+        const byName = modelLabel(a).localeCompare(modelLabel(b), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
+        return byName || a.provider.localeCompare(b.provider, undefined, { sensitivity: "base" });
+      });
   }, [models, query]);
 
-  // Menu 내부 focus manager가 먼저 잡은 뒤 검색창으로 재포커스
+  // The menu's focus manager grabs focus first; then re-focus the search input
   useEffect(() => {
     if (!open) return;
     setQuery("");
@@ -36,6 +50,10 @@ export function ModelMenu({ current }: { current: UIModel | null }) {
     };
   }, [open]);
 
+  useEffect(() => {
+    if (openToken > 0) setOpen(true);
+  }, [openToken]);
+
   return (
     <Menu.Root open={open} onOpenChange={setOpen}>
       <Menu.Trigger className="max-w-[40vw] truncate rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-hover hover:text-ink sm:max-w-xs">
@@ -43,7 +61,7 @@ export function ModelMenu({ current }: { current: UIModel | null }) {
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner sideOffset={6} align="end">
-          <Menu.Popup className="flex w-72 flex-col overflow-hidden rounded-xl border border-line bg-card shadow-xl outline-none">
+          <Menu.Popup className="flex w-[min(22rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border border-line bg-card shadow-xl outline-none">
             <div className="border-b border-line p-2">
               <div className="flex items-center gap-2 rounded-lg bg-hover px-2.5">
                 <svg
@@ -62,10 +80,10 @@ export function ModelMenu({ current }: { current: UIModel | null }) {
                   aria-label={t("searchModels")}
                   autoFocus
                   className="w-full bg-transparent py-2 text-sm text-ink outline-none placeholder:text-faint"
-                  // 메뉴 typeahead / 화살표 네비와 충돌 방지
+                  // Avoid colliding with menu typeahead / arrow-key navigation
                   onKeyDown={(e) => {
                     if (e.key === "Escape") return;
-                    // 아래 화살표는 목록으로 넘김
+                    // Down arrow moves to the list
                     if (e.key === "ArrowDown") {
                       e.preventDefault();
                       e.currentTarget.blur();
@@ -93,8 +111,13 @@ export function ModelMenu({ current }: { current: UIModel | null }) {
               </div>
             </div>
 
-            <div className="max-h-[min(50vh,22rem)] overflow-y-auto py-1">
-              {filtered.map((m) => {
+            <div className="relative max-h-[min(50vh,22rem)] overflow-y-auto py-1">
+              {isPending ? (
+                <div className="flex justify-center px-3 py-6">
+                  <LoadingIndicator label={t("loading")} showLabel />
+                </div>
+              ) : (
+                filtered.map((m) => {
                 const active = current && m.provider === current.provider && m.id === current.id;
                 return (
                   <Menu.Item
@@ -102,16 +125,18 @@ export function ModelMenu({ current }: { current: UIModel | null }) {
                     onClick={() =>
                       chatClient.send({ type: "set_model", provider: m.provider, id: m.id })
                     }
-                    className={`flex cursor-pointer flex-col px-3 py-2 text-sm outline-none data-[highlighted]:bg-hover ${
+                    className={`flex min-w-0 cursor-pointer items-center gap-3 px-3 py-2 text-sm outline-none data-[highlighted]:bg-hover ${
                       active ? "text-accent" : "text-ink"
                     }`}
                   >
-                    <span className="truncate">{m.name ?? m.id}</span>
-                    <span className="text-xs text-faint">{m.provider}</span>
+                    <span className="min-w-0 flex-1 truncate">{modelLabel(m)}</span>
+                    <span className="max-w-[42%] shrink-0 truncate text-right text-xs text-faint">{m.provider}</span>
                   </Menu.Item>
                 );
-              })}
-              {filtered.length === 0 && (
+                })
+              )}
+              {isFetching && !isPending && <LoadingIndicator label={t("loading")} size="sm" className="absolute top-3 right-3" />}
+              {!isPending && filtered.length === 0 && (
                 <div className="px-3 py-6 text-center text-sm text-faint">
                   {models && models.length === 0 ? t("noModelsAvailable") : t("noSearchResults")}
                 </div>

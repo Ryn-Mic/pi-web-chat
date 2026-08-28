@@ -1,7 +1,8 @@
 /**
- * ~/.pi/agent/models.json (커스텀 프로바이더/모델) 읽기·쓰기.
+ * Read/write ~/.pi/agent/models.json (custom providers/models).
  *
- * 편집 UI가 다루지 않는 필드(cost, compat, headers 등)는 병합으로 보존한다.
+ * Fields the edit UI doesn't touch (cost, compat, headers, etc.) are preserved
+ * via merge.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -12,6 +13,7 @@ import type {
   UICustomModel,
   UICustomModelsResponse,
   UICustomProvider,
+  UIThinkingLevel,
 } from "../shared/protocol.ts";
 
 const HOME = homedir();
@@ -21,6 +23,16 @@ const APIS: UICustomApi[] = [
   "openai-responses",
   "anthropic-messages",
   "google-generative-ai",
+];
+
+const THINKING_LEVELS: UIThinkingLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
 ];
 
 export function modelsPath(): string {
@@ -47,8 +59,66 @@ function readRaw(): { json: Json; parseError?: string } {
   }
 }
 
+/**
+ * Mask a stored apiKey for UI display: first 4 + "…" + last 4 chars.
+ * - $ENV_VAR references are returned as-is (they are not secrets)
+ * - Keys shorter than 9 chars are masked entirely (first4+last4 would overlap)
+ */
+export function maskApiKey(key: string | undefined): string | undefined {
+  if (!key) return undefined;
+  const k = key.trim();
+  if (k.startsWith("$")) return k;
+  if (k.length <= 8) return "••••••••";
+  return `${k.slice(0, 4)}…${k.slice(-4)}`;
+}
+
+/**
+ * Resolve an apiKey received from the UI for internal use (discovery):
+ * when the incoming value is the masked form of a stored key, restore the
+ * real key; otherwise treat it as a new value (or $ENV_VAR reference).
+ * A masked value that matches nothing is rejected — it can only mean a
+ * stale mask (e.g. after renaming the provider key) and would be useless
+ * (or worse, a non-ASCII header) downstream.
+ */
+export function resolveIncomingApiKey(
+  providerKey: string,
+  incoming: string | undefined,
+): string | undefined {
+  const key = incoming?.trim();
+  if (!key) return undefined;
+  const { json } = readRaw();
+  const providers = (json.providers ?? {}) as Record<string, Json>;
+  const stored = providers[providerKey]?.apiKey;
+  if (typeof stored === "string" && key === maskApiKey(stored)) return stored;
+  if (isMaskedValue(key)) {
+    throw new Error(
+      `apiKey for "${providerKey}" is masked but does not match the stored key — re-enter the key`,
+    );
+  }
+  return key;
+}
+
+/** The mask marker used by maskApiKey — its presence means a masked value. */
+function isMaskedValue(value: string): boolean {
+  return value.includes("…");
+}
+
 function toNumber(v: unknown): number | undefined {
   return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+function toThinkingLevelMap(
+  value: unknown,
+): Partial<Record<UIThinkingLevel, string | null>> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value).filter(
+    ([level, mapped]) =>
+      THINKING_LEVELS.includes(level as UIThinkingLevel) &&
+      (typeof mapped === "string" || mapped === null),
+  );
+  return entries.length > 0
+    ? (Object.fromEntries(entries) as Partial<Record<UIThinkingLevel, string | null>>)
+    : undefined;
 }
 
 export function readCustomModels(): UICustomModelsResponse {
@@ -60,7 +130,7 @@ export function readCustomModels(): UICustomModelsResponse {
       key,
       baseUrl: typeof p?.baseUrl === "string" ? p.baseUrl : "",
       api: (APIS.includes(p?.api as UICustomApi) ? p.api : "openai-completions") as UICustomApi,
-      apiKey: typeof p?.apiKey === "string" ? p.apiKey : undefined,
+      apiKey: maskApiKey(typeof p?.apiKey === "string" ? p.apiKey : undefined),
       models: models
         .filter((m): m is Json => !!m && typeof m === "object")
         .map((m) => ({
@@ -72,13 +142,14 @@ export function readCustomModels(): UICustomModelsResponse {
           input: Array.isArray(m.input)
             ? (m.input.filter((i) => i === "text" || i === "image") as ("text" | "image")[])
             : undefined,
+          thinkingLevelMap: toThinkingLevelMap(m.thinkingLevelMap),
         })),
     };
   });
   return { path: shorten(modelsPath()), providers, parseError };
 }
 
-/** 사용자 입력 검증. 문제가 있으면 메시지를 반환한다. */
+/** Validate user input. Returns a message when there's a problem. */
 export function validateProviders(providers: unknown): string | null {
   if (!Array.isArray(providers)) return "providers must be an array";
   const seen = new Set<string>();
@@ -125,14 +196,24 @@ function mergeModel(existing: Json | undefined, next: UICustomModel): Json {
   put("contextWindow", next.contextWindow);
   put("maxTokens", next.maxTokens);
   put("input", next.input && next.input.length > 0 ? next.input : undefined);
+  put("thinkingLevelMap", next.thinkingLevelMap);
   return out;
 }
 
-/** models.json 을 병합 저장 (알 수 없는 필드 보존, 원자적 쓰기) */
-export function writeCustomModels(providers: UICustomProvider[]): void {
+/**
+ * Merge-save models.json (preserves unknown fields, atomic write).
+ *
+ * A masked apiKey (as returned by readCustomModels) is detected and the
+ * stored real key is preserved — the UI never overwrites it with the mask.
+ *
+ * Returns the resolved providers (with real keys) so callers can register
+ * them into runtimes / use them for live reload.
+ */
+export function writeCustomModels(providers: UICustomProvider[]): UICustomProvider[] {
   const { json } = readRaw();
   const prevProviders = (json.providers ?? {}) as Record<string, Json>;
   const nextProviders: Record<string, Json> = {};
+  const resolved: UICustomProvider[] = [];
 
   for (const p of providers) {
     const key = p.key.trim();
@@ -141,7 +222,20 @@ export function writeCustomModels(providers: UICustomProvider[]): void {
     const entry: Json = { ...(prev ?? {}) };
     entry.baseUrl = p.baseUrl.trim();
     entry.api = p.api;
-    if (p.apiKey?.trim()) entry.apiKey = p.apiKey.trim();
+    const incoming = p.apiKey?.trim();
+    const stored = typeof prev?.apiKey === "string" ? (prev.apiKey as string) : undefined;
+    let apiKey: string | undefined;
+    if (incoming && stored && incoming === maskApiKey(stored)) {
+      apiKey = stored; // masked value unchanged → keep the real key
+    } else if (incoming && isMaskedValue(incoming)) {
+      // A stale mask (e.g. provider renamed) must not be persisted as a key.
+      throw new Error(
+        `apiKey for "${key}" is masked but does not match the stored key — re-enter the key or rename the provider back`,
+      );
+    } else if (incoming) {
+      apiKey = incoming;
+    }
+    if (apiKey) entry.apiKey = apiKey;
     else delete entry.apiKey;
     entry.models = p.models.map((m) =>
       mergeModel(
@@ -150,6 +244,7 @@ export function writeCustomModels(providers: UICustomProvider[]): void {
       ),
     );
     nextProviders[key] = entry;
+    resolved.push({ key, baseUrl: p.baseUrl.trim(), api: p.api, apiKey, models: p.models });
   }
 
   const out: Json = { ...json };
@@ -161,4 +256,5 @@ export function writeCustomModels(providers: UICustomProvider[]): void {
   const tmp = `${file}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(out, null, 2)}\n`, "utf8");
   renameSync(tmp, file);
+  return resolved;
 }

@@ -1,20 +1,34 @@
 /**
- * 세션 드로어 열기 요청 이벤트 버스.
+ * Drawer open-request event buses (sessions + files).
  *
- * SessionsDrawer 는 base-ui Dialog 의 open 상태를 내부에서 관리하므로,
- * 엣지 스와이프 제스처처럼 외부에서 드로어를 열려면 이 이벤트로 요청한다.
+ * Each drawer manages the base-ui Dialog open state internally, so external
+ * triggers (like the edge-swipe gesture) request opening via this event.
  */
 const listeners = new Set<() => void>();
+const filesListeners = new Set<(view?: "files" | "git") => void>();
 
-/** 드로어 열기 요청 (구독 중인 SessionsDrawer 가 open) */
+/** Request the drawer to open (the subscribing SessionsDrawer opens) */
 export function requestOpenSessionsDrawer() {
   for (const l of listeners) l();
 }
 
-/** 드로어 열기 요청 구독. cleanup 함수 반환. */
+/** Subscribe to drawer-open requests. Returns a cleanup function. */
 export function onRequestOpenSessionsDrawer(listener: () => void) {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
+  };
+}
+
+/** Request the files drawer to open (header button on mobile, right-edge swipe) */
+export function requestOpenFilesDrawer(view?: "files" | "git") {
+  for (const l of filesListeners) l(view);
+}
+
+/** Subscribe to files-drawer open requests. Returns a cleanup function. */
+export function onRequestOpenFilesDrawer(listener: (view?: "files" | "git") => void) {
+  filesListeners.add(listener);
+  return () => {
+    filesListeners.delete(listener);
   };
 }

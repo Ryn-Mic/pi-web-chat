@@ -1,80 +1,242 @@
-import { memo } from "react";
-import ReactMarkdown from "react-markdown";
-import rehypeHighlight from "rehype-highlight";
-import remarkGfm from "remark-gfm";
+import { isValidElement, memo, useMemo, type ReactNode } from "react";
+import {
+  defaultRemarkPlugins,
+  Streamdown,
+  type Components,
+} from "streamdown";
+import {
+  parseMessageFileHref,
+  parseMessageFileReference,
+  remarkMessageFileReferences,
+  splitMessageFileReferences,
+  type MessageFileReference,
+} from "../lib/message-file-links";
+import { useT } from "../lib/i18n";
+import { streamdownPlugins } from "../lib/streamdownCode";
+
+export { streamdownPlugins } from "../lib/streamdownCode";
 
 /**
- * remark-gfm의 취소선(~~, ~) 문법만 제거한다.
- *
- * 한국어 채팅 텍스트는 물결표가 문장 부호처럼 쓰여 의도치 않은 삭선이 자주
- * 생긴다 ("가격이 ~~2만원~~ 이었는데", "서울~부산~ 고고~"). 특히 이 버전의
- * remark-gfm은 singleTilde가 기본 활성이라 단일 물결표(~x~)마저 삭선이 된다.
- *
- * remark-gfm에는 취소선만 끄는 옵션이 없어서, micromark 확장에서
- * strikethrough 토크나이저(코드 126 = ~)가 등록된 3군데를 직접 제거한다.
- * attacher는 unified가 processor를 this로 바인딩해 호출한다.
+ * Keep GFM tables and task lists, but treat tildes as ordinary chat text.
+ * Korean and other conversational text commonly uses `~` as punctuation,
+ * while remark-gfm enables both single- and double-tilde strikethrough.
  */
 function remarkNoStrikethrough(this: unknown) {
   const data = (this as { data?: () => unknown }).data?.() as
     | Record<string, unknown>
     | undefined;
-  const exts = data?.micromarkExtensions as Record<string, unknown>[] | undefined;
-  if (exts) {
-    for (const ext of exts) {
-      const text = ext.text as Record<string, unknown> | undefined;
-      if (text && Array.isArray(text["126"])) {
-        const kept = (text["126"] as { name?: string }[]).filter(
-          (t) => t?.name !== "strikethrough"
-        );
-        if (kept.length) text["126"] = kept;
-        else delete text["126"];
-      }
-      const insideSpan = ext.insideSpan as Record<string, unknown> | undefined;
-      if (insideSpan) {
-        for (const key of Object.keys(insideSpan)) {
-          const arr = insideSpan[key];
-          if (Array.isArray(arr)) {
-            const kept = (arr as { name?: string }[]).filter(
-              (t) => t?.name !== "strikethrough"
-            );
-            if (kept.length) insideSpan[key] = kept;
-            else delete insideSpan[key];
-          }
-        }
-      }
-      const attention = ext.attentionMarkers as Record<string, unknown> | undefined;
-      if (attention) {
-        for (const key of Object.keys(attention)) {
-          const arr = attention[key];
-          if (Array.isArray(arr)) {
-            const kept = (arr as number[]).filter((c) => c !== 126);
-            if (kept.length) attention[key] = kept;
-            else delete attention[key];
-          }
-        }
-      }
+  const extensions = data?.micromarkExtensions as
+    | Record<string, unknown>[]
+    | undefined;
+
+  for (const extension of extensions ?? []) {
+    const text = extension.text as Record<string, unknown> | undefined;
+    if (text && Array.isArray(text["126"])) {
+      const kept = (text["126"] as { name?: string }[]).filter(
+        (tokenizer) => tokenizer?.name !== "strikethrough",
+      );
+      if (kept.length > 0) text["126"] = kept;
+      else delete text["126"];
+    }
+
+    const insideSpan = extension.insideSpan as Record<string, unknown> | undefined;
+    for (const key of Object.keys(insideSpan ?? {})) {
+      const tokenizers = insideSpan?.[key];
+      if (!Array.isArray(tokenizers)) continue;
+      const kept = (tokenizers as { name?: string }[]).filter(
+        (tokenizer) => tokenizer?.name !== "strikethrough",
+      );
+      if (kept.length > 0) insideSpan![key] = kept;
+      else delete insideSpan![key];
+    }
+
+    const attentionMarkers = extension.attentionMarkers as
+      | Record<string, unknown>
+      | undefined;
+    for (const key of Object.keys(attentionMarkers ?? {})) {
+      const markers = attentionMarkers?.[key];
+      if (!Array.isArray(markers)) continue;
+      const kept = (markers as number[]).filter((code) => code !== 126);
+      if (kept.length > 0) attentionMarkers![key] = kept;
+      else delete attentionMarkers![key];
     }
   }
+
   return () => {};
 }
 
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+export interface MessageFilePreview {
+  cwd: string;
+  path: string;
+  name: string;
+}
+
+export type PreviewMessageFile = (file: MessageFilePreview) => void;
+
+/** Flatten rendered children into text so inline code/path labels can be inspected. */
+function flattenText(node: ReactNode): string {
+  if (node == null) return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(flattenText).join("");
+  if (isValidElement<{ children?: ReactNode }>(node)) return flattenText(node.props.children);
+  return "";
+}
+
+function Paragraph({ children }: { children?: ReactNode }) {
+  const text = flattenText(children);
+  if (text.trim().startsWith("Turn took ") || text.trim().startsWith("✻ Turn took ")) {
+    return <p className="my-2 text-center text-xs text-faint">{children}</p>;
+  }
+  return <p>{children}</p>;
+}
+
+function FileReferenceButton({
+  reference,
+  cwd,
+  onPreviewFile,
+  children,
+}: {
+  reference: MessageFileReference;
+  cwd: string;
+  onPreviewFile: PreviewMessageFile;
+  children?: ReactNode;
+}) {
+  const t = useT();
   return (
-    <div className="prose prose-neutral dark:prose-invert max-w-none text-[15px] leading-relaxed prose-p:my-2 prose-headings:mt-4 prose-headings:mb-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-pre:my-2">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkNoStrikethrough]}
-        rehypePlugins={[rehypeHighlight]}
-        components={{
-          // 모바일에서 넓은 표가 화면을 뚫고 나가지 않도록 가로 스크롤 컨테이너로 감싼다.
-          table: ({ node: _node, ...props }) => (
-            <div className="overflow-x-auto">
-              <table {...props} />
-            </div>
-          ),
-        }}
+    <button
+      type="button"
+      onClick={() => onPreviewFile({ cwd, path: reference.path, name: reference.name })}
+      className="inline-flex max-w-full items-baseline gap-1 rounded-sm bg-teal-500/10 px-0.5 font-mono text-[0.92em] font-medium text-teal-700 underline decoration-teal-500/70 decoration-dotted underline-offset-2 transition-colors hover:bg-teal-500/15 hover:text-teal-800 dark:text-teal-300 dark:hover:text-teal-200"
+      aria-label={t("previewFile", { name: reference.path })}
+      title={reference.path}
+    >
+      <span className="shrink-0 text-[0.85em] no-underline" aria-hidden>
+        {"\uf016"}
+      </span>
+      <span className="min-w-0 break-all">{children ?? reference.display}</span>
+    </button>
+  );
+}
+
+function useMarkdownComponents(
+  cwd?: string,
+  onPreviewFile?: PreviewMessageFile,
+): Components {
+  return useMemo<Components>(() => ({
+    p: Paragraph,
+    a: ({ href, children, node: _node, ...props }) => {
+      const reference = href ? parseMessageFileHref(href, cwd) : null;
+      if (reference && cwd && onPreviewFile) {
+        return (
+          <FileReferenceButton reference={reference} cwd={cwd} onPreviewFile={onPreviewFile}>
+            {children}
+          </FileReferenceButton>
+        );
+      }
+      const external = typeof href === "string" && /^https?:\/\//i.test(href);
+      return (
+        <a
+          {...props}
+          href={href}
+          target={external ? "_blank" : props.target}
+          rel={external ? "noopener noreferrer" : props.rel}
+        >
+          {children}
+        </a>
+      );
+    },
+    inlineCode: ({ children, node: _node, ...props }) => {
+      const label = flattenText(children);
+      const reference = parseMessageFileReference(label, cwd);
+      if (reference && cwd && onPreviewFile) {
+        return (
+          <FileReferenceButton reference={reference} cwd={cwd} onPreviewFile={onPreviewFile}>
+            {children}
+          </FileReferenceButton>
+        );
+      }
+      return <code {...props}>{children}</code>;
+    },
+  }), [cwd, onPreviewFile]);
+}
+
+export function PlainTextFileLinks({
+  text,
+  cwd,
+  onPreviewFile,
+}: {
+  text: string;
+  cwd?: string;
+  onPreviewFile?: PreviewMessageFile;
+}) {
+  if (!cwd || !onPreviewFile) return text;
+  return splitMessageFileReferences(text, cwd).map((segment, index) =>
+    segment.type === "text" ? (
+      <span key={index}>{segment.text}</span>
+    ) : (
+      <FileReferenceButton
+        key={`${segment.reference.path}-${index}`}
+        reference={segment.reference}
+        cwd={cwd}
+        onPreviewFile={onPreviewFile}
+      />
+    ),
+  );
+}
+
+/**
+ * Streaming markdown renderer (Streamdown). Unlike react-markdown it handles
+ * incomplete syntax (unclosed ** / fences / links) natively via remend, which
+ * removes the need for manual marker-escaping and the full re-parse jank on
+ * every delta.
+ *
+ * While streaming, the Shiki plugin is withheld: Streamdown re-highlights a
+ * fence on every code change (its highlighted body keys the effect on `code`),
+ * and our token cache keys on the full source, so a growing code block would be
+ * re-tokenised from scratch on every flush. Without the plugin the fence renders
+ * as plain text, and dropping the plugin back in once the message settles
+ * highlights it exactly once. The prop must be switched here rather than inside
+ * the plugin: `HighlightOptions` carries no streaming flag, and a module-level
+ * flag would also strip highlighting from the completed messages rendered
+ * alongside the streaming one.
+ */
+export const Markdown = memo(function Markdown({
+  text,
+  streaming = false,
+  cwd,
+  onPreviewFile,
+}: {
+  text: string;
+  /** Streaming mode keeps incomplete markdown open; static mode avoids the
+      extra normalization and transition work for completed messages. */
+  streaming?: boolean;
+  cwd?: string;
+  onPreviewFile?: PreviewMessageFile;
+}) {
+  const components = useMarkdownComponents(cwd, onPreviewFile);
+  const remarkPlugins = useMemo(
+    () => [
+      ...Object.values(defaultRemarkPlugins),
+      remarkNoStrikethrough,
+      [remarkMessageFileReferences, { cwd }] as [
+        typeof remarkMessageFileReferences,
+        { cwd?: string },
+      ],
+    ],
+    [cwd],
+  );
+
+  return (
+    <div className="message-markdown min-w-0 max-w-none leading-[1.6]">
+      <Streamdown
+        key={cwd ?? "no-workspace"}
+        mode={streaming ? "streaming" : "static"}
+        components={components}
+        remarkPlugins={remarkPlugins}
+        plugins={streaming ? undefined : streamdownPlugins}
       >
         {text}
-      </ReactMarkdown>
+      </Streamdown>
     </div>
   );
 });

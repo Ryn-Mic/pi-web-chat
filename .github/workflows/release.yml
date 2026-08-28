@@ -1,62 +1,68 @@
 name: Release
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
-      mode:
-        description: "release = bump+tag(+publish) · publish-only = current package.json version to npm"
+      tag:
+        description: "Existing version tag to package or republish (for example v0.1.106)"
         required: true
-        type: choice
-        default: release
-        options:
-          - release
-          - publish-only
-      bump:
-        description: Semver bump type (release mode only)
-        required: true
-        type: choice
-        default: patch
-        options:
-          - patch
-          - minor
-          - major
-      publish_npm:
-        description: Publish to npm (release mode; always on for publish-only)
-        required: true
-        type: boolean
-        default: true
-      dry_run:
-        description: npm publish --dry-run only (no git push / no real publish)
-        required: true
-        type: boolean
-        default: false
+        type: string
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
-  release:
-    name: ${{ inputs.mode }} (${{ inputs.mode == 'publish-only' && 'no bump' || inputs.bump }})
+  package:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    outputs:
+      name: ${{ steps.metadata.outputs.name }}
+      version: ${{ steps.metadata.outputs.version }}
+      tarball: ${{ steps.pack.outputs.tarball }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout release tag
+        uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Validate release source
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE_NAME="$(node -p "require('./package.json').name")"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          EXPECTED_TAG="v${PACKAGE_VERSION}"
+          if [[ "${RELEASE_TAG}" != "${EXPECTED_TAG}" ]]; then
+            echo "Tag ${RELEASE_TAG} does not match package.json version ${PACKAGE_VERSION}." >&2
+            exit 1
+          fi
+          git fetch origin +main:refs/remotes/origin/main --no-tags
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "Release tag ${RELEASE_TAG} is not contained in origin/main." >&2
+            exit 1
+          fi
+          echo "name=${PACKAGE_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "version=${PACKAGE_VERSION}" >> "${GITHUB_OUTPUT}"
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7.0.0
         with:
-          node-version: "22"
-          cache: npm
-          registry-url: https://registry.npmjs.org
+          node-version: "24"
+          package-manager-cache: false
 
       - name: Install
         run: npm ci
@@ -64,103 +70,152 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Test
+        run: npm test
+
       - name: Build
         run: npm run build
 
       - name: Pack check
-        run: npm pack --dry-run
+        run: npm run pack:check
 
-      - name: Configure git identity
-        if: ${{ inputs.mode == 'release' }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Bump version (${{ inputs.bump }})
-        id: bump
-        if: ${{ inputs.mode == 'release' }}
+      - name: Create npm package artifact
+        id: pack
+        shell: bash
         run: |
           set -euo pipefail
-          NEW_VERSION="$(npm version "${{ inputs.bump }}" -m "chore(release): v%s")"
-          NEW_VERSION="${NEW_VERSION#v}"
-          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Bumped to ${NEW_VERSION}"
+          npm pack --ignore-scripts --json > "${RUNNER_TEMP}/npm-pack.json"
+          TARBALL="$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))[0].filename" "${RUNNER_TEMP}/npm-pack.json")"
+          test -f "${TARBALL}"
+          sha256sum "${TARBALL}" > "${TARBALL}.sha256"
+          echo "tarball=${TARBALL}" >> "${GITHUB_OUTPUT}"
 
-      - name: Read current version
-        id: current
-        if: ${{ inputs.mode == 'publish-only' }}
-        run: |
-          set -euo pipefail
-          VERSION="$(node -p "require('./package.json').version")"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Publishing existing version ${VERSION} (no bump)"
+      - name: Store release artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: npm-package-${{ steps.metadata.outputs.version }}
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.tarball }}.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
-      - name: Resolve version outputs
-        id: meta
-        run: |
-          set -euo pipefail
-          if [ "${{ inputs.mode }}" = "release" ]; then
-            echo "version=${{ steps.bump.outputs.version }}" >> "$GITHUB_OUTPUT"
-            echo "tag=${{ steps.bump.outputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${{ steps.current.outputs.version }}" >> "$GITHUB_OUTPUT"
-            echo "tag=${{ steps.current.outputs.tag }}" >> "$GITHUB_OUTPUT"
-          fi
+  github-release:
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
 
-      - name: Push commit and tag
-        if: ${{ inputs.mode == 'release' && !inputs.dry_run }}
-        run: |
-          set -euo pipefail
-          git push origin "HEAD:${GITHUB_REF_NAME}"
-          git push origin "${{ steps.meta.outputs.tag }}"
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: npm-package-${{ needs.package.outputs.version }}
+          path: release-artifact
 
-      - name: Verify npm auth
-        if: ${{ inputs.mode == 'publish-only' || inputs.publish_npm }}
-        run: |
-          set -euo pipefail
-          # setup-node writes ~/.npmrc with ${NODE_AUTH_TOKEN}; fail fast if secret is wrong
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "NODE_AUTH_TOKEN is empty — check repo secret NPM_TOKEN" >&2
-            exit 1
-          fi
-          npm whoami
+      - name: Create or update GitHub Release
+        shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish to npm
-        if: ${{ inputs.mode == 'publish-only' || inputs.publish_npm }}
+          GH_TOKEN: ${{ github.token }}
+          TARBALL: release-artifact/${{ needs.package.outputs.tarball }}
         run: |
           set -euo pipefail
-          echo "Publishing pi-web-chat@${{ steps.meta.outputs.version }} (mode=${{ inputs.mode }})"
-          # Explicit auth line avoids setup-node / granular-token edge cases
-          cat > "${RUNNER_TEMP}/.npmrc-publish" <<EOF
-          //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
-          registry=https://registry.npmjs.org/
-          always-auth=true
-          EOF
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            npm publish --dry-run --access public --userconfig "${RUNNER_TEMP}/.npmrc-publish"
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${TARBALL}" "${TARBALL}.sha256" \
+              --clobber --repo "${GITHUB_REPOSITORY}"
           else
-            npm publish --access public --userconfig "${RUNNER_TEMP}/.npmrc-publish"
+            gh release create "${RELEASE_TAG}" "${TARBALL}" "${TARBALL}.sha256" \
+              --verify-tag --generate-notes --title "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}"
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Summary
-        if: ${{ always() }}
+      - name: GitHub Release summary
+        env:
+          PACKAGE_NAME: ${{ needs.package.outputs.name }}
+          PACKAGE_VERSION: ${{ needs.package.outputs.version }}
+          TARBALL: ${{ needs.package.outputs.tarball }}
         run: |
           {
-            echo "## Release"
+            echo "## GitHub Release ${RELEASE_TAG}"
             echo ""
-            echo "| | |"
-            echo "|---|---|"
-            echo "| **mode** | \`${{ inputs.mode }}\` |"
-            echo "| **version** | \`${{ steps.meta.outputs.version }}\` |"
-            echo "| **tag** | \`${{ steps.meta.outputs.tag }}\` |"
-            echo "| **bump** | \`${{ inputs.mode == 'release' && inputs.bump || '—' }}\` |"
-            echo "| **npm publish** | \`${{ inputs.mode == 'publish-only' || inputs.publish_npm }}\` |"
-            echo "| **dry_run** | \`${{ inputs.dry_run }}\` |"
-            echo "| **branch** | \`${GITHUB_REF_NAME}\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "- Package: \`${PACKAGE_NAME}@${PACKAGE_VERSION}\`"
+            echo "- Artifact: \`${TARBALL}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  npm-publish:
+    needs:
+      - package
+      - github-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Setup Node for npm
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download release artifact
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: npm-package-${{ needs.package.outputs.version }}
+          path: release-artifact
+
+      - name: Detect npm publishing secret
+        id: npm_auth
+        shell: bash
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [[ -n "${NPM_TOKEN:-}" ]]; then
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+            echo "NPM_TOKEN is configured; npm publishing is enabled."
+          else
+            echo "available=false" >> "${GITHUB_OUTPUT}"
+            echo "NPM_TOKEN is not configured; keeping this as a GitHub Release only."
+          fi
+
+      - name: Check whether npm version already exists
+        id: npm_version
+        if: steps.npm_auth.outputs.available == 'true'
+        shell: bash
+        env:
+          PACKAGE_NAME: ${{ needs.package.outputs.name }}
+          PACKAGE_VERSION: ${{ needs.package.outputs.version }}
+        run: |
+          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+            echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is already published; skipping npm publish."
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Publish package to npm
+        if: steps.npm_auth.outputs.available == 'true' && steps.npm_version.outputs.exists != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TARBALL: release-artifact/${{ needs.package.outputs.tarball }}
+        run: npm publish "${TARBALL}" --access public --provenance --ignore-scripts
+
+      - name: npm publishing summary
+        if: always()
+        env:
+          PACKAGE_NAME: ${{ needs.package.outputs.name }}
+          PACKAGE_VERSION: ${{ needs.package.outputs.version }}
+          NPM_ENABLED: ${{ steps.npm_auth.outputs.available }}
+          NPM_EXISTS: ${{ steps.npm_version.outputs.exists }}
+        run: |
+          {
+            echo "## npm publishing"
+            echo ""
+            echo "- Package: \`${PACKAGE_NAME}@${PACKAGE_VERSION}\`"
+            echo "- NPM_TOKEN configured: \`${NPM_ENABLED:-false}\`"
+            echo "- Version already existed: \`${NPM_EXISTS:-false}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

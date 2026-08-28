@@ -1,17 +1,17 @@
 {
   "name": "pi-web-chat",
-  "version": "0.1.19",
+  "version": "0.1.106",
   "description": "Web UI for the pi coding agent (OpenWebUI-style, mobile-friendly)",
   "type": "module",
   "license": "MIT",
   "author": "minsoo.lee <preinpost@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/preinpost/pi-web-chat.git"
+    "url": "git+https://github.com/Ryn-Mic/pi-web-chat.git"
   },
-  "homepage": "https://github.com/preinpost/pi-web-chat#readme",
+  "homepage": "https://github.com/Ryn-Mic/pi-web-chat#readme",
   "bugs": {
-    "url": "https://github.com/preinpost/pi-web-chat/issues"
+    "url": "https://github.com/Ryn-Mic/pi-web-chat/issues"
   },
   "keywords": [
     "pi-package",
@@ -27,6 +27,9 @@
     "bin",
     "dist",
     "extensions",
+    "third-party-licenses",
+    "release-notes.json",
+    "THIRD_PARTY_NOTICES.md",
     "LICENSE",
     "README.md"
   ],
@@ -36,10 +39,12 @@
     "dev:web": "wait-on -t 30s tcp:3141 && vite",
     "build": "node scripts/build.mjs",
     "build:web": "vite build",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:e2e": "playwright test",
     "start": "node bin/pi-web-chat.mjs",
     "typecheck": "tsc --noEmit",
     "prepack": "npm run build",
-    "pack:check": "npm run build && npm pack --dry-run"
+    "pack:check": "npm run build && node scripts/check-pack-size.mjs"
   },
   "pi": {
     "extensions": [
@@ -47,7 +52,14 @@
     ]
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "^0.80.10",
+    "@earendil-works/pi-coding-agent": "*",
+    "@file-viewer/core": "^2.2.8",
+    "@file-viewer/react-full": "^2.2.8",
+    "ignore": "^7.0.6",
+    "morphicons": "^1.7.0",
+    "qrcode": "^1.5.4",
+    "shiki": "^3.23.0",
+    "streamdown": "^2.5.0",
     "ws": "^8.21.1"
   },
   "peerDependencies": {
@@ -69,23 +81,22 @@
   },
   "devDependencies": {
     "@base-ui-components/react": "^1.0.0-rc.0",
+    "@file-viewer/vite-plugin": "^2.2.8",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.101.2",
     "@tanstack/react-router": "^1.170.18",
     "@types/node": "^24.0.0",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.0.0",
     "esbuild": "^0.28.1",
-    "highlight.js": "^11.11.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-markdown": "^10.1.0",
-    "rehype-highlight": "^7.0.2",
-    "remark-gfm": "^4.0.1",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

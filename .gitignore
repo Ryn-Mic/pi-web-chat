@@ -1,5 +1,18 @@
 node_modules/
 dist/
+public/file-viewer/
 *.log
 .DS_Store
 .env
+.vscode/
+
+# Playwright debugging and test artifacts
+.playwright-mcp/
+test-results/
+playwright-report/
+
+# Local npm package archives
+*.tgz
+
+# Isolated feature worktrees
+.worktrees/

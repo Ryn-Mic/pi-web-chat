@@ -1,26 +1,49 @@
 import { useEffect } from "react";
 
 interface EdgeSwipeOptions {
-  /** 스와이프 감지를 활성화할지 (기본 true) */
+  /** Whether swipe detection is enabled (default true) */
   enabled?: boolean;
-  /** 터치 시작이 왼쪽 가장자리에서 이 픽셀 이내여야 함 (기본 28px) */
+  /** Touch must start within this many px of the left edge (default 28px) */
   edgeSize?: number;
-  /** 오른쪽으로 이 픽셀 이상 이동해야 트리거 (기본 60px) */
+  /** Rightward movement must reach this many px to trigger (default 60px) */
   threshold?: number;
-  /** 트리거 시 호출 */
+  /** Called when the swipe triggers */
   onSwipeRight: () => void;
 }
 
+interface RightEdgeSwipeOptions {
+  /** Whether swipe detection is enabled (default true) */
+  enabled?: boolean;
+  /** Touch must start within this many px of the right edge (default 28px) */
+  edgeSize?: number;
+  /** Leftward movement must reach this many px to trigger (default 60px) */
+  threshold?: number;
+  /** Called when the swipe triggers */
+  onSwipeLeft: () => void;
+}
+
+interface InternalEdgeSwipeOptions {
+  enabled: boolean;
+  edgeSize: number;
+  threshold: number;
+  /** Which screen edge the touch must start at */
+  direction: "left" | "right";
+  /** Called when the swipe triggers */
+  onSwipe: () => void;
+}
+
 /**
- * 화면 왼쪽 가장자리에서 오른쪽으로 미는 제스처를 감지한다.
- * 모바일 드로어를 여는 용도.
+ * Shared edge-swipe detector. Tracks a single-finger touch that starts at the
+ * chosen screen edge and fires when horizontal movement dominates and crosses
+ * the threshold in the inward direction.
  */
-export function useLeftEdgeSwipe({
-  enabled = true,
-  edgeSize = 28,
-  threshold = 60,
-  onSwipeRight,
-}: EdgeSwipeOptions) {
+function useEdgeSwipe({
+  enabled,
+  edgeSize,
+  threshold,
+  direction,
+  onSwipe,
+}: InternalEdgeSwipeOptions) {
   useEffect(() => {
     if (!enabled) return;
 
@@ -35,8 +58,11 @@ export function useLeftEdgeSwipe({
         return;
       }
       const t = e.touches[0];
-      // 왼쪽 가장자리에서 시작한 터치만 추적
-      if (t.clientX <= edgeSize) {
+      const atEdge =
+        direction === "left"
+          ? t.clientX <= edgeSize
+          : t.clientX >= window.innerWidth - edgeSize;
+      if (atEdge) {
         startX = t.clientX;
         startY = t.clientY;
         tracking = true;
@@ -51,13 +77,15 @@ export function useLeftEdgeSwipe({
       const t = e.touches[0];
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
-      // 수평 이동이 우세하고 임계값을 넘으면 트리거
-      if (dx >= threshold && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      // Inward horizontal movement for the chosen edge
+      const swipeDx = direction === "left" ? dx : -dx;
+      // Trigger when horizontal movement dominates and passes the threshold
+      if (swipeDx >= threshold && Math.abs(dx) > Math.abs(dy) * 1.2) {
         fired = true;
         tracking = false;
-        onSwipeRight();
+        onSwipe();
       } else if (Math.abs(dy) > Math.abs(dx) * 1.5) {
-        // 세로 스크롤이면 추적 중단
+        // Vertical scroll — stop tracking
         tracking = false;
       }
     };
@@ -78,5 +106,43 @@ export function useLeftEdgeSwipe({
       document.removeEventListener("touchend", onTouchEnd);
       document.removeEventListener("touchcancel", onTouchEnd);
     };
-  }, [enabled, edgeSize, threshold, onSwipeRight]);
+  }, [enabled, edgeSize, threshold, direction, onSwipe]);
+}
+
+/**
+ * Detects a swipe right from the left edge of the screen.
+ * Used to open the mobile session drawer.
+ */
+export function useLeftEdgeSwipe({
+  enabled = true,
+  edgeSize = 28,
+  threshold = 60,
+  onSwipeRight,
+}: EdgeSwipeOptions) {
+  useEdgeSwipe({
+    enabled,
+    edgeSize,
+    threshold,
+    direction: "left",
+    onSwipe: onSwipeRight,
+  });
+}
+
+/**
+ * Detects a swipe left from the right edge of the screen.
+ * Used to open the mobile files drawer.
+ */
+export function useRightEdgeSwipe({
+  enabled = true,
+  edgeSize = 28,
+  threshold = 60,
+  onSwipeLeft,
+}: RightEdgeSwipeOptions) {
+  useEdgeSwipe({
+    enabled,
+    edgeSize,
+    threshold,
+    direction: "right",
+    onSwipe: onSwipeLeft,
+  });
 }

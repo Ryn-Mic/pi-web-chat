@@ -1,12 +1,30 @@
 import { Dialog } from "@base-ui-components/react/dialog";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { UISessionInfo } from "../../shared/protocol";
-import { useInvalidateSessions, useSessions } from "../lib/api";
+import { deleteSession, renameSession, useInvalidateSessions, useSessions } from "../lib/api";
+import { activityEyeState, activityEyeTone } from "../lib/activity";
+import { getAgentPreference } from "../lib/agent";
 import { chatClient, useChat } from "../lib/chat";
 import { onRequestOpenSessionsDrawer } from "../lib/drawer";
 import { localeTag, useLocale, useT } from "../lib/i18n";
-import { setSidebarPinned, useSidebarPinned } from "../lib/sidebar";
+import { markFreshDraftRequested } from "../lib/resume";
+import {
+  setSidebarPinned,
+  toggleProjectCollapsed,
+  useProjectCollapsed,
+  useSidebarPinned,
+} from "../lib/sidebar";
+import { AgentEyes } from "./AgentEyes";
+import { AgentIcon } from "./AgentIcon";
+import { LoadingIndicator } from "./LoadingIndicator";
+import { SettingsMenu } from "./SettingsMenu";
+import {
+  FolderTreeIcon,
+  NewSessionIcon,
+  SidebarToggleIcon,
+  TreeChevronIcon,
+} from "./MorphIcons";
 
 function formatDate(iso: string, locale: string) {
   const d = new Date(iso);
@@ -17,7 +35,7 @@ function formatDate(iso: string, locale: string) {
   );
 }
 
-/** 사이드바 토글 아이콘 (Claude/ChatGPT desktop 스타일 패널 아이콘) */
+/** Sidebar toggle icon (Claude/ChatGPT desktop-style panel icon) */
 function SidebarPanelIcon() {
   return (
     <svg viewBox="0 0 24 24" className="size-[18px] fill-none stroke-current stroke-[1.8]">
@@ -27,22 +45,59 @@ function SidebarPanelIcon() {
   );
 }
 
-function PlusIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-[18px] fill-none stroke-current stroke-[1.8]">
-      <path d="M12 5v14M5 12h14" strokeLinecap="round" />
-    </svg>
-  );
+/** Project path → display name (last directory segment; "~/foo/bar" → "bar", "~" → "~") */
+function projectDisplay(project: string): string {
+  if (!project || project === "~") return project;
+  const parts = project.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? project;
 }
 
-function ChatIcon() {
+/** Project group header: collapse/expand + new-session button */
+function ProjectHeader({
+  project,
+  sessionCount,
+  onNewSession,
+  collapsed,
+}: {
+  project: string;
+  sessionCount: number;
+  onNewSession: () => void;
+  collapsed: boolean;
+}) {
+  const t = useT();
+  const [burstToken, setBurstToken] = useState(0);
+  // Only real-path groups (starting with ~ or /) get a new-session button
+  // (excludes encoded fallback names)
+  const canCreate = project.startsWith("~") || project.startsWith("/");
   return (
-    <svg
-      viewBox="0 0 24 24"
-      className="size-4 shrink-0 fill-none stroke-current stroke-[1.6] opacity-70"
-    >
-      <path d="M21 12a8 8 0 0 1-8 8H7l-4 3 1-5.2A8 8 0 1 1 21 12Z" strokeLinejoin="round" />
-    </svg>
+    <div className="group flex items-center gap-0.5 py-1">
+      <button
+        type="button"
+        onClick={() => toggleProjectCollapsed(project)}
+        title={project}
+        aria-expanded={!collapsed}
+        className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-[11px] font-medium tracking-wide text-faint transition-colors hover:bg-hover hover:text-ink"
+      >
+        <TreeChevronIcon expanded={!collapsed} size={11} className="text-faint" />
+        <FolderTreeIcon open={!collapsed} size={13} />
+        <span className="truncate">{projectDisplay(project)}</span>
+        <span className="ml-auto shrink-0 text-[10px] tabular-nums opacity-70">{sessionCount}</span>
+      </button>
+      {canCreate && (
+        <button
+          type="button"
+          onClick={() => {
+            setBurstToken((t) => t + 1);
+            onNewSession();
+          }}
+          title={t("newSessionInProject")}
+          aria-label={t("newSessionInProject")}
+          className="flex size-6 shrink-0 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
+        >
+          <NewSessionIcon size={14} burstToken={burstToken} />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -50,32 +105,172 @@ function SessionRow({
   session,
   active,
   onSelect,
+  onRename,
+  onDelete,
 }: {
   session: UISessionInfo;
   active: boolean;
   onSelect: () => void;
+  onRename: (name: string) => Promise<void>;
+  onDelete: () => Promise<void>;
 }) {
   const t = useT();
   const locale = useLocale();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const renameSubmitted = useRef(false);
   const title = session.name ?? session.firstMessage ?? t("emptySession");
+  const agent = session.agent ?? "pi";
+  const agentLabel = agent === "codex" ? t("agentCodex") : t("agentPi");
   const meta = `${formatDate(session.modified, localeTag(locale))} · ${t("messageCount", {
     count: session.messageCount,
   })}`;
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1 rounded-lg px-2 py-1">
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              renameSubmitted.current = true;
+              setSaving(true);
+              void onRename(draft.trim()).finally(() => setSaving(false));
+              setEditing(false);
+            } else if (e.key === "Escape") {
+              setEditing(false);
+            }
+          }}
+          onBlur={() => {
+            if (renameSubmitted.current) {
+              renameSubmitted.current = false;
+              return;
+            }
+            setSaving(true);
+            void onRename(draft.trim()).finally(() => setSaving(false));
+            setEditing(false);
+          }}
+          placeholder={t("sessionNamePlaceholder")}
+          aria-label={t("renameSession")}
+          className="min-w-0 flex-1 rounded-md border border-line bg-canvas px-2 py-1 text-[13.5px] text-ink outline-none placeholder:text-faint"
+        />
+      </div>
+    );
+  }
+
   return (
-    <button
-      onClick={onSelect}
-      title={`${title}\n${meta}`}
-      className={`group flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${
-        active ? "bg-selected text-ink" : "text-muted hover:bg-hover hover:text-ink"
+    <div
+      className={`group relative flex w-full items-center rounded-lg transition-colors ${
+        active ? "bg-selected" : "hover:bg-hover"
       }`}
     >
-      <ChatIcon />
-      <span className="truncate text-[13.5px]">{title}</span>
-    </button>
+      <button
+        type="button"
+        onClick={onSelect}
+        title={`${title}\n${meta}`}
+        className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 pl-2.5 text-left"
+      >
+        {/* Persisted sessions use neutral gray when idle and green while running. */}
+        <AgentEyes
+          state={activityEyeState(session.isStreaming ? "running" : "idle")}
+          size={14}
+          agent={agent}
+          className={activityEyeTone(session.isStreaming ? "running" : "idle")}
+        />
+        <AgentIcon
+          agent={agent}
+          size={14}
+          className={agent === "codex" ? "text-amber-500" : "text-faint"}
+          title={agentLabel}
+        />
+        <span
+          className={`truncate text-[13.5px] ${active ? "text-ink" : "text-muted group-hover:text-ink"}`}
+        >
+          {title}
+        </span>
+      </button>
+
+      {confirming ? (
+        <span className="flex shrink-0 items-center gap-0.5 pr-1">
+          <button
+            type="button"
+            onClick={() => {
+              setSaving(true);
+              void onDelete().finally(() => setSaving(false));
+            }}
+            disabled={saving}
+            title={t("confirmDelete")}
+            aria-label={t("confirmDelete")}
+            className="flex size-6 items-center justify-center rounded-md text-red-500 transition-colors hover:bg-red-500/10 disabled:cursor-wait disabled:opacity-60"
+          >
+            {saving ? <LoadingIndicator label={t("loading")} size="sm" /> : (
+              <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2">
+                <path d="m5 12 4 4L19 6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirming(false)}
+            title={t("cancel")}
+            aria-label={t("cancel")}
+            className="flex size-6 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink"
+          >
+            <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2">
+              <path d="M18 6 6 18M6 6l12 12" strokeLinecap="round" />
+            </svg>
+          </button>
+        </span>
+      ) : (
+        <span
+          className={`flex shrink-0 items-center gap-0.5 pr-1 transition-opacity ${
+            active ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(session.name ?? session.firstMessage ?? "");
+              setEditing(true);
+            }}
+            title={t("renameSession")}
+            aria-label={t("renameSession")}
+            className="flex size-6 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink"
+          >
+            <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-[1.8]">
+              <path
+                d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            title={t("deleteSession")}
+            aria-label={t("deleteSession")}
+            className="flex size-6 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-red-500"
+          >
+            <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-[1.8]">
+              <path
+                d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M10 11v6M14 11v6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        </span>
+      )}
+    </div>
   );
 }
 
-/** sessionFile 변경·스트리밍 종료 시 목록 갱신 */
+/** Refresh the list on sessionFile change and stream end */
 function useSessionListSync(enabled: boolean) {
   const invalidate = useInvalidateSessions();
   const { snapshot } = useChat();
@@ -83,23 +278,65 @@ function useSessionListSync(enabled: boolean) {
   const isStreaming = snapshot?.isStreaming ?? false;
   const prevStreaming = useRef(isStreaming);
 
-  // 세션 파일 바뀜 (new/switch/fork)
+  // Session file changed (new/switch/fork)
   useEffect(() => {
     if (!enabled || !sessionFile) return;
     void invalidate();
   }, [enabled, sessionFile, invalidate]);
 
-  // 응답 끝나면 firstMessage/messageCount 반영
+  // Refresh on streaming start/end so the running-state dot stays current
   useEffect(() => {
     if (!enabled) {
       prevStreaming.current = isStreaming;
       return;
     }
-    if (prevStreaming.current && !isStreaming) {
-      void invalidate();
-    }
+    if (prevStreaming.current !== isStreaming) void invalidate();
     prevStreaming.current = isStreaming;
   }, [enabled, isStreaming, invalidate]);
+}
+
+/** Project group: header (collapse/+/count) + session list when expanded */
+function ProjectGroup({
+  project,
+  list,
+  currentSessionFile,
+  onSelect,
+  onRename,
+  onDelete,
+  onNewSession,
+  forceExpand = false,
+}: {
+  project: string;
+  list: UISessionInfo[];
+  currentSessionFile?: string;
+  onSelect: (s: UISessionInfo) => void;
+  onRename: (s: UISessionInfo, name: string) => Promise<void>;
+  onDelete: (s: UISessionInfo) => Promise<void>;
+  onNewSession: () => void;
+  forceExpand?: boolean;
+}) {
+  const collapsed = useProjectCollapsed(project) && !forceExpand;
+  return (
+    <div className="mb-0.5">
+      <ProjectHeader
+        project={project}
+        sessionCount={list.length}
+        onNewSession={onNewSession}
+        collapsed={collapsed}
+      />
+      {!collapsed &&
+        list.map((s) => (
+          <SessionRow
+            key={s.path}
+            session={s}
+            active={s.path === currentSessionFile}
+            onSelect={() => onSelect(s)}
+            onRename={(name) => onRename(s, name)}
+            onDelete={() => onDelete(s)}
+          />
+        ))}
+    </div>
+  );
 }
 
 function SessionsPanel({
@@ -109,23 +346,27 @@ function SessionsPanel({
   onSelectSession,
   onClose,
   onDock,
+  settingsOpenToken = 0,
 }: {
   currentSessionFile?: string;
   docked?: boolean;
-  /** false면 fetch 중지 (닫힌 드로어) */
+  /** Stop fetching when false (closed drawer) */
   active?: boolean;
   onSelectSession?: () => void;
   onClose?: () => void;
-  /** 드로어 → 고정 전환 (닫힘 애니메이션 없이) */
+  /** Drawer → docked transition (no close animation) */
   onDock?: () => void;
+  settingsOpenToken?: number;
 }) {
   const t = useT();
   const navigate = useNavigate();
   const sidebarPinned = useSidebarPinned();
-  const { data: sessions, refetch } = useSessions(active);
+  const { data: sessions, isPending, isFetching, refetch } = useSessions(active);
   useSessionListSync(active);
+  const [searchQuery, setSearchQuery] = useState("");
+  const activeSessionId = chatClient.state.sessionId;
 
-  // 패널이 활성화될 때마다 최신화 (드로어 오픈 / 독 마운트)
+  // Refresh whenever the panel becomes active (drawer open / dock mount)
   useEffect(() => {
     if (active) void refetch();
   }, [active, refetch]);
@@ -135,20 +376,93 @@ function SessionsPanel({
       setSidebarPinned(false);
       return;
     }
-    // 드로어에서 고정: 부모에서 애니메이션 없이 전환
+    // Dock from the drawer: switch in the parent without an animation
     if (onDock) onDock();
     else setSidebarPinned(true);
   };
 
-  const startNewSession = () => {
-    // "/" 초안 화면. 이미 / 에 있어도 force 로 새 초안 WS를 연다.
-    // 세션 id는 첫 메시지 때 서버가 내려주고 /s/:id 로 교체된다.
+  /** New session in a specific project directory (the server expands ~) */
+  const startNewSessionInProject = (project: string) => {
+    if (!project || !(project.startsWith("~") || project.startsWith("/"))) return;
+    markFreshDraftRequested(); // don't resume-redirect back to the last session
+    chatClient.connect(null, {
+      force: true,
+      cwd: project,
+      agent: getAgentPreference() ?? undefined,
+    });
     void navigate({ to: "/" });
-    chatClient.connect(null, { force: true });
     window.setTimeout(() => void refetch(), 150);
     onClose?.();
     chatClient.requestComposerFocus();
   };
+
+  const handleDelete = async (session: UISessionInfo) => {
+    try {
+      await deleteSession(session.id);
+    } catch {
+      return;
+    }
+    await refetch();
+    const deletingActiveSession =
+      session.id === activeSessionId || session.path === currentSessionFile;
+    const nextTab = chatClient.closeTab(session.id);
+    // If we deleted the session we're viewing, activate the next tab or create
+    // a fresh draft instead of reconnecting the deleted session from the URL.
+    if (deletingActiveSession) {
+      markFreshDraftRequested(); // don't resume-redirect to the deleted session
+      if (nextTab) {
+        if (nextTab.sessionId) {
+          void navigate({
+            to: "/s/$sessionId",
+            params: { sessionId: nextTab.sessionId },
+            replace: true,
+          });
+        } else {
+          void navigate({ to: "/", replace: true });
+        }
+      } else {
+        chatClient.connect(null, { force: true, agent: getAgentPreference() ?? undefined });
+        void navigate({ to: "/", replace: true });
+      }
+    }
+  };
+
+  const handleRename = async (session: UISessionInfo, name: string) => {
+    if (name === (session.name ?? "")) return;
+    try {
+      await renameSession(session.id, name);
+    } catch {
+      /* ignore */
+    }
+    await refetch();
+  };
+
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+
+  // Group sessions by project (server sorts newest-first; group order follows
+  // the most recent session too)
+  const groups = useMemo(() => {
+    const map = new Map<string, UISessionInfo[]>();
+    for (const s of sessions ?? []) {
+      if (normalizedQuery) {
+        const matchName = s.name?.toLowerCase().includes(normalizedQuery);
+        const matchFirst = s.firstMessage?.toLowerCase().includes(normalizedQuery);
+        const matchProject = s.project?.toLowerCase().includes(normalizedQuery);
+        const matchId = s.id.toLowerCase().includes(normalizedQuery);
+        if (!matchName && !matchFirst && !matchProject && !matchId) continue;
+      }
+      const key = s.project || t("noProject");
+      const list = map.get(key);
+      if (list) list.push(s);
+      else map.set(key, [s]);
+    }
+    return Array.from(map.entries());
+  }, [sessions, normalizedQuery, t]);
+
+  const totalFilteredCount = useMemo(
+    () => groups.reduce((acc, [, list]) => acc + list.length, 0),
+    [groups],
+  );
 
   return (
     <>
@@ -158,14 +472,16 @@ function SessionsPanel({
         }`}
       >
         {docked ? (
-          <h2 className="px-1 text-[15px] font-semibold tracking-tight text-ink">pi</h2>
+          <h2 className="px-1 text-[15px] font-semibold tracking-tight text-ink">{t("sessions")}</h2>
         ) : (
           <Dialog.Title className="px-1 text-[15px] font-semibold tracking-tight text-ink">
             {t("sessions")}
           </Dialog.Title>
         )}
-        <div className="flex items-center gap-1">
-          {/* 데스크톱에서만 사이드바 고정 토글 */}
+        <div className="flex items-center gap-0.5">
+          {isFetching && <LoadingIndicator label={t("loading")} size="sm" />}
+          <SettingsMenu openToken={settingsOpenToken} />
+          {/* Desktop-only sidebar dock toggle */}
           <button
             type="button"
             onClick={toggleDock}
@@ -174,59 +490,107 @@ function SessionsPanel({
             aria-pressed={sidebarPinned}
             className="hidden size-8 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink md:flex"
           >
-            <SidebarPanelIcon />
+            <SidebarToggleIcon open={sidebarPinned} size={18} />
           </button>
         </div>
       </div>
 
-      <div className="px-2 pb-1">
-        <button
-          onClick={startNewSession}
-          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13.5px] font-medium text-accent transition-colors hover:bg-hover"
-        >
-          <PlusIcon />
-          {t("newSession")}
-        </button>
-      </div>
-
-      <div className="px-4 pt-3 pb-1 text-[11px] font-medium tracking-wide text-faint uppercase">
-        {t("sessions")}
+      <div className="px-3 pb-2">
+        <div className="relative flex items-center">
+          <svg
+            viewBox="0 0 24 24"
+            className="pointer-events-none absolute left-2.5 size-3.5 fill-none stroke-current stroke-2 text-faint"
+            aria-hidden
+          >
+            <circle cx="11" cy="11" r="7" />
+            <path d="m21 21-4.35-4.35" strokeLinecap="round" />
+          </svg>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={t("searchSessions")}
+            className="w-full rounded-lg border border-line bg-card py-1.5 pr-7 pl-8 text-xs text-ink outline-none transition-colors placeholder:text-faint focus:border-accent/60"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              title={t("clearSearch")}
+              aria-label={t("clearSearch")}
+              className="absolute right-2 flex size-4 items-center justify-center rounded text-faint hover:text-ink"
+            >
+              ×
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="thin-scroll flex-1 overflow-y-auto px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
-        {(sessions ?? []).map((s) => (
-          <SessionRow
-            key={s.path}
-            session={s}
-            active={s.path === currentSessionFile}
-            onSelect={() => {
-              void navigate({ to: "/s/$sessionId", params: { sessionId: s.id } });
-              onSelectSession?.();
-            }}
-          />
-        ))}
-        {sessions && sessions.length === 0 && (
+        {isPending ? (
+          <div className="flex justify-center px-4 py-8">
+            <LoadingIndicator label={t("loading")} showLabel />
+          </div>
+        ) : (
+          groups.map(([project, list]) => (
+            <ProjectGroup
+              key={project}
+              project={project}
+              list={list}
+              forceExpand={Boolean(normalizedQuery)}
+              currentSessionFile={currentSessionFile}
+              onNewSession={() => startNewSessionInProject(project)}
+              onSelect={(s) => {
+                void navigate({ to: "/s/$sessionId", params: { sessionId: s.id } });
+                onSelectSession?.();
+              }}
+              onRename={handleRename}
+              onDelete={handleDelete}
+            />
+          ))
+        )}
+        {!isPending && sessions && sessions.length === 0 && (
           <div className="px-4 py-8 text-center text-sm text-faint">{t("noSavedSessions")}</div>
+        )}
+        {!isPending && sessions && sessions.length > 0 && totalFilteredCount === 0 && (
+          <div className="px-4 py-8 text-center text-xs text-faint">{t("noMatchingSessions")}</div>
         )}
       </div>
     </>
   );
 }
 
-/** 데스크톱 고정 사이드바 */
-export function SessionsSidebar({ currentSessionFile }: { currentSessionFile?: string }) {
+/** Desktop docked sidebar */
+export function SessionsSidebar({
+  currentSessionFile,
+  settingsOpenToken = 0,
+}: {
+  currentSessionFile?: string;
+  settingsOpenToken?: number;
+}) {
   return (
     <aside className="hidden h-full min-h-0 w-64 shrink-0 flex-col overflow-hidden bg-sidebar md:flex">
-      <SessionsPanel currentSessionFile={currentSessionFile} docked active />
+      <SessionsPanel
+        currentSessionFile={currentSessionFile}
+        settingsOpenToken={settingsOpenToken}
+        docked
+        active
+      />
     </aside>
   );
 }
 
-/** 오버레이 드로어 (모바일 / 고정 해제 상태) */
-export function SessionsDrawer({ currentSessionFile }: { currentSessionFile?: string }) {
+/** Overlay drawer (mobile / unpinned state) */
+export function SessionsDrawer({
+  currentSessionFile,
+  settingsOpenToken = 0,
+}: {
+  currentSessionFile?: string;
+  settingsOpenToken?: number;
+}) {
   const t = useT();
   const [open, setOpen] = useState(false);
-  /** 핀 고정 전환 시 true → Portal을 즉시 제거해 닫힘 애니 스킵 */
+  /** true during a pin switch → portal is removed immediately to skip the close animation */
   const [instantHide, setInstantHide] = useState(false);
   const sidebarPinned = useSidebarPinned();
 
@@ -236,10 +600,10 @@ export function SessionsDrawer({ currentSessionFile }: { currentSessionFile?: st
     setOpen(false);
   };
 
-  // 엣지 스와이프 등 외부 요청으로 드로어 열기
+  // Open the drawer from external requests (edge swipe etc.)
   useEffect(() => {
     return onRequestOpenSessionsDrawer(() => {
-      if (sidebarPinned) return; // 고정 사이드바 상태면 무시
+      if (sidebarPinned) return; // ignore when the sidebar is docked
       setInstantHide(false);
       setOpen(true);
     });
@@ -267,6 +631,7 @@ export function SessionsDrawer({ currentSessionFile }: { currentSessionFile?: st
           <Dialog.Popup className="fixed inset-y-0 left-0 flex w-[82vw] max-w-xs flex-col bg-sidebar shadow-2xl outline-none transition-transform data-[starting-style]:-translate-x-full data-[ending-style]:-translate-x-full">
             <SessionsPanel
               currentSessionFile={currentSessionFile}
+              settingsOpenToken={sidebarPinned ? 0 : settingsOpenToken}
               active={open}
               onSelectSession={() => setOpen(false)}
               onClose={() => setOpen(false)}
