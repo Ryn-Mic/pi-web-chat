@@ -171,6 +171,38 @@ lines.on("line", (line) => {
     }) + "\\n");
     return;
   }
+  if (message.method === "thread/compact/start") {
+    appendFileSync(process.env.FAKE_CODEX_REQUESTS, JSON.stringify(message) + "\\n");
+    process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");
+    const threadId = message.params?.threadId;
+    const turn = { id: "compact-turn", status: "inProgress", items: [] };
+    setTimeout(() => {
+      process.stdout.write(JSON.stringify({ method: "turn/started", params: { threadId, turn } }) + "\\n");
+      process.stdout.write(JSON.stringify({
+        method: "item/completed",
+        params: { threadId, item: { type: "contextCompaction", id: "compact-item" } },
+      }) + "\\n");
+      process.stdout.write(JSON.stringify({
+        method: "turn/completed",
+        params: { threadId, turn: { ...turn, status: "completed" } },
+      }) + "\\n");
+    }, 10);
+    return;
+  }
+  if (message.method === "review/start") {
+    appendFileSync(process.env.FAKE_CODEX_REQUESTS, JSON.stringify(message) + "\\n");
+    const threadId = message.params?.threadId;
+    const turn = { id: "review-turn", status: "inProgress", items: [] };
+    process.stdout.write(JSON.stringify({
+      id: message.id,
+      result: { turn, reviewThreadId: threadId },
+    }) + "\\n");
+    setTimeout(() => process.stdout.write(JSON.stringify({
+      method: "turn/completed",
+      params: { threadId, turn: { ...turn, status: "completed" } },
+    }) + "\\n"), 10);
+    return;
+  }
   if (message.method === "model/list") {
     process.stdout.write(JSON.stringify({
       id: message.id,
@@ -237,9 +269,11 @@ lines.on("line", (line) => {
       event.type === "snapshot"
       && (event.snapshot as { agent?: unknown } | undefined)?.agent === "pi");
 
-    ws = new WebSocket(
-      `ws://127.0.0.1:${port}/ws?token=${encodeURIComponent(sessionToken)}&agent=codex&cwd=${encodeURIComponent(project)}`,
-    );
+    const draftConnectionId = "019fef18-c752-4adc-8a5c-7fb668879ed2";
+    const draftSocketUrl =
+      `ws://127.0.0.1:${port}/ws?token=${encodeURIComponent(sessionToken)}`
+      + `&agent=codex&cwd=${encodeURIComponent(project)}&draft=${draftConnectionId}`;
+    ws = new WebSocket(draftSocketUrl);
     const events: Array<Record<string, unknown>> = [];
     ws.on("message", (raw) => events.push(JSON.parse(raw.toString()) as Record<string, unknown>));
     await new Promise<void>((resolve, reject) => {
@@ -249,6 +283,23 @@ lines.on("line", (line) => {
     await waitForEvent(events, (event) =>
       event.type === "snapshot"
       && (event.snapshot as { agent?: unknown } | undefined)?.agent === "codex");
+    const catalog = await waitForEvent(events, (event) => event.type === "command_catalog");
+    const catalogCommands = (catalog.commands as Array<{ name?: unknown; source?: unknown }> | undefined) ?? [];
+    assert.deepEqual(catalogCommands.map((command) => command.name), [
+      "settings",
+      "new",
+      "resume",
+      "fork",
+      "copy",
+      "diff",
+      "model",
+      "reasoning",
+      "rename",
+      "status",
+      "compact",
+      "review",
+    ]);
+    assert.ok(catalogCommands.every((command) => command.source === "builtin"));
 
     const piControlStart = piEvents.length;
     const codexControlStart = events.length;
@@ -264,6 +315,8 @@ lines.on("line", (line) => {
       && event.message.startsWith("Codex session:"), codexControlStart);
     assert.match(String(piControl.message), /^Session/);
     assert.match(String(codexControl.message), /^Codex session:/);
+    assert.equal(piControl.requestId, "pi-session");
+    assert.equal(codexControl.requestId, "codex-session");
     assert.equal(
       piEvents.slice(piControlStart).some((event) =>
         event.type === "command_result" && String(event.message).startsWith("Codex session:")),
@@ -276,14 +329,100 @@ lines.on("line", (line) => {
       false,
       "Pi control results must not leak into the Codex socket",
     );
+    let piReplayStart = piEvents.length;
+    piWs.send(JSON.stringify({ type: "prompt", text: "/name Stable Pi name", requestId: "pi-name-replay" }));
+    const piNameResult = await waitForEvent(piEvents, (event) => event.type === "command_result", piReplayStart);
+    piReplayStart = piEvents.length;
+    piWs.send(JSON.stringify({ type: "prompt", text: "/name Changed by replay", requestId: "pi-name-replay" }));
+    const piNameReplay = await waitForEvent(
+      piEvents,
+      (event) => event.type === "command_result" && event.requestId === "pi-name-replay",
+      piReplayStart,
+    );
+    assert.equal(piNameReplay.message, piNameResult.message);
+    piReplayStart = piEvents.length;
+    piWs.send(JSON.stringify({ type: "prompt", text: "/session", requestId: "pi-name-check" }));
+    const piNamedSession = await waitForEvent(
+      piEvents,
+      (event) => event.type === "command_result" && event.requestId === "pi-name-check",
+      piReplayStart,
+    );
+    assert.match(String(piNamedSession.message), /Stable Pi name/);
+    assert.doesNotMatch(String(piNamedSession.message), /Changed by replay/);
     const sessionFilesBeforeCodexDraft = jsonlFiles(home);
 
-    ws.send(JSON.stringify({ type: "prompt", text: "/name Future task", requestId: "draft-name" }));
-    await waitForEvent(events, (event) => event.type === "command_result");
+    let draftStart = events.length;
+    ws.send(JSON.stringify({ type: "prompt", text: "/rename Future task", requestId: "draft-rename" }));
+    const renamed = await waitForEvent(events, (event) => event.type === "command_result", draftStart);
+    assert.equal(renamed.requestId, "draft-rename");
+    draftStart = events.length;
     ws.send(JSON.stringify({ type: "prompt", text: "/settings", requestId: "draft-settings" }));
-    await waitForEvent(events, (event) =>
+    const settingsAction = await waitForEvent(events, (event) =>
       event.type === "client_action"
-      && (event.action as { action?: unknown } | undefined)?.action === "open_settings");
+      && (event.action as { action?: unknown } | undefined)?.action === "open_settings", draftStart);
+    assert.equal(settingsAction.requestId, "draft-settings");
+
+    draftStart = events.length;
+    ws.send(JSON.stringify({ type: "prompt", text: "/new", requestId: "draft-new" }));
+    const newAction = await waitForEvent(events, (event) =>
+      event.type === "client_action"
+      && (event.action as { action?: unknown } | undefined)?.action === "new_session", draftStart);
+    assert.equal((newAction.action as { agent?: unknown }).agent, "codex");
+    assert.equal(newAction.requestId, "draft-new");
+
+    draftStart = events.length;
+    ws.send(JSON.stringify({ type: "prompt", text: "/reasoning", requestId: "draft-reasoning-menu" }));
+    const reasoningAction = await waitForEvent(events, (event) =>
+      event.type === "client_action"
+      && (event.action as { action?: unknown } | undefined)?.action === "open_reasoning", draftStart);
+    assert.equal(reasoningAction.requestId, "draft-reasoning-menu");
+
+    draftStart = events.length;
+    ws.send(JSON.stringify({ type: "prompt", text: "/reasoning medium", requestId: "draft-reasoning" }));
+    const reasoningResult = await waitForEvent(events, (event) => event.type === "command_result", draftStart);
+    assert.equal(reasoningResult.requestId, "draft-reasoning");
+
+    draftStart = events.length;
+    ws.send(JSON.stringify({ type: "prompt", text: "/status", requestId: "draft-status" }));
+    const statusResult = await waitForEvent(events, (event) =>
+      event.type === "command_result" && String(event.message).startsWith("Codex status:"), draftStart);
+    assert.equal(statusResult.requestId, "draft-status");
+
+    draftStart = events.length;
+    ws.send(JSON.stringify({ type: "prompt", text: "/compact", requestId: "draft-compact" }));
+    const compactError = await waitForEvent(events, (event) => event.type === "error", draftStart);
+    assert.equal(compactError.requestId, "draft-compact");
+    assert.match(String(compactError.message), /Send a message/);
+
+    draftStart = events.length;
+    ws.send(JSON.stringify({ type: "prompt", text: "/not-a-command", requestId: "draft-unknown" }));
+    const unknownError = await waitForEvent(events, (event) => event.type === "error", draftStart);
+    assert.equal(unknownError.requestId, "draft-unknown");
+
+    // Reconnecting an unpublished draft must retain its receipt ledger. A
+    // replay with the same request id returns the first terminal and cannot
+    // apply changed arguments a second time.
+    const closedDraft = new Promise<void>((resolve) => ws!.once("close", () => resolve()));
+    ws.terminate();
+    await closedDraft;
+    const reconnectSnapshotStart = events.length;
+    ws = new WebSocket(draftSocketUrl);
+    ws.on("message", (raw) => events.push(JSON.parse(raw.toString()) as Record<string, unknown>));
+    await new Promise<void>((resolve, reject) => {
+      ws!.once("open", resolve);
+      ws!.once("error", reject);
+    });
+    await waitForEvent(events, (event) =>
+      event.type === "snapshot"
+      && (event.snapshot as { agent?: unknown } | undefined)?.agent === "codex", reconnectSnapshotStart);
+    const draftReplayStart = events.length;
+    ws.send(JSON.stringify({ type: "prompt", text: "/reasoning high", requestId: "draft-reasoning" }));
+    const replayedDraftReasoning = await waitForEvent(
+      events,
+      (event) => event.type === "command_result" && event.requestId === "draft-reasoning",
+      draftReplayStart,
+    );
+    assert.equal(replayedDraftReasoning.message, reasoningResult.message);
 
     assert.equal(existsSync(startedMarker), false, "draft-only commands must not start Codex");
     assert.equal(events.some((event) => event.type === "session_bound"), false);
@@ -344,6 +483,53 @@ lines.on("line", (line) => {
         && (event.snapshot as { sessionId?: unknown } | undefined)?.sessionId === sourceSessionId),
     ]);
 
+    let nativeCommandStart = forkEvents.length;
+    forkWs.send(JSON.stringify({ type: "prompt", text: "/compact", requestId: "native-compact" }));
+    const compactResult = await waitForEvent(forkEvents, (event) => event.type === "command_result", nativeCommandStart);
+    assert.equal(compactResult.requestId, "native-compact");
+    const compactStarting = await waitForEvent(forkEvents, (event) => {
+      if (event.type !== "snapshot_delta") return false;
+      const codex = (event.delta as { snapshot?: { codex?: Record<string, unknown> } } | undefined)?.snapshot?.codex;
+      return codex?.controlOperation === "compact" && codex.canSteer === false && codex.canAbort === false;
+    }, nativeCommandStart);
+    assert.equal(
+      (compactStarting.delta as { snapshot?: { codex?: { controlOperation?: unknown } } }).snapshot?.codex?.controlOperation,
+      "compact",
+    );
+    await waitForEvent(forkEvents, (event) => {
+      if (event.type !== "snapshot_delta") return false;
+      const codex = (event.delta as { snapshot?: { codex?: Record<string, unknown> } } | undefined)?.snapshot?.codex;
+      return codex?.controlOperation === "compact" && codex.canSteer === false && codex.canAbort === true;
+    }, nativeCommandStart);
+    await waitForEvent(forkEvents, (event) => event.type === "agent_end", nativeCommandStart);
+
+    nativeCommandStart = forkEvents.length;
+    forkWs.send(JSON.stringify({
+      type: "prompt",
+      text: "/review --base origin/main",
+      requestId: "native-review",
+    }));
+    const reviewResult = await waitForEvent(forkEvents, (event) => event.type === "command_result", nativeCommandStart);
+    assert.equal(reviewResult.requestId, "native-review");
+    await waitForEvent(forkEvents, (event) => {
+      if (event.type !== "snapshot_delta") return false;
+      const codex = (event.delta as { snapshot?: { codex?: Record<string, unknown> } } | undefined)?.snapshot?.codex;
+      return codex?.controlOperation === "review" && codex.canSteer === false && codex.canAbort === true;
+    }, nativeCommandStart);
+    await waitForEvent(forkEvents, (event) => event.type === "agent_end", nativeCommandStart);
+    nativeCommandStart = forkEvents.length;
+    forkWs.send(JSON.stringify({
+      type: "prompt",
+      text: "/review --base origin/main",
+      requestId: "native-review",
+    }));
+    const replayedReview = await waitForEvent(
+      forkEvents,
+      (event) => event.type === "command_result" && event.requestId === "native-review",
+      nativeCommandStart,
+    );
+    assert.equal(replayedReview.message, reviewResult.message);
+
     const forkStart = forkEvents.length;
     const peerStart = peerEvents.length;
     forkWs.send(JSON.stringify({ type: "fork", entryId: sourceSessionId }));
@@ -377,6 +563,15 @@ lines.on("line", (line) => {
       runtimeWorkspaceRoots: [project],
       excludeTurns: true,
     });
+    const compactRequest = allRequests.find((request) => request.method === "thread/compact/start");
+    assert.deepEqual(compactRequest?.params, { threadId: "thread-source" });
+    const reviewRequest = allRequests.find((request) => request.method === "review/start");
+    assert.deepEqual(reviewRequest?.params, {
+      threadId: "thread-source",
+      target: { type: "baseBranch", branch: "origin/main" },
+      delivery: "inline",
+    });
+    assert.equal(allRequests.filter((request) => request.method === "review/start").length, 1);
   } finally {
     piWs?.terminate();
     ws?.terminate();
@@ -391,10 +586,11 @@ async function waitForEventUpTo(
   events: Array<Record<string, unknown>>,
   predicate: (event: Record<string, unknown>) => boolean,
   timeoutMs: number,
+  from = 0,
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const event = events.find(predicate);
+    const event = events.slice(from).find(predicate);
     if (event) return event;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
@@ -501,16 +697,6 @@ lines.on("line", (line) => {
 
     // A writer-owned thread never errors/reconnects: the same socket binds
     // directly into read-only observer mode and shows the running turn.
-    const errorWait = waitForEventUpTo(events, (event) => event.type === "error", 3_000)
-      .then(() => true)
-      .catch(() => false);
-    await waitForEventUpTo(events, (event) => event.type === "snapshot", 10_000);
-    assert.equal(await errorWait, false, "writer conflicts must bind silently into observer mode");
-    assert.equal(closed, false, "socket must stay open while observing");
-    await new Promise((resolve) => setTimeout(resolve, 1_200));
-    assert.equal(events.some((event) => event.type === "error"), false);
-    assert.equal(closed, false);
-
     // While the writer owns the thread the session must be viewable read-only:
     // the snapshot reports observer mode and carries the polled transcript.
     const observeSnapshot = await waitForEventUpTo(
@@ -518,13 +704,71 @@ lines.on("line", (line) => {
       (event) =>
         event.type === "snapshot"
         && (event.snapshot as { codex?: { observer?: unknown } | undefined } | undefined)?.codex?.observer === true,
-      4_000,
+      10_000,
     );
     const observeMessages = (observeSnapshot as { snapshot?: { messages?: Array<{ content?: Array<{ text?: string }> }> } }).snapshot
       ?.messages
       ?.flatMap((message) => message.content?.map((block) => block.text ?? "").filter(Boolean) ?? []) ?? [];
     assert.ok(observeMessages.includes("watchable answer"), "the polled running turn must be visible while observing");
     assert.equal(closed, false, "the socket must stay open while observing");
+
+    const observerCatalog = events.find((event) => event.type === "command_catalog");
+    const observerCommandNames = ((observerCatalog?.commands as Array<{ name?: unknown }> | undefined) ?? [])
+      .map((command) => command.name);
+    assert.deepEqual(observerCommandNames, ["settings", "new", "resume", "copy", "diff", "status"]);
+    const upgradeStart = events.length;
+    ws.send(JSON.stringify({ type: "prompt", text: "/status", requestId: "observer-status" }));
+    const observerStatus = await waitForEventUpTo(
+      events,
+      (event) => event.type === "command_result" && event.requestId === "observer-status",
+      3_000,
+    );
+    assert.match(String(observerStatus.message), /Codex status: observer/);
+    ws.send(JSON.stringify({ type: "prompt", text: "/model codex/blocked", requestId: "observer-model" }));
+    const observerModel = await waitForEventUpTo(
+      events,
+      (event) => event.type === "error" && event.requestId === "observer-model",
+      3_000,
+    );
+    assert.match(String(observerModel.message), /read-only/);
+    const directModelStart = events.length;
+    ws.send(JSON.stringify({ type: "set_model", provider: "codex", id: "blocked-directly" }));
+    const directModel = await waitForEventUpTo(
+      events,
+      (event) => event.type === "error" && /Model selection/.test(String(event.message)),
+      3_000,
+      directModelStart,
+    );
+    assert.match(String(directModel.message), /read-only/);
+    const directReasoningStart = events.length;
+    ws.send(JSON.stringify({ type: "set_thinking_level", level: "high" }));
+    const directReasoning = await waitForEventUpTo(
+      events,
+      (event) => event.type === "error" && /Reasoning selection/.test(String(event.message)),
+      3_000,
+      directReasoningStart,
+    );
+    assert.match(String(directReasoning.message), /read-only/);
+    const directInteractionStart = events.length;
+    ws.send(JSON.stringify({
+      type: "codex_interaction_response",
+      response: { id: "writer-owned-request", action: "accept" },
+    }));
+    const directInteraction = await waitForEventUpTo(
+      events,
+      (event) => event.type === "error" && /cannot be answered/.test(String(event.message)),
+      3_000,
+      directInteractionStart,
+    );
+    assert.match(String(directInteraction.message), /read-only/);
+    const quietPollStart = events.length;
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    assert.equal(
+      events.slice(quietPollStart).some((event) => event.type === "error"),
+      false,
+      "writer conflicts must stay silent",
+    );
+    assert.equal(closed, false, "socket must stay open while observing");
 
     // The writer releases on a later poll: the same socket upgrades to a full
     // interactive session without reconnecting.
@@ -539,6 +783,16 @@ lines.on("line", (line) => {
       12_000,
     );
     assert.equal((upgraded as { snapshot?: { sessionId?: unknown } }).snapshot?.sessionId, "codex:thr-busy");
+    const upgradedCatalog = await waitForEventUpTo(
+      events,
+      (event) => event.type === "command_catalog"
+        && ((event.commands as Array<{ name?: unknown }> | undefined) ?? [])
+          .some((command) => command.name === "review"),
+      4_000,
+      upgradeStart,
+    );
+    assert.ok(((upgradedCatalog.commands as Array<{ name?: unknown }> | undefined) ?? [])
+      .some((command) => command.name === "compact"));
     assert.equal(closed, false, "the socket must never close during the whole observer flow");
   } finally {
     ws?.terminate();

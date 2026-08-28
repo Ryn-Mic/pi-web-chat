@@ -147,6 +147,7 @@ export const ja: Messages = {
   scopeTemporary: "一時",
   tools: "ツール",
   commands: "コマンド",
+  commandSourceCodex: "Codex",
   commandSourceBuiltin: "標準",
   commandSourceExtension: "拡張",
   commandSourcePrompt: "プロンプト",

@@ -181,6 +181,11 @@ export interface UICodexState {
   /** True while attached read-only because another client owns the active turn.
    * The session is visible and auto-upgrades to interactive once it frees up. */
   observer?: boolean;
+  /** Native control turns are not steerable like ordinary prompts. */
+  controlOperation?: "compact" | "review";
+  /** Authoritative capabilities for the current native turn lifecycle. */
+  canSteer?: boolean;
+  canAbort?: boolean;
 }
 
 export interface UISnapshot {
@@ -363,7 +368,7 @@ export interface UICommandInfo {
   /** Invokable name without the leading slash. */
   name: string;
   description?: string;
-  /** Commands are grouped by where pi loaded them from. */
+  /** Commands are grouped by their authoritative runtime/source. */
   source: "builtin" | "extension" | "prompt" | "skill";
   /** Resource scope for non-built-in commands. */
   scope?: "user" | "project" | "temporary";
@@ -374,9 +379,11 @@ export interface UICommandInfo {
 export type UIClientAction =
   | { action: "open_settings" }
   | { action: "open_model" }
+  | { action: "open_reasoning" }
   | { action: "open_fork" }
   | { action: "open_sessions" }
-  | { action: "new_session" }
+  | { action: "open_git" }
+  | { action: "new_session"; agent?: UIAgentKind }
   | { action: "copy_text"; text: string };
 
 export type UIExtensionUIRequest =
@@ -492,8 +499,8 @@ export type ServerEvent =
   | { type: "agent_end"; seq: number }
   | { type: "forked"; selectedText?: string }
   | { type: "command_catalog"; commands: UICommandInfo[] }
-  | { type: "command_result"; message: string }
-  | { type: "client_action"; action: UIClientAction }
+  | { type: "command_result"; message: string; requestId?: string }
+  | { type: "client_action"; action: UIClientAction; requestId?: string }
   | { type: "extension_ui_request"; request: UIExtensionUIRequest }
   | { type: "codex_interaction"; interaction: UICodexInteraction }
   | { type: "codex_interaction_resolved"; id: string }

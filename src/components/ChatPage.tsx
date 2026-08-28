@@ -7,6 +7,7 @@ import { AgentEyes } from "./AgentEyes";
 import { AgentIcon } from "./AgentIcon";
 import { chatClient, useChat } from "../lib/chat";
 import { requestOpenFilesDrawer, requestOpenSessionsDrawer } from "../lib/drawer";
+import { activatePreview } from "../lib/file-preview";
 import { setFilesPanelOpen, useFilesPanelOpen } from "../lib/filetree";
 import { useLocale, useT } from "../lib/i18n";
 import {
@@ -24,6 +25,7 @@ import { ExtensionUIHost } from "./ExtensionUIHost";
 import { FilesDrawer } from "./FileTreePanel";
 import { MobileGitCommitDetail, type MobileGitCommitSelection } from "./MobileGitCommitDetail";
 import { FileWorkspaceSidebar, openWorkspacePreview } from "./FileWorkspaceSidebar";
+import { GIT_TAB_ID } from "./FileWorkspaceTabs";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { NewSessionIcon } from "./MorphIcons";
 import { ProjectBadge } from "./ProjectBadge";
@@ -208,11 +210,24 @@ export function ChatPage() {
     } else if (commandIntent.action === "new_session") {
       chatClient.consumeCommandIntent();
       markFreshDraftRequested();
-      chatClient.connect(null, { force: true, agent: getAgentPreference() ?? undefined });
+      // Slash commands belong to the active session, which may differ from
+      // the last persisted new-session preference.
+      chatClient.connect(null, {
+        force: true,
+        agent: commandIntent.agent ?? snapshot?.agent ?? getAgentPreference() ?? undefined,
+      });
       void navigate({ to: "/" });
       chatClient.requestComposerFocus();
+    } else if (commandIntent.action === "open_git") {
+      if (window.matchMedia("(min-width: 768px)").matches) {
+        setFilesPanelOpen(true);
+        activatePreview(activeTabKey, GIT_TAB_ID);
+      } else {
+        requestOpenFilesDrawer("git");
+      }
+      chatClient.consumeCommandIntent();
     }
-  }, [commandIntent, navigate]);
+  }, [activeTabKey, commandIntent, navigate, snapshot?.agent]);
 
   // The header files button toggles the docked panel on md+ and opens the
   // overlay drawer below. aria-pressed only describes the desktop toggle, so

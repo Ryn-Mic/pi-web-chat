@@ -147,6 +147,7 @@ export const ko: Messages = {
   scopeTemporary: "임시",
   tools: "도구",
   commands: "커맨드",
+  commandSourceCodex: "Codex",
   commandSourceBuiltin: "기본",
   commandSourceExtension: "확장",
   commandSourcePrompt: "프롬프트",

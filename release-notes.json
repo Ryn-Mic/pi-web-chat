@@ -1,4 +1,10 @@
 {
+  "0.1.111": [
+    "聊天输入框的斜杠命令改为按 Agent 提供目录：Pi 保留内置、扩展、提示词与技能命令，Codex 新增独立分组并适配 reasoning、rename、status、diff、compact 与 review 等 Web 可执行命令。",
+    "在本机 Codex app-server 支持对应 RPC 时，compact 与 review 直接调用原生线程方法；review 支持未提交改动、base 分支、commit 和自定义说明，空白草稿不会因此启动 Codex、创建影子 Pi 会话或提前绑定 URL。",
+    "命令成功、界面动作与错误现在关联原请求并支持草稿断线回放，修复非法或未知斜杠命令可能让输入框持续显示发送中、重复执行，以及运行中命令误清另一条 steering 的问题。",
+    "Codex 只读 observer 仅开放安全的本地查看命令，模型、推理档位与审批响应在界面和服务端都保持只读；升级后已打开的 PWA 需按更新提示刷新，才能使用新版命令动作。"
+  ],
   "0.1.110": [
     "新增独立 npm 安装与启动路径：全局安装 @ryn-mic/web-chat 后可直接使用 pi-web-chat 管理 start、status、stop、显式端口 restart 与 token，无需先通过 pi install 或 pi --web 代理。",
     "独立 CLI 与原 pi --web、/web 兼容入口共享同一 daemon manager、3141 端口保护及 ~/.pi/web-chat 状态；可安全识别并在重启时升级旧 daemon，不迁移认证、会话或服务协议，也不会启动相互不可见的第二套主体。",

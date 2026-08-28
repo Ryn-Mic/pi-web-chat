@@ -48,6 +48,8 @@ interface PendingSteer {
   userCountAtSend: number;
   awaitingReceipt: boolean;
   optimisticMessage: UIMessage;
+  /** Web built-ins end on a correlated terminal event, not agent_end. */
+  terminalExpected: boolean;
 }
 
 type FrameHost = {
@@ -191,6 +193,8 @@ export class ChatClient implements WorkspaceClient<ChatState> {
   private cwd: string | null = null;
   /** Explicit agent for a brand-new draft; reconnects preserve it. */
   private agent: UIAgentKind | null = null;
+  /** Keeps one unpublished draft bound to the same server entry after a drop. */
+  private draftConnectionId: string = crypto.randomUUID();
   private pendingPrompt: {
     requestId: string;
     command: Extract<ClientCommand, { type: "prompt" }>;
@@ -198,12 +202,15 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     userCountAtSend: number;
     awaitingReceipt: boolean;
     optimisticMessage: UIMessage;
+    terminalExpected: boolean;
   } | null = null;
   /** Steering inputs are independent receipts; they must not replace the turn's initial prompt. */
   private pendingSteers = new Map<string, PendingSteer>();
   /** Prompt metadata used to reconcile the optimistic message with snapshots. */
   private optimisticSubmitted: SubmittedComposerPrompt | null = null;
   private optimisticUserCountAtSend = 0;
+  /** Failed input restored to the Composer stays owned by its exact request. */
+  private restorePromptRequestId: string | null = null;
   /** Full snapshot revision currently installed in state.snapshot. */
   private snapshotRevision: number | null = null;
   /** Last contiguous per-session event installed by this client. */
@@ -328,11 +335,13 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       return true;
     };
     const reconciled = new Set<UIMessage>();
+    const reconciledRequestIds = new Set<string>();
     if (
       submitted
       && matches(submitted, pending?.userCountAtSend ?? this.optimisticUserCountAtSend)
     ) {
       if (pending) reconciled.add(pending.optimisticMessage);
+      if (pending) reconciledRequestIds.add(pending.requestId);
       this.pendingPrompt = null;
       this.optimisticSubmitted = null;
     }
@@ -340,13 +349,17 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       if (!matches(steer.submitted, steer.userCountAtSend)) continue;
       this.pendingSteers.delete(requestId);
       reconciled.add(steer.optimisticMessage);
+      reconciledRequestIds.add(requestId);
     }
     if (reconciled.size === 0) return;
+    const clearsRestore = this.restorePromptRequestId !== null
+      && reconciledRequestIds.has(this.restorePromptRequestId);
+    if (clearsRestore) this.restorePromptRequestId = null;
     this.update({
       optimisticMessages: this.state.optimisticMessages.filter(
         (message) => !reconciled.has(message),
       ),
-      restorePrompt: null,
+      ...(clearsRestore ? { restorePrompt: null } : {}),
       promptAcceptedToken: this.state.promptAcceptedToken + 1,
       ...(snapshot.isStreaming
         ? this.state.promptStatus === "sending" || this.state.promptStatus === "accepted"
@@ -363,11 +376,97 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     if (this.state.optimisticMessages.length > 0) this.update({ optimisticMessages: [] });
   }
 
+  /** Release model-owned inputs at a turn boundary without consuming Web
+   * commands whose correlated result/action/error has not arrived yet. */
+  private discardAgentOwnedRequests(): PromptStatus | null {
+    const preserved = new Set<UIMessage>();
+    if (this.pendingPrompt?.terminalExpected) preserved.add(this.pendingPrompt.optimisticMessage);
+    else this.pendingPrompt = null;
+    for (const [requestId, steer] of this.pendingSteers) {
+      if (steer.terminalExpected) preserved.add(steer.optimisticMessage);
+      else this.pendingSteers.delete(requestId);
+    }
+    if (!this.pendingPrompt) this.optimisticSubmitted = null;
+    this.update({
+      optimisticMessages: this.state.optimisticMessages.filter((message) => preserved.has(message)),
+    });
+    const pending = [
+      ...(this.pendingPrompt ? [this.pendingPrompt] : []),
+      ...this.pendingSteers.values(),
+    ];
+    if (pending.length === 0) return null;
+    return pending.some((request) => request.awaitingReceipt) ? "sending" : "accepted";
+  }
+
+  private expectsCommandTerminal(text: string): boolean {
+    const match = /^\/([^\s]+)(?:\s|$)/.exec(text.trim());
+    if (!match?.[1]) return false;
+    if (this.state.snapshot?.agent === "codex") return true;
+    return this.state.commands.some((command) => command.source === "builtin" && command.name === match[1]);
+  }
+
+  /** Resolve an uncorrelated terminal emitted by pre-requestId servers. */
+  private inferLegacyCommandRequestId(allowSingleFallback: boolean): string | undefined {
+    const pending = [
+      ...(this.pendingPrompt ? [this.pendingPrompt] : []),
+      ...this.pendingSteers.values(),
+    ];
+    const terminalCandidates = pending.filter((request) => request.terminalExpected);
+    if (terminalCandidates.length === 1) return terminalCandidates[0]!.requestId;
+    if (terminalCandidates.length === 0 && allowSingleFallback && pending.length === 1) {
+      return pending[0]!.requestId;
+    }
+    return undefined;
+  }
+
+  /** Settle only the optimistic input that produced a Web slash-command result. */
+  private settleCommandRequest(requestId?: string) {
+    // Compatibility with older servers whose command terminal events were not
+    // correlated. Prefer the sole request known to expect a Web terminal; this
+    // keeps an ordinary Codex steer intact when an old server finishes /status.
+    // If ownership is still ambiguous, fail closed instead of clearing inputs.
+    if (!requestId) {
+      const inferred = this.inferLegacyCommandRequestId(true);
+      if (inferred) this.settleCommandRequest(inferred);
+      return;
+    }
+
+    let optimisticMessage: UIMessage | undefined;
+    const steer = this.pendingSteers.get(requestId);
+    if (steer) {
+      optimisticMessage = steer.optimisticMessage;
+      this.pendingSteers.delete(requestId);
+    } else if (this.pendingPrompt?.requestId === requestId) {
+      optimisticMessage = this.pendingPrompt.optimisticMessage;
+      this.pendingPrompt = null;
+      this.optimisticSubmitted = null;
+    } else {
+      return;
+    }
+
+    const anotherRequestPending = !!this.pendingPrompt || this.pendingSteers.size > 0;
+    const clearsRestore = this.restorePromptRequestId === requestId;
+    if (clearsRestore) this.restorePromptRequestId = null;
+    this.update({
+      optimisticMessages: optimisticMessage
+        ? this.state.optimisticMessages.filter((message) => message !== optimisticMessage)
+        : this.state.optimisticMessages,
+      ...(clearsRestore ? { restorePrompt: null } : {}),
+      promptAcceptedToken: this.state.promptAcceptedToken + 1,
+      promptStatus: this.state.snapshot?.isStreaming
+        ? "running"
+        : anotherRequestPending
+          ? this.state.promptStatus
+          : "idle",
+    });
+  }
+
   private markPromptFailed(message: string, requestId?: string) {
     const steer = requestId ? this.pendingSteers.get(requestId) : undefined;
     if (steer) {
       this.pendingSteers.delete(requestId!);
       const failed = { ...steer.optimisticMessage, errorMessage: message };
+      this.restorePromptRequestId = requestId!;
       this.update({
         lastError: message,
         restorePrompt: steer.submitted,
@@ -384,10 +483,12 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       this.update({ lastError: message });
       return;
     }
+    const failedRequestId = requestId ?? this.pendingPrompt?.requestId ?? null;
     const submitted = this.pendingPrompt?.submitted ?? this.optimisticSubmitted;
     this.pendingPrompt = null;
     this.optimisticSubmitted = null;
     this.settlePrompt();
+    this.restorePromptRequestId = failedRequestId;
     this.update({
       lastError: message,
       restorePrompt: submitted,
@@ -431,6 +532,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       this.pendingPrompt = null;
       this.pendingSteers.clear();
       this.optimisticSubmitted = null;
+      this.restorePromptRequestId = null;
       this.snapshotRevision = null;
       this.eventSeq = null;
       this.eventSyncPending = false;
@@ -455,6 +557,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         extensionUIRequest: null,
         pendingInteractions: [],
       });
+      if (sessionId === null) this.draftConnectionId = this.createRequestId();
     }
     this.target = sessionId;
     // Explicit cwd wins; an explicit "new session" (force, no cwd) resets the
@@ -474,6 +577,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     const token = authHeaders().authorization?.replace("Bearer ", "");
     if (token) query.set("token", token);
     if (sessionId) query.set("session", sessionId);
+    else query.set("draft", this.draftConnectionId);
     // Only drafts accept an explicit backend. Existing sessions are resolved
     // from their persisted metadata so reconnects cannot silently switch them.
     if (!sessionId && this.agent) query.set("agent", this.agent);
@@ -578,6 +682,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     this.pendingPrompt = null;
     this.pendingSteers.clear();
     this.optimisticSubmitted = null;
+    this.restorePromptRequestId = null;
     this.update({ restorePrompt: null });
     this.closeSocket();
     this.onDispose?.();
@@ -709,6 +814,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       };
       const userCountAtSend =
         this.state.snapshot?.messages.filter((message) => message.role === "user").length ?? 0;
+      const terminalExpected = this.expectsCommandTerminal(submitted.text);
       if (steering) {
         this.pendingSteers.set(requestId, {
           requestId,
@@ -717,7 +823,9 @@ export class ChatClient implements WorkspaceClient<ChatState> {
           userCountAtSend,
           awaitingReceipt: true,
           optimisticMessage,
+          terminalExpected,
         });
+        this.restorePromptRequestId = null;
         this.update({
           lastError: null,
           optimisticMessages: [...this.state.optimisticMessages, optimisticMessage],
@@ -748,7 +856,9 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         userCountAtSend,
         awaitingReceipt: true,
         optimisticMessage,
+        terminalExpected,
       };
+      this.restorePromptRequestId = null;
       this.update({
         lastError: null,
         optimisticMessages: [optimisticMessage],
@@ -971,24 +1081,21 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         // agent_end is the runtime's definitive turn boundary. Release the
         // composer immediately; keep optimisticSubmitted until the following
         // snapshot reconciles the local user message without duplication.
-        this.pendingPrompt = null;
-        this.discardOptimisticMessage();
-        this.settlePrompt();
+        const terminalStatus = this.discardAgentOwnedRequests();
         // Drop isStreaming before the snapshot arrives so no loading dots linger.
         this.update({
           activeTools: [],
           streamText: "",
           streamThinking: "",
           streamThinkingComplete: false,
+          promptStatus: terminalStatus ?? "idle",
           snapshot: this.state.snapshot
             ? { ...this.state.snapshot, isStreaming: false }
             : null,
         });
         break;
       case "abort_complete":
-        this.pendingPrompt = null;
-        this.discardOptimisticMessage();
-        this.settlePrompt();
+        this.update({ promptStatus: this.discardAgentOwnedRequests() ?? "idle" });
         break;
       case "forked":
         if (event.selectedText)
@@ -998,22 +1105,18 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         this.update({ commands: event.commands });
         break;
       case "command_result":
-        this.pendingPrompt = null;
-        this.discardOptimisticMessage();
-        this.settlePrompt();
+        this.settleCommandRequest(event.requestId);
         this.update({ lastNotice: event.message });
         break;
       case "client_action":
-        this.pendingPrompt = null;
-        this.discardOptimisticMessage();
-        this.settlePrompt();
+        this.settleCommandRequest(event.requestId);
         this.update({ commandIntent: event.action });
         break;
       case "extension_ui_request":
-        this.pendingPrompt = null;
-        this.discardOptimisticMessage();
-        this.settlePrompt();
-        this.update({ extensionUIRequest: event.request });
+        this.update({
+          extensionUIRequest: event.request,
+          promptStatus: this.discardAgentOwnedRequests() ?? "idle",
+        });
         break;
       case "codex_interaction":
         this.update({
@@ -1034,8 +1137,11 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         break;
       case "error":
         console.error("[pi-web-chat]", event.message);
-        if (!event.requestId && this.pendingPrompt) {
-          this.update({ lastError: event.message });
+        if (!event.requestId) {
+          const inferred = this.inferLegacyCommandRequestId(false);
+          if (inferred) this.markPromptFailed(event.message, inferred);
+          else if (this.pendingPrompt || this.pendingSteers.size > 0) this.update({ lastError: event.message });
+          else this.markPromptFailed(event.message);
         } else {
           this.markPromptFailed(event.message, event.requestId);
         }

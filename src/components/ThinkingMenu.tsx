@@ -1,4 +1,5 @@
 import { Menu } from "@base-ui-components/react/menu";
+import { useEffect, useState } from "react";
 import type { UIThinkingLevel } from "../../shared/protocol";
 import { chatClient } from "../lib/chat";
 
@@ -41,17 +42,30 @@ function ThinkingLevelIcon({ level }: { level: UIThinkingLevel }) {
 export function ThinkingMenu({
   current,
   levels,
+  openToken = 0,
+  disabled = false,
 }: {
   current: UIThinkingLevel;
   levels: UIThinkingLevel[];
+  openToken?: number;
+  disabled?: boolean;
 }) {
-  // Hide when the model doesn't support thinking
-  if (levels.length <= 1) return null;
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (disabled) setOpen(false);
+    else if (openToken > 0) setOpen(true);
+  }, [disabled, openToken]);
+
+  // Keep the compact toolbar hidden when there is nothing to choose, but let
+  // an explicit /reasoning command open the one advertised fallback level.
+  if (levels.length <= 1 && !open) return null;
 
   return (
-    <Menu.Root>
+    <Menu.Root open={disabled ? false : open} onOpenChange={setOpen}>
       <Menu.Trigger
-        className="max-w-[40vw] truncate rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-hover hover:text-ink sm:max-w-xs"
+        disabled={disabled}
+        className="max-w-[40vw] truncate rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-50 sm:max-w-xs"
         title="Thinking level"
       >
         <span className="truncate">{current}</span>

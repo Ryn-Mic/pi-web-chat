@@ -23,6 +23,12 @@ export interface CodexSessionState {
   effort?: string;
 }
 
+export type CodexReviewTarget =
+  | { type: "uncommittedChanges" }
+  | { type: "baseBranch"; branch: string }
+  | { type: "commit"; sha: string; title: string | null }
+  | { type: "custom"; instructions: string };
+
 export interface CodexModelInfo {
   id: string;
   model: string;
@@ -310,6 +316,13 @@ function itemMessages(item: Record<string, unknown>, timestamp?: number): Record
       timestamp,
     },
   ];
+}
+
+function controlOperationFromTurn(turn: Record<string, unknown>): "compact" | "review" | undefined {
+  const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
+  if (items.some((item) => item.type === "contextCompaction")) return "compact";
+  if (items.some((item) => item.type === "enteredReviewMode" || item.type === "exitedReviewMode")) return "review";
+  return undefined;
 }
 
 function turnMessages(turn: Record<string, unknown>): Record<string, unknown>[] {
@@ -818,6 +831,11 @@ export class CodexSession {
   private activeItems = new Map<string, { name: string; args: unknown; output: string }>();
   private turnDiffs = new Map<string, string>();
   private fileChanges = new Map<string, unknown>();
+  /** Guards RPC-response/turn-completed reordering for commands such as review/start. */
+  private completedTurnIds = new Set<string>();
+  private controlOperationValue: "compact" | "review" | null = null;
+  /** Synchronous reservation held while a prompt is preparing input/connecting. */
+  private promptPreparations = 0;
   private interactions = new Map<string, PendingInteraction>();
   private observerModeValue = false;
   private observerPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -855,7 +873,23 @@ export class CodexSession {
   }
 
   get isStreaming(): boolean {
-    return this.streaming;
+    return this.streaming || this.controlOperationValue !== null;
+  }
+
+  get controlOperation(): "compact" | "review" | undefined {
+    return this.controlOperationValue ?? undefined;
+  }
+
+  get canSteer(): boolean {
+    return !this.observerModeValue
+      && this.controlOperationValue === null
+      && this.streaming
+      && !!this.threadId
+      && !!this.turnId;
+  }
+
+  get canAbort(): boolean {
+    return !this.observerModeValue && this.streaming && !!this.threadId && !!this.turnId;
   }
 
   get currentThreadId(): string | undefined {
@@ -929,8 +963,27 @@ export class CodexSession {
     if (this.observerModeValue) {
       throw new Error("该 Codex 会话正被其他客户端使用，当前为只读浏览模式");
     }
+    if (this.controlOperationValue) {
+      throw new Error(`Codex ${this.controlOperationValue} is running; wait for it to finish or stop it.`);
+    }
+    // Reserve the thread before createInput() performs image I/O. Without this
+    // synchronous barrier another socket could start /compact or /review in
+    // that await gap and the prepared prompt would subsequently race it.
+    this.promptPreparations += 1;
+    let preparationHeld = true;
+    const releasePreparation = () => {
+      if (!preparationHeld) return;
+      preparationHeld = false;
+      this.promptPreparations -= 1;
+    };
     const clientUserMessageId = requestedClientId?.trim() || crypto.randomUUID();
-    const prepared = await this.createInput(text, images);
+    let prepared: Awaited<ReturnType<CodexSession["createInput"]>>;
+    try {
+      prepared = await this.createInput(text, images);
+    } catch (error) {
+      releasePreparation();
+      throw error;
+    }
     let retained = false;
     try {
       await this.connect();
@@ -952,6 +1005,7 @@ export class CodexSession {
         }
         this.turnImageCleanups.push(prepared.cleanup);
         retained = true;
+        releasePreparation();
         this.emitUserMessage(text, images);
         return completion?.promise ?? Promise.resolve();
       }
@@ -967,11 +1021,16 @@ export class CodexSession {
         this.startTurnPromise = null;
       });
       retained = true;
+      // startTurn() marks the session streaming synchronously before its first
+      // await, so the normal streaming barrier now replaces this reservation.
+      releasePreparation();
       await this.startTurnPromise;
       return completion.promise;
     } catch (error) {
       if (!retained) await prepared.cleanup();
       throw error;
+    } finally {
+      releasePreparation();
     }
   }
 
@@ -982,7 +1041,53 @@ export class CodexSession {
     await this.client.request("turn/interrupt", { threadId: this.threadId, turnId: this.turnId });
   }
 
+  /** Start native context compaction without converting the command into a model prompt. */
+  async compact(): Promise<void> {
+    const threadId = this.requireIdleWritableThread("compact");
+    this.controlOperationValue = "compact";
+    try {
+      await this.client.request("thread/compact/start", { threadId });
+    } catch (error) {
+      if (this.controlOperationValue === "compact") this.controlOperationValue = null;
+      throw error;
+    }
+  }
+
+  /** Start an inline native Codex review and immediately expose its turn lifecycle. */
+  async review(target: CodexReviewTarget): Promise<void> {
+    const threadId = this.requireIdleWritableThread("review");
+    this.controlOperationValue = "review";
+    let response: unknown;
+    try {
+      response = await this.client.request("review/start", {
+        threadId,
+        target,
+        delivery: "inline",
+      });
+    } catch (error) {
+      if (this.controlOperationValue === "review") this.controlOperationValue = null;
+      throw error;
+    }
+    const record = isRecord(response) ? response : {};
+    const turn = isRecord(record.turn) ? record.turn : undefined;
+    const turnId = stringValue(turn?.id);
+    // Some app-server transports deliver the RPC response before the matching
+    // turn/started notification. Publish the state once here and let the
+    // notification path remain authoritative when it arrives first.
+    if (turnId && this.completedTurnIds.has(turnId)) {
+      return;
+    }
+    if (!this.streaming) {
+      this.streaming = true;
+      this.turnId = turnId;
+      this.emitEvent({ type: "turn_start", ...(turnId ? { turnId } : {}) });
+    } else if (!this.turnId && turnId) {
+      this.turnId = turnId;
+    }
+  }
+
   respondToInteraction(response: UICodexInteractionResponse): boolean {
+    if (this.observerModeValue) return false;
     const pending = this.interactions.get(response.id);
     if (!pending) return false;
     this.interactions.delete(response.id);
@@ -1018,6 +1123,27 @@ export class CodexSession {
     const turns = Array.isArray(record.data) ? record.data.filter(isRecord).reverse() : [];
     const next = stringValue(record.nextCursor) ?? null;
     return { messages: turns.flatMap(turnMessages), cursor: next, hasMore: next !== null };
+  }
+
+  private requireIdleWritableThread(operation: "compact" | "review"): string {
+    if (this.disposed) throw new Error("Codex session is disposed");
+    if (!this.threadId) throw new Error(`Send a message before using /${operation}.`);
+    if (this.observerModeValue) {
+      throw new Error("该 Codex 会话正被其他客户端使用，当前为只读浏览模式");
+    }
+    if (this.controlOperationValue) {
+      throw new Error(`Codex ${this.controlOperationValue} is already running.`);
+    }
+    if (this.streaming || this.startTurnPromise) {
+      throw new Error(`Stop the active Codex task before using /${operation}.`);
+    }
+    if (this.promptPreparations > 0) {
+      throw new Error(`Wait for the pending Codex prompt before using /${operation}.`);
+    }
+    if (this.interactions.size > 0) {
+      throw new Error(`Resolve pending Codex requests before using /${operation}.`);
+    }
+    return this.threadId;
   }
 
   async fork(): Promise<string> {
@@ -1116,6 +1242,7 @@ export class CodexSession {
     const threadStatus = isRecord(thread?.status) ? thread.status : undefined;
     this.streaming = threadStatus?.type === "active" || !!activeTurn;
     this.turnId = activeTurn ? stringValue(activeTurn.id) : undefined;
+    this.controlOperationValue = activeTurn ? controlOperationFromTurn(activeTurn) ?? null : null;
     this.activeItems.clear();
     if (activeTurn) {
       for (const item of Array.isArray(activeTurn.items) ? activeTurn.items.filter(isRecord) : []) {
@@ -1303,6 +1430,9 @@ export class CodexSession {
     if (!message.method || message.id === undefined) return undefined;
     const params = isRecord(message.params) ? message.params : {};
     if (!this.threadId || threadIdFromParams(params) !== this.threadId) return undefined;
+    // A read-only shared-transport observer must not race the native writer to
+    // answer approvals or elicitation requests broadcast by app-server.
+    if (this.observerModeValue) return undefined;
     const interaction = this.interactionForRequest(String(message.id), message.method, params);
     if (!interaction) return undefined;
     const response = await new Promise<UICodexInteractionResponse | null>((resolve) => {
@@ -1493,6 +1623,7 @@ export class CodexSession {
       case "turn/started": {
         const turn = isRecord(params.turn) ? params.turn : undefined;
         this.turnId = stringValue(turn?.id) ?? this.turnId;
+        if (this.turnId) this.completedTurnIds.delete(this.turnId);
         this.streaming = true;
         this.emitEvent({ type: "turn_start", ...(this.turnId ? { turnId: this.turnId } : {}) });
         return;
@@ -1649,6 +1780,17 @@ export class CodexSession {
   private handleItemStarted(params: Record<string, unknown>): void {
     const item = isRecord(params.item) ? params.item : null;
     if (!item) return;
+    const controlOperation = item.type === "contextCompaction"
+      ? "compact"
+      : item.type === "enteredReviewMode" || item.type === "exitedReviewMode"
+        ? "review"
+        : undefined;
+    if (controlOperation && this.controlOperationValue !== controlOperation) {
+      this.controlOperationValue = controlOperation;
+      // Reuse the state-boundary event so the Web snapshot immediately loses
+      // steering capability even when this control item stays in progress.
+      this.emitEvent({ type: "turn_start", ...(this.turnId ? { turnId: this.turnId } : {}) });
+    }
     const tool = itemTool(item);
     if (!tool) return;
     if (item.type === "fileChange" && item.changes !== undefined) {
@@ -1683,6 +1825,10 @@ export class CodexSession {
   private handleItemCompleted(params: Record<string, unknown>): void {
     const item = isRecord(params.item) ? params.item : null;
     if (!item) return;
+    if (item.type === "contextCompaction") this.controlOperationValue = "compact";
+    else if (item.type === "enteredReviewMode" || item.type === "exitedReviewMode") {
+      this.controlOperationValue = "review";
+    }
     const id = itemId(item);
     if (item.type === "fileChange" && item.changes !== undefined) this.fileChanges.set(id, item.changes);
     const completedAt = numberValue(params.completedAtMs);
@@ -1703,7 +1849,13 @@ export class CodexSession {
           ...(completedAt ? { completedAt } : {}),
         });
       }
-    } else if (item.type === "reasoning" || item.type === "plan") {
+    } else if (
+      item.type === "reasoning"
+      || item.type === "plan"
+      || item.type === "enteredReviewMode"
+      || item.type === "exitedReviewMode"
+      || item.type === "contextCompaction"
+    ) {
       for (const message of itemMessages(item, Date.now())) {
         this.emitEvent({ type: "message", message, ...(completedAt ? { completedAt } : {}) });
       }
@@ -1762,6 +1914,8 @@ export class CodexSession {
     this.historyCursorValue = cursor;
     this.streaming = !!activeTurn;
     this.turnId = activeTurn ? stringValue(activeTurn.id) : undefined;
+    const inferredControl = activeTurn ? controlOperationFromTurn(activeTurn) : undefined;
+    if (inferredControl) this.controlOperationValue = inferredControl;
     this.activeItems.clear();
     if (activeTurn) {
       for (const item of Array.isArray(activeTurn.items) ? activeTurn.items.filter(isRecord) : []) {
@@ -1808,9 +1962,17 @@ export class CodexSession {
 
   private handleTurnCompleted(params: Record<string, unknown>): void {
     const turn = isRecord(params.turn) ? params.turn : undefined;
+    const completedTurnId = stringValue(turn?.id) ?? this.turnId;
+    if (completedTurnId) {
+      this.completedTurnIds.add(completedTurnId);
+      if (this.completedTurnIds.size > 32) {
+        this.completedTurnIds.delete(this.completedTurnIds.values().next().value!);
+      }
+    }
     const status = stringValue(turn?.status) ?? "completed";
     const error = isRecord(turn?.error) ? stringValue(turn.error.message) : stringValue(turn?.error);
     this.streaming = false;
+    this.controlOperationValue = null;
     this.turnId = undefined;
     for (const [id, active] of this.activeItems) {
       this.emitEvent({ type: "tool_end", toolCallId: id, toolName: active.name, isError: status !== "completed" });
@@ -1884,6 +2046,7 @@ export class CodexSession {
   private failTurn(error: Error, emitTerminal: boolean): void {
     const wasStreaming = this.streaming || !!this.turnCompletion;
     this.streaming = false;
+    this.controlOperationValue = null;
     this.turnId = undefined;
     for (const [id, active] of this.activeItems) {
       this.emitEvent({ type: "tool_end", toolCallId: id, toolName: active.name, isError: true });

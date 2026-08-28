@@ -1,4 +1,4 @@
-import type { UICommandInfo } from "../../shared/protocol";
+import type { UIAgentKind, UICommandInfo } from "../../shared/protocol";
 import { useT } from "../lib/i18n";
 
 const SOURCE_ORDER: UICommandInfo["source"][] = ["builtin", "extension", "prompt", "skill"];
@@ -14,10 +14,10 @@ export function commandMatches(commands: UICommandInfo[], text: string): UIComma
   });
 }
 
-function SourceLabel({ source }: { source: UICommandInfo["source"] }) {
+function SourceLabel({ source, agent }: { source: UICommandInfo["source"]; agent?: UIAgentKind }) {
   const t = useT();
   const labels: Record<UICommandInfo["source"], string> = {
-    builtin: t("commandSourceBuiltin"),
+    builtin: agent === "codex" ? t("commandSourceCodex") : t("commandSourceBuiltin"),
     extension: t("commandSourceExtension"),
     prompt: t("commandSourcePrompt"),
     skill: t("commandSourceSkill"),
@@ -29,10 +29,12 @@ export function CommandPalette({
   matches,
   activeIndex,
   onSelect,
+  agent,
 }: {
   matches: UICommandInfo[];
   activeIndex: number;
   onSelect: (command: UICommandInfo) => void;
+  agent?: UIAgentKind;
 }) {
   const t = useT();
   const bySource = new Map<UICommandInfo["source"], UICommandInfo[]>();
@@ -60,7 +62,7 @@ export function CommandPalette({
         return (
           <div key={source} className="py-1">
             <div className="px-3 pt-1 pb-1 text-[10px] font-medium tracking-wide text-faint uppercase">
-              <SourceLabel source={source} />
+              <SourceLabel source={source} agent={agent} />
             </div>
             {items.map((command) => {
               const index = itemIndex++;
