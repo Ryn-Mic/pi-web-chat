@@ -7,6 +7,9 @@ import type {
   UIExtensionUIRequest,
   UIExtensionUIResponse,
   UIHistoryPage,
+  UIAgentKind,
+  UICodexInteraction,
+  UICodexInteractionResponse,
   UIMessageAnchor,
   UIMessageAnchorsResponse,
   UIMessage,
@@ -27,12 +30,24 @@ import {
 import {
   SessionWorkspace,
   type WorkspaceClient,
+  type WorkspaceConnectOptions,
   type WorkspaceTab,
 } from "./session-workspace";
 
 export interface ActiveTool {
   toolCallId: string;
   toolName: string;
+  args?: unknown;
+  output?: string;
+}
+
+interface PendingSteer {
+  requestId: string;
+  command: Extract<ClientCommand, { type: "prompt" }>;
+  submitted: SubmittedComposerPrompt;
+  userCountAtSend: number;
+  awaitingReceipt: boolean;
+  optimisticMessage: UIMessage;
 }
 
 type FrameHost = {
@@ -110,6 +125,8 @@ export interface ChatState {
   commands: UICommandInfo[];
   /** Current dialog requested by a pi extension. */
   extensionUIRequest: UIExtensionUIRequest | null;
+  /** Blocking Codex requests, kept until app-server confirms resolution. */
+  pendingInteractions: UICodexInteraction[];
 }
 
 function createInitialState(): ChatState {
@@ -139,6 +156,7 @@ function createInitialState(): ChatState {
     commandIntent: null,
     commands: [],
     extensionUIRequest: null,
+    pendingInteractions: [],
   };
 }
 
@@ -171,13 +189,18 @@ export class ChatClient implements WorkspaceClient<ChatState> {
    * instead of silently falling back to the default cwd.
    */
   private cwd: string | null = null;
+  /** Explicit agent for a brand-new draft; reconnects preserve it. */
+  private agent: UIAgentKind | null = null;
   private pendingPrompt: {
     requestId: string;
     command: Extract<ClientCommand, { type: "prompt" }>;
     submitted: SubmittedComposerPrompt;
     userCountAtSend: number;
     awaitingReceipt: boolean;
+    optimisticMessage: UIMessage;
   } | null = null;
+  /** Steering inputs are independent receipts; they must not replace the turn's initial prompt. */
+  private pendingSteers = new Map<string, PendingSteer>();
   /** Prompt metadata used to reconcile the optimistic message with snapshots. */
   private optimisticSubmitted: SubmittedComposerPrompt | null = null;
   private optimisticUserCountAtSend = 0;
@@ -259,7 +282,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
 
   private markPromptRunning() {
     if (
-      !this.pendingPrompt ||
+      (!this.pendingPrompt && this.pendingSteers.size === 0) ||
       this.state.promptStatus === "idle" ||
       this.state.promptStatus === "running"
     )
@@ -274,45 +297,89 @@ export class ChatClient implements WorkspaceClient<ChatState> {
   private reconcileOptimisticMessage(snapshot: UISnapshot) {
     const pending = this.pendingPrompt;
     const submitted = pending?.submitted ?? this.optimisticSubmitted;
-    if (!submitted) return;
     const userMessages = snapshot.messages.filter((message) => message.role === "user");
-    const newMessages = userMessages.slice(pending?.userCountAtSend ?? this.optimisticUserCountAtSend);
-    const matches = newMessages.some((message) => {
-      const text = message.content
-        .filter((block): block is Extract<UIMessage["content"][number], { type: "text" }> => block.type === "text")
-        .map((block) => block.text)
-        .join("\n");
-      const images = message.content.filter(
-        (block): block is Extract<UIMessage["content"][number], { type: "image" }> => block.type === "image",
-      );
-      return (
-        text === submitted.text &&
-        images.length === submitted.images.length &&
-        images.every(
-          (image, index) =>
-            image.dataUrl ===
-            `data:${submitted.images[index]?.mimeType};base64,${submitted.images[index]?.data}`,
-        )
-      );
-    });
-    if (!matches) return;
-    this.pendingPrompt = null;
-    this.optimisticSubmitted = null;
+    const used = new Set<number>();
+    const matches = (candidate: SubmittedComposerPrompt, from: number): boolean => {
+      const index = userMessages.findIndex((message, messageIndex) => {
+        if (messageIndex < from || used.has(messageIndex)) return false;
+        const text = message.content
+          .filter(
+            (block): block is Extract<UIMessage["content"][number], { type: "text" }> =>
+              block.type === "text",
+          )
+          .map((block) => block.text)
+          .join("\n");
+        const images = message.content.filter(
+          (block): block is Extract<UIMessage["content"][number], { type: "image" }> =>
+            block.type === "image",
+        );
+        return (
+          text === candidate.text &&
+          images.length === candidate.images.length &&
+          images.every(
+            (image, imageIndex) =>
+              image.dataUrl ===
+                `data:${candidate.images[imageIndex]?.mimeType};base64,${candidate.images[imageIndex]?.data}`,
+          )
+        );
+      });
+      if (index < 0) return false;
+      used.add(index);
+      return true;
+    };
+    const reconciled = new Set<UIMessage>();
+    if (
+      submitted
+      && matches(submitted, pending?.userCountAtSend ?? this.optimisticUserCountAtSend)
+    ) {
+      if (pending) reconciled.add(pending.optimisticMessage);
+      this.pendingPrompt = null;
+      this.optimisticSubmitted = null;
+    }
+    for (const [requestId, steer] of this.pendingSteers) {
+      if (!matches(steer.submitted, steer.userCountAtSend)) continue;
+      this.pendingSteers.delete(requestId);
+      reconciled.add(steer.optimisticMessage);
+    }
+    if (reconciled.size === 0) return;
     this.update({
-      optimisticMessages: [],
+      optimisticMessages: this.state.optimisticMessages.filter(
+        (message) => !reconciled.has(message),
+      ),
       restorePrompt: null,
       promptAcceptedToken: this.state.promptAcceptedToken + 1,
-      ...(snapshot.isStreaming ? {} : { promptStatus: "idle" as const }),
+      ...(snapshot.isStreaming
+        ? this.state.promptStatus === "sending" || this.state.promptStatus === "accepted"
+          ? { promptStatus: "running" as const }
+          : {}
+        : { promptStatus: "idle" as const }),
     });
   }
 
   private discardOptimisticMessage() {
     this.pendingPrompt = null;
+    this.pendingSteers.clear();
     this.optimisticSubmitted = null;
     if (this.state.optimisticMessages.length > 0) this.update({ optimisticMessages: [] });
   }
 
   private markPromptFailed(message: string, requestId?: string) {
+    const steer = requestId ? this.pendingSteers.get(requestId) : undefined;
+    if (steer) {
+      this.pendingSteers.delete(requestId!);
+      const failed = { ...steer.optimisticMessage, errorMessage: message };
+      this.update({
+        lastError: message,
+        restorePrompt: steer.submitted,
+        promptStatus: this.state.snapshot?.isStreaming ? "running" : "idle",
+        optimisticMessages: this.state.optimisticMessages.includes(steer.optimisticMessage)
+          ? this.state.optimisticMessages.map((message) =>
+              message === steer.optimisticMessage ? failed : message,
+            )
+          : [...this.state.optimisticMessages, failed],
+      });
+      return;
+    }
     if (requestId && this.pendingPrompt?.requestId !== requestId) {
       this.update({ lastError: message });
       return;
@@ -338,8 +405,9 @@ export class ChatClient implements WorkspaceClient<ChatState> {
    * session; otherwise closes the existing connection and opens a new one.
    * `force: true` — reopen a fresh draft connection even when already on `/`.
    * `cwd` — working directory for a new session (per-project new session).
+   * `agent` — explicit backend for a brand-new session.
    */
-  connect(sessionId: string | null = null, opts?: { force?: boolean; cwd?: string }) {
+  connect(sessionId: string | null = null, opts?: WorkspaceConnectOptions) {
     const current = this.state.sessionId ?? this.target;
     const sameTarget = sessionId === null ? this.target === null : sessionId === current;
     const switchingSession = opts?.force || !sameTarget;
@@ -361,6 +429,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       // draft straight back to that stale session.
       this.clearStreamBuffer();
       this.pendingPrompt = null;
+      this.pendingSteers.clear();
       this.optimisticSubmitted = null;
       this.snapshotRevision = null;
       this.eventSeq = null;
@@ -384,6 +453,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         commands: [],
         commandIntent: null,
         extensionUIRequest: null,
+        pendingInteractions: [],
       });
     }
     this.target = sessionId;
@@ -392,6 +462,8 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     if (opts) {
       if (opts.cwd) this.cwd = opts.cwd;
       else if (opts.force && sessionId === null) this.cwd = null;
+      if (opts.agent) this.agent = opts.agent;
+      else if (opts.force && sessionId === null) this.agent = null;
     }
     if (this.state.connection === "disconnected") {
       this.update({ connection: "connecting" });
@@ -402,6 +474,9 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     const token = authHeaders().authorization?.replace("Bearer ", "");
     if (token) query.set("token", token);
     if (sessionId) query.set("session", sessionId);
+    // Only drafts accept an explicit backend. Existing sessions are resolved
+    // from their persisted metadata so reconnects cannot silently switch them.
+    if (!sessionId && this.agent) query.set("agent", this.agent);
     if (!switchingSession && sessionId && this.eventSeq !== null) {
       query.set("since", String(this.eventSeq));
     }
@@ -423,6 +498,9 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       // same request id is safe because the server deduplicates it.
       if (this.pendingPrompt?.awaitingReceipt) {
         ws.send(JSON.stringify(this.pendingPrompt.command));
+      }
+      for (const steer of this.pendingSteers.values()) {
+        if (steer.awaitingReceipt) ws.send(JSON.stringify(steer.command));
       }
     };
     ws.onmessage = (e) => {
@@ -498,6 +576,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     this.clearDisconnectTimer();
     this.clearStreamBuffer();
     this.pendingPrompt = null;
+    this.pendingSteers.clear();
     this.optimisticSubmitted = null;
     this.update({ restorePrompt: null });
     this.closeSocket();
@@ -595,10 +674,18 @@ export class ChatClient implements WorkspaceClient<ChatState> {
   send(cmd: ClientCommand): boolean {
     const socketOpen = this.ws?.readyState === WebSocket.OPEN;
     if (cmd.type === "prompt") {
-      if (!socketOpen || this.pendingPrompt) {
+      const steering =
+        this.state.snapshot?.agent === "codex"
+        && (this.state.snapshot.isStreaming || this.state.promptStatus === "running");
+      const steerAwaitingReceipt = [...this.pendingSteers.values()].some(
+        (pending) => pending.awaitingReceipt,
+      );
+      if (!socketOpen || (!steering && this.pendingPrompt) || (steering && steerAwaitingReceipt)) {
         this.update({
           lastError: socketOpen
-            ? "A prompt is already being sent."
+            ? steering
+              ? "Guidance is already being sent."
+              : "A prompt is already being sent."
             : "Reconnecting. Please wait before sending.",
         });
         return false;
@@ -622,6 +709,36 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       };
       const userCountAtSend =
         this.state.snapshot?.messages.filter((message) => message.role === "user").length ?? 0;
+      if (steering) {
+        this.pendingSteers.set(requestId, {
+          requestId,
+          command,
+          submitted,
+          userCountAtSend,
+          awaitingReceipt: true,
+          optimisticMessage,
+        });
+        this.update({
+          lastError: null,
+          optimisticMessages: [...this.state.optimisticMessages, optimisticMessage],
+          restorePrompt: null,
+          promptStatus: "sending",
+        });
+        try {
+          this.ws!.send(JSON.stringify(command));
+          return true;
+        } catch {
+          this.pendingSteers.delete(requestId);
+          this.update({
+            optimisticMessages: this.state.optimisticMessages.filter(
+              (message) => message !== optimisticMessage,
+            ),
+            lastError: "The connection closed before the guidance could be sent.",
+            promptStatus: "running",
+          });
+          return false;
+        }
+      }
       this.optimisticSubmitted = submitted;
       this.optimisticUserCountAtSend = userCountAtSend;
       this.pendingPrompt = {
@@ -630,6 +747,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         submitted,
         userCountAtSend,
         awaitingReceipt: true,
+        optimisticMessage,
       };
       this.update({
         lastError: null,
@@ -727,6 +845,8 @@ export class ChatClient implements WorkspaceClient<ChatState> {
           }
         : {}),
       activeTools: snapshot.activeTools ?? (resetHistory ? [] : this.state.activeTools),
+      pendingInteractions:
+        snapshot.pendingInteractions ?? (resetHistory ? [] : this.state.pendingInteractions),
       streamText: "",
       streamThinking: "",
       streamThinkingComplete: false,
@@ -780,6 +900,14 @@ export class ChatClient implements WorkspaceClient<ChatState> {
             promptAcceptedToken: this.state.promptAcceptedToken + 1,
             ...(this.state.promptStatus === "sending" ? { promptStatus: "accepted" } : {}),
           });
+        } else {
+          const steer = this.pendingSteers.get(event.requestId);
+          if (!steer) break;
+          steer.awaitingReceipt = false;
+          this.update({
+            promptAcceptedToken: this.state.promptAcceptedToken + 1,
+            promptStatus: "running",
+          });
         }
         break;
       case "delta": {
@@ -803,12 +931,28 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         this.markPromptRunning();
         this.update({
           activeTools: [
-            ...this.state.activeTools,
-            { toolCallId: event.toolCallId, toolName: event.toolName },
+            ...this.state.activeTools.filter((tool) => tool.toolCallId !== event.toolCallId),
+            {
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              ...(event.args !== undefined ? { args: event.args } : {}),
+            },
           ],
           ...(event.activeTodo && this.state.snapshot
             ? { snapshot: { ...this.state.snapshot, activeTodo: event.activeTodo } }
             : {}),
+        });
+        break;
+      case "tool_progress":
+        this.update({
+          activeTools: this.state.activeTools.map((tool) => {
+            if (tool.toolCallId !== event.toolCallId) return tool;
+            // A verbose command can run for hours. Retain enough output for
+            // useful remote supervision without allowing one card to grow
+            // without bound in every connected browser.
+            const output = `${tool.output ?? ""}${event.delta}`;
+            return { ...tool, output: output.slice(-128_000) };
+          }),
         });
         break;
       case "tool_end":
@@ -871,6 +1015,23 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         this.settlePrompt();
         this.update({ extensionUIRequest: event.request });
         break;
+      case "codex_interaction":
+        this.update({
+          pendingInteractions: [
+            ...this.state.pendingInteractions.filter(
+              (interaction) => interaction.id !== event.interaction.id,
+            ),
+            event.interaction,
+          ],
+        });
+        break;
+      case "codex_interaction_resolved":
+        this.update({
+          pendingInteractions: this.state.pendingInteractions.filter(
+            (interaction) => interaction.id !== event.id,
+          ),
+        });
+        break;
       case "error":
         console.error("[pi-web-chat]", event.message);
         if (!event.requestId && this.pendingPrompt) {
@@ -919,6 +1080,10 @@ export class ChatClient implements WorkspaceClient<ChatState> {
   respondExtensionUI(response: UIExtensionUIResponse) {
     this.send({ type: "extension_ui_response", response });
     if (this.state.extensionUIRequest?.id === response.id) this.update({ extensionUIRequest: null });
+  }
+
+  respondCodexInteraction(response: UICodexInteractionResponse): boolean {
+    return this.send({ type: "codex_interaction_response", response });
   }
 
   /** Delay slightly so it doesn't collide with drawer close etc., then focus the composer. */
@@ -992,8 +1157,26 @@ class ChatWorkspaceClient {
     return this.workspace.activeKey;
   }
 
-  connect(sessionId: string | null = null, opts?: { force?: boolean; cwd?: string }) {
+  connect(sessionId: string | null = null, opts?: WorkspaceConnectOptions) {
     return this.workspace.open(sessionId, opts);
+  }
+
+  /** Apply a backend choice to the active unpublished, empty draft in place. */
+  selectAgentForDraft(agent: UIAgentKind): boolean {
+    const client = this.workspace.getActiveClient();
+    const snapshot = client?.state.snapshot;
+    if (
+      !client ||
+      client.state.sessionId !== null ||
+      client.state.promptStatus !== "idle" ||
+      !snapshot ||
+      snapshot.messages.length !== 0 ||
+      snapshot.isStreaming
+    ) {
+      return false;
+    }
+    client.connect(null, { force: true, cwd: snapshot.cwd, agent });
+    return true;
   }
 
   activate(tabKey: string): boolean {
@@ -1081,6 +1264,10 @@ class ChatWorkspaceClient {
 
   respondExtensionUI(response: UIExtensionUIResponse) {
     this.workspace.getActiveClient()?.respondExtensionUI(response);
+  }
+
+  respondCodexInteraction(response: UICodexInteractionResponse): boolean {
+    return this.workspace.getActiveClient()?.respondCodexInteraction(response) ?? false;
   }
 
   requestComposerFocus() {

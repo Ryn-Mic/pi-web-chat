@@ -1,3 +1,12 @@
+import type { UIAgentKind } from "../../shared/protocol";
+
+export interface WorkspaceConnectOptions {
+  force?: boolean;
+  cwd?: string;
+  /** Explicit backend for a brand-new session; existing sessions keep their agent. */
+  agent?: UIAgentKind;
+}
+
 export interface WorkspaceClientState {
   sessionId: string | null;
   connection: string;
@@ -6,7 +15,7 @@ export interface WorkspaceClientState {
 
 export interface WorkspaceClient<State extends WorkspaceClientState> {
   state: State;
-  connect(sessionId: string | null, opts?: { force?: boolean; cwd?: string }): void;
+  connect(sessionId: string | null, opts?: WorkspaceConnectOptions): void;
   dispose(): void;
   /** Clear one-shot UI requests when a client becomes inactive. */
   clearComposerFocus?(): void;
@@ -70,7 +79,7 @@ export class SessionWorkspace<
   }
 
   /** Open an existing session or reuse/create the active draft. */
-  open(sessionId: string | null, opts?: { force?: boolean; cwd?: string }): Client {
+  open(sessionId: string | null, opts?: WorkspaceConnectOptions): Client {
     if (sessionId) {
       const existingKey =
         this.tabsSnapshot.find((tab) => tab.sessionId === sessionId)?.key ?? sessionId;
@@ -127,7 +136,7 @@ export class SessionWorkspace<
     return () => this.listeners.delete(listener);
   };
 
-  private createTab(sessionId: string | null, opts?: { force?: boolean; cwd?: string }): Client {
+  private createTab(sessionId: string | null, opts?: WorkspaceConnectOptions): Client {
     const key = sessionId ?? `draft:${this.nextDraftId++}`;
     // Keep the tab key in a mutable reference for the bound-session callback.
     // Draft tab keys remain stable across session binding and forks.

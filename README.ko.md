@@ -15,7 +15,7 @@ npm i -g @earendil-works/pi-coding-agent
 # 2) pi-web-chat 패키지 설치
 pi install npm:pi-web-chat
 # pi install /path/to/pi-web-chat          # 로컬
-# pi install git:github.com/preinpost/pi-web-chat@v0.1.1
+# pi install git:github.com/Ryn-Mic/pi-web-chat@v0.1.106
 
 # 3) 웹 UI만 백그라운드 기동 (TUI 안 뜸, 바로 셸 복귀)
 pi --web
@@ -23,17 +23,17 @@ pi --web
 
 pi --web status
 pi --web stop
-pi --web restart             # 중지 후 재시작 (기존 port/host 유지)
+pi --web 3141 restart        # 프로덕션 재시작 (포트 명시 필수)
 pi --web 3200                # 포트 지정
 pi --web --lan               # 0.0.0.0 바인드 (LAN)
 pi --web --host 0.0.0.0      # 동일, bind 주소 명시
 pi --web 3200 --host 0.0.0.0
 ```
 
-`pi --web`은 **웹 서버 데몬만** 띄우고 즉시 종료합니다. pi TUI는 열리지 않습니다.
+`pi --web`은 **pi와 Codex를 함께 제공하는 하나의 웹 서버 데몬**을 띄우고 즉시 종료합니다. 새 세션의 백엔드는 Web 설정에서 선택할 수 있으며 pi TUI는 열리지 않습니다.
 이미 떠 있으면 URL만 다시 보여 줍니다.
 
-> `--lan` / `--host 0.0.0.0` 은 모든 인터페이스에 서버를 엽니다. 앱 인증이 없으니 신뢰할 수 있는 네트워크에서만 쓰세요.
+> `--lan` / `--host 0.0.0.0` 은 모든 인터페이스에 서버를 엽니다. 토큰 및 2FA 인증을 유지하고 신뢰할 수 있는 네트워크에서만 사용하세요.
 
 ### 다른 실행 방법
 

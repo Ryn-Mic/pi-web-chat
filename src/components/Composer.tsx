@@ -13,6 +13,7 @@ import { MessageAnchors } from "./MessageAnchors";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { ModelMenu } from "./ModelMenu";
 import { ActiveTodoBadge, BranchBadge, TodoProgress } from "./ProjectBadge";
+import { RemoteActionIcon } from "./RemoteActionIcon";
 import { ThinkingMenu } from "./ThinkingMenu";
 
 interface PendingImage extends UIImageAttachment {
@@ -47,6 +48,76 @@ function ContextRing({ percent }: { percent: number }) {
         transform="rotate(-90 9 9)"
       />
     </svg>
+  );
+}
+
+function ContextRingPopover({
+  context,
+  percent,
+}: {
+  context?: { tokens?: number | null; contextWindow?: number | null; percent?: number | null } | null;
+  percent: number;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const pct = Math.min(100, Math.max(0, percent));
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [open]);
+
+  const used = context?.tokens;
+  const max = context?.contextWindow;
+
+  return (
+    <div ref={ref} className="relative flex items-center justify-center">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-hover"
+        aria-label={t("contextDetails")}
+        aria-expanded={open}
+      >
+        <ContextRing percent={percent} />
+      </button>
+
+      {open && (
+        <div className="absolute bottom-full right-0 mb-2 z-30 w-60 rounded-xl border border-line bg-card p-3 shadow-lg text-xs">
+          <div className="flex items-center justify-between font-medium text-ink">
+            <span>{t("contextDetails")}</span>
+            <span className="font-mono text-[11px] text-muted">{Math.round(pct)}%</span>
+          </div>
+
+          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-line">
+            <div
+              className={`h-full transition-all ${pct >= 90 ? "bg-red-500" : pct >= 65 ? "bg-amber-500" : "bg-accent"}`}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+
+          {used != null && max != null && (
+            <div className="mt-2.5 space-y-1 font-mono text-[11px]">
+              <div className="flex justify-between text-muted">
+                <span>{t("contextUsed")}:</span>
+                <span className="text-ink font-medium">{formatTokens(used)}</span>
+              </div>
+              <div className="flex justify-between text-muted">
+                <span>{t("contextWindowSize")}:</span>
+                <span className="text-ink">{formatTokens(max)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -99,6 +170,7 @@ export function Composer({
   const [debouncedMentionQuery, setDebouncedMentionQuery] = useState("");
   const [modelOpenToken, setModelOpenToken] = useState(0);
   const [forkOpen, setForkOpen] = useState(false);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const restoredPromptRef = useRef<unknown>(null);
@@ -123,6 +195,27 @@ export function Composer({
         ? `${Math.round(contextPercent)}%`
         : undefined;
   const promptInFlight = promptStatus !== "idle";
+  const running = isStreaming || promptStatus === "running";
+  const codexRunning = snapshot?.agent === "codex" && running;
+  // Read-only observation of a Codex session owned by another client: the
+  // user can watch it but cannot prompt, steer or abort.
+  const codexObserver = snapshot?.agent === "codex" && snapshot?.codex?.observer === true;
+  const codexCanSteer =
+    codexRunning
+    && (promptStatus === "idle" || promptStatus === "running");
+  // The steer-send button only appears while a Codex turn is running when the
+  // user is actually composing a steering message; an empty cleared input must
+  // leave a single stop button (matching the pi look) instead of a duplicate
+  // round send button.
+  const canSubmit = !(processingImages || (!text.trim() && images.length === 0));
+  const remoteActionMode: "pending" | "stop" | "send" =
+    codexObserver || ((!running && promptInFlight) || (codexRunning && !codexCanSteer))
+      ? "pending"
+      : running
+        ? "stop"
+        : "send";
+  const remoteActionDisabled =
+    remoteActionMode === "pending" || (remoteActionMode === "send" && !canSubmit);
 
   useEffect(() => {
     if (!restorePrompt || restorePrompt === restoredPromptRef.current) return;
@@ -211,7 +304,7 @@ export function Composer({
         });
       chatClient.consumeCommandIntent();
     }
-  }, [commandIntent]);
+  }, [commandIntent, snapshot?.agent]);
 
   const mention = useMemo(() => extractMentionQuery(text, caret), [text, caret]);
   // Mention wins over the command palette: derive it independently, then gate commandPaletteOpen with !mentionMode.
@@ -280,7 +373,12 @@ export function Composer({
 
   const send = () => {
     const trimmed = text.trim();
-    if ((!trimmed && images.length === 0) || promptInFlight || processingImages) return;
+    if (
+      codexObserver
+      || (!trimmed && images.length === 0)
+      || (promptInFlight && !codexCanSteer)
+      || processingImages
+    ) return;
 
     const submittedImages = [...images];
     const sent = chatClient.send({
@@ -320,7 +418,7 @@ export function Composer({
               snapshot.gitBranch ? "" : "border-l-0 pl-0"
             }`}
           >
-            <ActiveTodoBadge todo={snapshot.activeTodo} isStreaming={isStreaming} />
+            <ActiveTodoBadge todo={snapshot.activeTodo} />
             <TodoProgress todo={snapshot.activeTodo} />
           </div>
         )}
@@ -342,7 +440,36 @@ export function Composer({
             onSelect={completeMention}
           />
         )}
-      <div className="composer-panel rounded-2xl border border-line bg-card px-2 pt-2 pb-2 shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-colors focus-within:border-faint">
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setIsDraggingOver(true);
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            setIsDraggingOver(false);
+          }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setIsDraggingOver(false);
+          const droppedFiles = e.dataTransfer?.files;
+          if (droppedFiles && droppedFiles.length > 0) {
+            void addFiles(droppedFiles);
+          }
+        }}
+        className="composer-panel relative rounded-2xl border border-line bg-card px-2 pt-2 pb-2 shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-colors focus-within:border-faint"
+      >
+        {isDraggingOver && (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-accent bg-card/90 backdrop-blur-xs">
+            <div className="flex items-center gap-2 text-sm font-medium text-accent">
+              <svg viewBox="0 0 24 24" className="size-5 fill-none stroke-current stroke-2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span>{t("dropFilesHere")}</span>
+            </div>
+          </div>
+        )}
         {images.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2 px-1">
             {images.map((img, i) => (
@@ -379,7 +506,13 @@ export function Composer({
             ref={textareaRef}
             value={text}
             rows={1}
-            placeholder={isStreaming ? t("streamingPlaceholder") : t("sendMessage")}
+            placeholder={
+              codexCanSteer
+                ? t("codexSteerPlaceholder")
+                : isStreaming
+                  ? t("streamingPlaceholder")
+                  : t("sendMessage")
+            }
             className="composer-textarea max-h-40 w-full resize-none bg-transparent px-3 pt-2 pb-1 leading-relaxed text-ink outline-none placeholder:text-faint"
             style={{ "--composer-font-size": `${chatFontSizePixels(chatFontSize)}px` } as React.CSSProperties}
             onChange={(e) => {
@@ -481,13 +614,17 @@ export function Composer({
               levels={snapshot?.thinkingLevels ?? ["off"]}
             />
             <div className="flex-1" />
-            <span
+            <div
               className={`flex size-8 shrink-0 items-center justify-center ${hasContext ? "" : "invisible"}`}
               aria-hidden={!hasContext}
-              title={contextTitle}
             >
-              {hasContext && <ContextRing percent={contextPercent} />}
-            </span>
+              {hasContext && (
+                <ContextRingPopover
+                  context={context ?? undefined}
+                  percent={contextPercent ?? 0}
+                />
+              )}
+            </div>
             <MessageAnchors
               sessionId={sessionId}
               messages={messages}
@@ -498,38 +635,57 @@ export function Composer({
               containerRef={containerRef}
               compact
             />
-            {isStreaming || promptStatus === "running" ? (
-              <button
-                onClick={() => chatClient.send({ type: "abort" })}
-                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink text-canvas transition-opacity hover:opacity-85"
-                aria-label={t("abort")}
-              >
-                <svg viewBox="0 0 24 24" className="size-3 fill-current">
-                  <rect x="6" y="6" width="12" height="12" rx="2" />
-                </svg>
-              </button>
-            ) : promptInFlight ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (remoteActionMode === "stop") chatClient.send({ type: "abort" });
+                else if (remoteActionMode === "send") send();
+              }}
+              disabled={remoteActionDisabled}
+              aria-label={
+                remoteActionMode === "stop"
+                  ? t("abort")
+                  : codexObserver
+                    ? t("codexObserverTitle")
+                    : t("send")
+              }
+              aria-busy={remoteActionMode === "pending" && !codexObserver}
+              title={
+                codexObserver
+                  ? t("codexObserverHint")
+                  : remoteActionMode === "stop"
+                    ? t("abort")
+                    : t("send")
+              }
+              className={`flex size-8 shrink-0 items-center justify-center rounded-full transition-opacity disabled:cursor-wait ${
+                codexObserver
+                  ? "bg-canvas text-faint ring-1 ring-line/70"
+                  : remoteActionMode === "stop"
+                    ? "bg-ink text-canvas hover:opacity-85"
+                    : "bg-accent text-accent-ink hover:opacity-90"
+              } ${
+                remoteActionMode === "pending"
+                  ? "opacity-70"
+                  : remoteActionDisabled
+                    ? "opacity-30"
+                    : ""
+              }`}
+            >
+              <RemoteActionIcon
+                mode={remoteActionMode}
+                size={19}
+                className={codexObserver ? "text-faint" : remoteActionMode === "stop" ? "text-canvas" : "text-accent-ink"}
+              />
+            </button>
+            {codexRunning && codexCanSteer && canSubmit && (
               <button
                 type="button"
-                disabled
-                className="flex size-8 shrink-0 cursor-wait items-center justify-center rounded-full bg-accent text-accent-ink opacity-70"
-                aria-label={t("send")}
-                aria-busy="true"
-              >
-                <svg viewBox="0 0 24 24" className="size-[18px] animate-spin fill-none stroke-current stroke-2">
-                  <circle cx="12" cy="12" r="8" strokeDasharray="34 16" strokeLinecap="round" />
-                </svg>
-              </button>
-            ) : (
-              <button
                 onClick={send}
-                disabled={processingImages || (!text.trim() && images.length === 0)}
-                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-30"
+                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-accent-ink transition-opacity hover:opacity-90"
                 aria-label={t("send")}
+                title={t("send")}
               >
-                <svg viewBox="0 0 24 24" className="size-[18px] fill-none stroke-current stroke-2">
-                  <path d="M12 19V5M5 12l7-7 7 7" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
+                <RemoteActionIcon mode="send" size={19} className="text-accent-ink" />
               </button>
             )}
           </div>

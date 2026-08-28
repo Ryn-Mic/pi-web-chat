@@ -80,3 +80,77 @@ export function createSessionUserMessageAnchors(entries: readonly unknown[]): UI
   }
   return anchors;
 }
+
+export interface CodexThreadItemsPage {
+  data: readonly unknown[];
+  nextCursor: string | null;
+}
+
+function codexUserMessageContent(item: { content?: unknown }): Array<{ type: "text"; text: string }> {
+  if (!Array.isArray(item.content)) return [];
+  const blocks: Array<{ type: "text"; text: string }> = [];
+  for (const value of item.content) {
+    if (!value || typeof value !== "object") continue;
+    const part = value as Record<string, unknown>;
+    if (part.type === "text" && typeof part.text === "string" && part.text) {
+      blocks.push({ type: "text", text: part.text });
+    } else if (part.type === "mention") {
+      const text = typeof part.name === "string"
+        ? part.name
+        : typeof part.path === "string"
+          ? part.path
+          : "";
+      if (text) blocks.push({ type: "text", text });
+    } else if (part.type === "skill" && typeof part.name === "string" && part.name) {
+      blocks.push({ type: "text", text: part.name });
+    } else if (part.type === "localImage" && typeof part.path === "string") {
+      blocks.push({ type: "text", text: `[Image: ${part.path}]` });
+    } else if (part.type === "image" && typeof part.url === "string") {
+      blocks.push({ type: "text", text: `[Image: ${part.url}]` });
+    }
+  }
+  return blocks;
+}
+
+/**
+ * Scan Codex's native item index in chronological pages. This keeps anchor
+ * ordinals global without hydrating every turn (and its tool output) into the
+ * Web session just to locate user messages.
+ */
+export async function createCodexUserMessageAnchors(
+  loadPage: (cursor: string | null) => Promise<CodexThreadItemsPage>,
+): Promise<UIMessageAnchor[]> {
+  const anchors: UIMessageAnchor[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | null = null;
+
+  do {
+    const page = await loadPage(cursor);
+    for (const value of page.data) {
+      if (!value || typeof value !== "object") continue;
+      const entry = value as { item?: unknown };
+      if (!entry.item || typeof entry.item !== "object") continue;
+      const item = entry.item as { id?: unknown; type?: unknown; content?: unknown };
+      if (item.type !== "userMessage") continue;
+      const content = codexUserMessageContent(item);
+      if (content.length === 0) continue;
+      const ordinal = anchors.length + 1;
+      anchors.push({
+        id: typeof item.id === "string" && item.id ? item.id : `codex-user-${ordinal}`,
+        ordinal,
+        text: collapsedUserText({ content }),
+      });
+    }
+
+    const nextCursor = typeof page.nextCursor === "string" && page.nextCursor
+      ? page.nextCursor
+      : null;
+    if (nextCursor && seenCursors.has(nextCursor)) {
+      throw new Error("Codex item pagination returned a repeated cursor");
+    }
+    if (nextCursor) seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  } while (cursor);
+
+  return anchors;
+}

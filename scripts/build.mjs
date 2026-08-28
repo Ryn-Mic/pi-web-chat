@@ -238,6 +238,7 @@ function assertThirdPartyNotices() {
     "file-viewer-ppt-LICENSE.txt",
     "file-viewer-ppt-NOTICE.txt",
     "GPL-3.0-only.txt",
+    "morphicons-MIT.txt",
   ];
 
   for (const name of requiredRootFiles) {

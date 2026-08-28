@@ -666,8 +666,9 @@ function launchDaemon(
     );
   }
   console.log(`  stop:    pi --web stop`);
-  console.log(`  restart: pi --web restart`);
+  console.log(`  restart: pi --web ${result.port} restart`);
   console.log(`  status:  pi --web status`);
+  console.log(`  agents:  pi + Codex (select per new session in Web settings)`);
   console.log(`  logs:    ${LOG_FILE}`);
   console.log(`  auth:    token & 2FA — see ${LOG_FILE} (or ~/.pi/web-chat/token)`);
   if (opts.openBrowser) openBrowser(url);
@@ -688,6 +689,11 @@ function handleRotateToken(ctx?: { ui: { notify: (msg: string, kind?: string) =>
   else console.log(msg);
 }
 
+export function managedRestartPortError(action: string, portExplicit: boolean): string | undefined {
+  if (action !== "restart" || portExplicit) return undefined;
+  return `managed restart requires an explicit port; use pi --web ${DEFAULT_PORT} restart`;
+}
+
 function runDaemonAndExit(): void {
   const parsed = parseWebDaemonArgs();
   if ("error" in parsed) {
@@ -696,6 +702,15 @@ function runDaemonAndExit(): void {
   }
 
   const { action } = parsed;
+
+  // Managed restarts must name the production port explicitly. Reading a
+  // stale daemon state file here can otherwise move or revive the wrong
+  // listener while still printing a successful restart message.
+  const restartPortError = managedRestartPortError(action, parsed.portExplicit);
+  if (restartPortError) {
+    console.error(`pi-web-chat: ${restartPortError}`);
+    process.exit(1);
+  }
 
   if (action === "stop") {
     const { stopped, pid } = stopServer({ waitMs: 3_000 });

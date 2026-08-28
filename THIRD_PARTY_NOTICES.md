@@ -7,7 +7,9 @@ source URLs, and the corresponding license file shipped under
 `third-party-licenses/`.
 
 The root `pi-web-chat` package itself is licensed under MIT (see `LICENSE`).
-The File Viewer **root packages** (`@file-viewer/react-full`, `@file-viewer/core`,
+The `morphicons` runtime library is licensed under MIT; its license text is
+shipped at `third-party-licenses/morphicons-MIT.txt`. The File Viewer **root
+packages** (`@file-viewer/react-full`, `@file-viewer/core`,
 `@file-viewer/vite-plugin`) are licensed under Apache License 2.0. Other runtime
 components listed below are subject to their own licenses. This document does not
 state any legal conclusion about how those licenses interact; it only records
@@ -28,6 +30,7 @@ The Vite build copies File Viewer worker, WASM, font, and vendor assets to
 
 | Component | Version | License | Source | Local license / notice |
 |---|---|---|---|---|
+| `morphicons` | `1.7.0` | MIT | <https://github.com/guillermolg00/morphicons> | `third-party-licenses/morphicons-MIT.txt` |
 | `@flyfish-dev/cad-viewer` | `0.8.0` | `AGPL-3.0-only` | <https://github.com/flyfish-dev/cad-viewer> | `third-party-licenses/AGPL-3.0-only.txt` (shared with `dwf-viewer`; identical license text), `third-party-licenses/cad-viewer-NOTICE.txt` |
 | `dwf-viewer` | `0.6.4` | `AGPL-3.0-only` | <https://github.com/flyfish-dev/dwf-viewer> | `third-party-licenses/AGPL-3.0-only.txt` (shared with `@flyfish-dev/cad-viewer`; identical license text), `third-party-licenses/dwf-viewer-NOTICE.txt` |
 | `@mlightcad/libredwg-web` | `0.7.9` | `GPL-3.0` (SPDX: `GPL-3.0-only`) | <https://github.com/mlightcad/libredwg-web> | `third-party-licenses/GPL-3.0-only.txt` (no license file shipped inside the installed package) |

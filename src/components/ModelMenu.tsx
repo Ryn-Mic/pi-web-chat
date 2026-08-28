@@ -2,7 +2,7 @@ import { Menu } from "@base-ui-components/react/menu";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UIModel } from "../../shared/protocol";
 import { useModels } from "../lib/api";
-import { chatClient } from "../lib/chat";
+import { chatClient, useChat } from "../lib/chat";
 import { useT } from "../lib/i18n";
 import { LoadingIndicator } from "./LoadingIndicator";
 
@@ -18,7 +18,8 @@ function matchesQuery(model: UIModel, q: string) {
 
 export function ModelMenu({ current, openToken = 0 }: { current: UIModel | null; openToken?: number }) {
   const t = useT();
-  const { data: models, isPending, isFetching } = useModels();
+  const { snapshot } = useChat();
+  const { data: models, isPending, isFetching } = useModels(snapshot?.agent);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);

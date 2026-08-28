@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createSessionUserMessageAnchors } from "../server/session-anchors.ts";
+import {
+  createCodexUserMessageAnchors,
+  createSessionUserMessageAnchors,
+} from "../server/session-anchors.ts";
 
 test("builds a lightweight ordered index from active-branch user messages", () => {
   const anchors = createSessionUserMessageAnchors([
@@ -74,5 +77,75 @@ test("skips user entries that do not render into transcript history", () => {
       { id: "image", ordinal: 1 },
       { id: "text", ordinal: 2 },
     ],
+  );
+});
+
+test("builds global Codex anchors across chronological native item pages", async () => {
+  const requestedCursors: Array<string | null> = [];
+  const anchors = await createCodexUserMessageAnchors(async (cursor) => {
+    requestedCursors.push(cursor);
+    if (cursor === null) {
+      return {
+        data: [
+          {
+            turnId: "turn-1",
+            item: {
+              type: "userMessage",
+              id: "codex-u1",
+              content: [{ type: "text", text: "  first\nmessage " }],
+            },
+          },
+          { turnId: "turn-1", item: { type: "agentMessage", id: "codex-a1", text: "answer" } },
+        ],
+        nextCursor: "older-page-2",
+      };
+    }
+    assert.equal(cursor, "older-page-2");
+    return {
+      data: [
+        {
+          turnId: "turn-2",
+          item: {
+            type: "userMessage",
+            id: "codex-u2",
+            content: [
+              { type: "mention", name: "README.md" },
+              { type: "localImage", path: "/tmp/reference.png" },
+            ],
+          },
+        },
+        {
+          turnId: "turn-3",
+          item: { type: "userMessage", id: "empty", content: [] },
+        },
+        {
+          turnId: "turn-3",
+          item: {
+            type: "userMessage",
+            id: "codex-u3",
+            content: [{ type: "skill", name: "review" }],
+          },
+        },
+      ],
+      nextCursor: null,
+    };
+  });
+
+  assert.deepEqual(requestedCursors, [null, "older-page-2"]);
+  assert.deepEqual(anchors, [
+    { id: "codex-u1", ordinal: 1, text: "first message" },
+    {
+      id: "codex-u2",
+      ordinal: 2,
+      text: "README.md [Image: /tmp/reference.png]",
+    },
+    { id: "codex-u3", ordinal: 3, text: "review" },
+  ]);
+});
+
+test("rejects a repeated Codex item cursor instead of looping forever", async () => {
+  await assert.rejects(
+    createCodexUserMessageAnchors(async () => ({ data: [], nextCursor: "same" })),
+    /repeated cursor/,
   );
 });

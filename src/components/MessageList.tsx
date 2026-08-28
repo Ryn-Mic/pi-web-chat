@@ -1,5 +1,5 @@
 import { memo, type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
-import type { UIContentBlock, UIMessage } from "../../shared/protocol";
+import type { UIAgentKind, UIContentBlock, UIMessage } from "../../shared/protocol";
 import { chatClient, type ActiveTool } from "../lib/chat";
 import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
 import { buildEditDiffFromArgs, isUnifiedDiff } from "../lib/diff";
@@ -11,7 +11,10 @@ import {
   splitAssistantTurnCompletion,
 } from "../lib/turn-completion";
 import { LoadingIndicator } from "./LoadingIndicator";
+import { AgentEyes } from "./AgentEyes";
+import { AgentIcon } from "./AgentIcon";
 import { DiffView } from "./DiffView";
+import { CopyActionIcon } from "./MorphIcons";
 import {
   Markdown,
   PlainTextFileLinks,
@@ -23,12 +26,12 @@ import { Streamdown } from "streamdown";
 /** todo 工具: 状态 → 표시 색/심볼 */
 function TodoStatusIcon({ status }: { status: string }) {
   if (status === "completed") {
-    return <span className="text-emerald-500">✓</span>;
+    return <AgentEyes state="happy" size={12} className="text-emerald-500" animated={false} />;
   }
   if (status === "in_progress") {
-    return <span className="text-amber-500">▶</span>;
+    return <AgentEyes state="working" size={12} className="text-amber-500" animated={false} />;
   }
-  return <span className="text-faint">○</span>;
+  return <AgentEyes state="idle" size={12} className="text-sky-500/80 dark:text-sky-400/80" animated={false} />;
 }
 
 /** todo 工具 카드: 진행률 바 + 작업 목록 */
@@ -46,10 +49,13 @@ function TodoCard({ block }: { block: Extract<UIContentBlock, { type: "toolCall"
   return (
     <details className="my-2 rounded-xl border border-line bg-card/60 text-sm">
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 select-none">
-        <span
-          className={`size-1.5 shrink-0 rounded-full ${
-            block.result?.isError ? "bg-red-500" : "bg-emerald-500/80"
-          }`}
+        <AgentEyes
+          state={block.result?.isError ? "error" : block.result ? "happy" : "working"}
+          size={14}
+          animated={false}
+          className={
+            block.result?.isError ? "text-red-500" : block.result ? "text-emerald-500/90" : "text-amber-400"
+          }
         />
         <span className="font-medium text-ink">todo</span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted">{summary}</span>
@@ -102,7 +108,7 @@ function AskCard({ block }: { block: Extract<UIContentBlock, { type: "toolCall" 
   return (
     <details className="my-2 rounded-xl border border-line bg-card/60 text-sm">
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 select-none">
-        <span className="size-1.5 shrink-0 rounded-full bg-purple-500/80" />
+        <AgentEyes state="connecting" size={14} className="text-purple-500/80" animated={false} />
         <span className="font-medium text-ink">ask_user_question</span>
         <span className="truncate font-mono text-xs text-muted">
           {questions.length > 0 ? `${questions.length} question(s)` : block.result?.text ?? ""}
@@ -187,14 +193,27 @@ function GenericToolCard({ block }: { block: ToolCallBlock }) {
     <details className="my-2 rounded-xl border border-line bg-card/60 text-sm">
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 select-none">
         <span
-          className={`size-1.5 shrink-0 rounded-full ${
-            block.result
-              ? block.result.isError
-                ? "bg-red-500"
-                : "bg-emerald-500/80"
-              : "bg-amber-400 animate-pulse"
-          }`}
-        />
+          className="flex shrink-0 items-center"
+        >
+          <AgentEyes
+            state={
+              block.result
+                ? block.result.isError
+                  ? "error"
+                  : "happy"
+                : "working"
+            }
+            size={14}
+            animated={false}
+            className={
+              block.result
+                ? block.result.isError
+                  ? "text-red-500"
+                  : "text-emerald-500/90"
+                  : "text-amber-400"
+            }
+          />
+        </span>
         <span className="font-medium text-ink">{block.name}</span>
         {edit ? (
           <span className="flex min-w-0 flex-1 items-center gap-2">
@@ -274,6 +293,61 @@ const ToolCallCard = memo(
   },
   (prev, next) => sameToolCallBlock(prev.block, next.block),
 );
+
+function activeToolSummary(tool: ActiveTool): string {
+  if (!tool.args || typeof tool.args !== "object") return "";
+  const args = tool.args as Record<string, unknown>;
+  const candidate = args.command ?? args.path ?? args.query ?? args.name;
+  if (typeof candidate === "string") {
+    return tool.toolName === "command" || tool.toolName === "bash"
+      ? `$ ${candidate}`
+      : candidate;
+  }
+  return "";
+}
+
+/** Live app-server item with reconnect-safe arguments and incremental output. */
+function ActiveToolCard({ tool }: { tool: ActiveTool }) {
+  const t = useT();
+  const summary = activeToolSummary(tool);
+  const args = useMemo(() => {
+    if (tool.args === undefined) return "";
+    try {
+      return JSON.stringify(tool.args, null, 2);
+    } catch {
+      return String(tool.args);
+    }
+  }, [tool.args]);
+  const output = tool.output?.slice(-12_000) ?? "";
+  return (
+    <details open className="rounded-xl border border-line bg-card/60 text-sm">
+      <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 select-none">
+        <AgentEyes state="working" size={14} className="text-amber-400" />
+        <span className="font-medium text-ink">{tool.toolName}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted">
+          {summary || t("toolRunning", { name: tool.toolName })}
+        </span>
+      </summary>
+      {(args || output) && (
+        <div className="space-y-2 border-t border-line px-3 py-2">
+          {args && !summary && (
+            <pre className="thin-scroll max-h-32 overflow-auto font-mono text-xs leading-relaxed whitespace-pre-wrap text-muted">
+              {args}
+            </pre>
+          )}
+          {output && (
+            <pre
+              aria-live="polite"
+              className="thin-scroll max-h-56 overflow-auto rounded-lg bg-canvas px-2.5 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink"
+            >
+              {output}
+            </pre>
+          )}
+        </div>
+      )}
+    </details>
+  );
+}
 
 function Thinking({
   text,
@@ -394,16 +468,7 @@ function CopyButton({ text }: { text: string }) {
       aria-label={copied ? t("copied") : t("copyMessage")}
       title={copied ? t("copied") : t("copyMessage")}
     >
-      {copied ? (
-        <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2" aria-hidden>
-          <path d="m5 12 4 4L19 6" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      ) : (
-        <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2" aria-hidden>
-          <rect x="8" y="8" width="11" height="11" rx="2" />
-          <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
-        </svg>
-      )}
+      <CopyActionIcon copied={copied} size={14} />
     </button>
   );
 }
@@ -528,6 +593,87 @@ const Message = memo(function Message({
     </div>
   );
 });
+export function EmptyStateHero({ cwd, agent }: { cwd?: string; agent: UIAgentKind }) {
+  const t = useT();
+  const starterPrompts = [
+    {
+      icon: "🔍",
+      title: t("starterTitleExplore"),
+      desc: t("starterExploreCodebase"),
+      prompt: t("starterExploreCodebase"),
+    },
+    {
+      icon: "🌿",
+      title: t("starterTitleGit"),
+      desc: t("starterReviewGit"),
+      prompt: t("starterReviewGit"),
+    },
+    {
+      icon: "🧪",
+      title: t("starterTitleTests"),
+      desc: t("starterWriteTests"),
+      prompt: t("starterWriteTests"),
+    },
+    {
+      icon: "⚡",
+      title: t("starterTitlePerf"),
+      desc: t("starterOptimizePerf"),
+      prompt: t("starterOptimizePerf"),
+    },
+  ];
+
+  const handleSelectStarter = (prompt: string) => {
+    chatClient.refillComposer(prompt);
+    chatClient.requestComposerFocus();
+  };
+
+  const projectFolder = cwd ? cwd.split("/").filter(Boolean).pop() : undefined;
+  const agentLabel = agent === "codex" ? t("agentCodex") : t("agentPi");
+
+  return (
+    <div className="my-auto flex flex-col items-center justify-center py-12 text-center">
+      <div className="flex size-14 items-center justify-center rounded-2xl border border-line bg-card shadow-xs">
+        <AgentIcon
+          agent={agent}
+          size={34}
+          className={agent === "codex" ? "text-amber-500" : "text-accent"}
+          title={agentLabel}
+        />
+      </div>
+      <h2 className="mt-4 text-lg font-semibold tracking-tight text-ink">
+        {t("emptyPrompt")}
+      </h2>
+      {projectFolder && (
+        <div className="mt-1.5 flex items-center gap-1.5 rounded-full border border-line bg-card/60 px-2.5 py-0.5 font-mono text-[11px] text-muted">
+          <span className="opacity-70">📁</span>
+          <span className="truncate max-w-xs">{projectFolder}</span>
+        </div>
+      )}
+
+      <div className="mt-6 grid w-full max-w-xl grid-cols-1 gap-2.5 sm:grid-cols-2 text-left">
+        {starterPrompts.map((item, i) => (
+          <button
+            key={i}
+            type="button"
+            onClick={() => handleSelectStarter(item.prompt)}
+            className="group flex flex-col rounded-xl border border-line bg-card/70 p-3 transition-all hover:border-accent/40 hover:bg-hover hover:shadow-xs active:scale-[0.99]"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-base">{item.icon}</span>
+              <span className="text-xs font-semibold text-ink group-hover:text-accent transition-colors">
+                {item.title}
+              </span>
+            </div>
+            <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted">
+              {item.desc}
+            </p>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function MessageList({
   messages,
   streamText,
@@ -540,6 +686,7 @@ export function MessageList({
   onLoadOlder,
   containerRef,
   cwd,
+  agent,
   onPreviewFile,
 }: {
   messages: UIMessage[];
@@ -554,11 +701,13 @@ export function MessageList({
   /** Scroll container (owned externally for message-anchor jumps) */
   containerRef: React.RefObject<HTMLDivElement | null>;
   cwd?: string;
+  agent: UIAgentKind;
   onPreviewFile?: PreviewMessageFile;
 }) {
   const t = useT();
   const chatFontSize = useChatFontSize();
   const stickToBottom = useRef(true);
+  const [isAtBottom, setIsAtBottom] = useState(true);
   const chatStyle = {
     "--chat-font-size": `${chatFontSizePixels(chatFontSize)}px`,
   } as CSSProperties;
@@ -568,6 +717,7 @@ export function MessageList({
     const previousHeight = container?.scrollHeight ?? 0;
     const previousTop = container?.scrollTop ?? 0;
     stickToBottom.current = false;
+    setIsAtBottom(false);
     const loaded = await onLoadOlder();
     if (!loaded) return;
     requestAnimationFrame(() => {
@@ -577,18 +727,26 @@ export function MessageList({
     });
   };
 
+  const scrollToBottomSmooth = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    stickToBottom.current = true;
+    setIsAtBottom(true);
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  };
+
   // Scroll to bottom on new content. rAF-coalesced and gated on the user
   // already being at the bottom — the old bare scrollIntoView ran on every
   // render (per stream delta) and forced synchronous layout.
   useEffect(() => {
+    if (!stickToBottom.current) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const raf = requestAnimationFrame(() => {
       if (!stickToBottom.current) return;
-      const container = containerRef.current;
-      if (!container) return;
-      const raf = requestAnimationFrame(() => {
-        if (!stickToBottom.current) return;
-        const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
-        if (distance > 1) container.scrollTop = container.scrollHeight;
-      });
+      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
+      if (distance > 1) container.scrollTop = container.scrollHeight;
+    });
     return () => cancelAnimationFrame(raf);
   }, [messages, streamText, streamThinking, activeTools, isStreaming, containerRef]);
 
@@ -609,11 +767,13 @@ export function MessageList({
         onScroll={() => {
           const el = containerRef.current;
           if (!el) return;
-          stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+          const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+          stickToBottom.current = atBottom;
+          setIsAtBottom(atBottom);
         }}
         className="thin-scroll h-full overflow-x-hidden overflow-y-auto"
       >
-        <div className="mx-auto flex min-w-0 max-w-3xl flex-col gap-4 px-3 py-4 sm:gap-5 sm:px-4 sm:py-5">
+        <div className="mx-auto flex min-w-0 max-w-3xl flex-col gap-4 px-3 py-4 sm:gap-5 sm:px-4 sm:py-5 min-h-full">
           {historyHasMore && (
             <div className="flex justify-center">
               <button
@@ -628,10 +788,7 @@ export function MessageList({
             </div>
           )}
           {messages.length === 0 && !streamText && (
-            <div className="mt-28 text-center">
-              <div className="text-4xl text-accent">π</div>
-              <div className="mt-3 text-[15px] text-faint">{t("emptyPrompt")}</div>
-            </div>
+            <EmptyStateHero cwd={cwd} agent={agent} />
           )}
           {messages.map((m, i) => (
             <Message
@@ -661,18 +818,28 @@ export function MessageList({
               />
             </div>
           )}
-          {activeTools.map((tool) => (
-            <LoadingIndicator
-              key={tool.toolCallId}
-              label={t("toolRunning", { name: tool.toolName })}
-              size="sm"
-              showLabel
-              className="text-sm"
-            />
-          ))}
+          {activeTools.map((tool) => <ActiveToolCard key={tool.toolCallId} tool={tool} />)}
           {showTyping && <LoadingIndicator label={t("loading")} size="sm" />}
         </div>
       </div>
+
+      {/* Floating scroll to bottom / generating pill */}
+      {!isAtBottom && messages.length > 0 && (
+        <button
+          type="button"
+          onClick={scrollToBottomSmooth}
+          aria-label={t("scrollToBottom")}
+          className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-line bg-card/95 px-3 py-1.5 text-xs font-medium text-ink shadow-md backdrop-blur-sm transition-all hover:bg-hover hover:scale-105 active:scale-95"
+        >
+          {isStreaming && (
+            <span className="size-2 animate-pulse rounded-full bg-accent" aria-hidden />
+          )}
+          <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2" aria-hidden>
+            <path d="M12 5v14M19 12l-7 7-7-7" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span>{isStreaming ? t("generatingResponse") : t("scrollToBottom")}</span>
+        </button>
+      )}
     </div>
   );
 }

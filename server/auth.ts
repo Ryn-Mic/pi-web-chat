@@ -13,9 +13,15 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
-const STATE_DIR = join(homedir(), ".pi", "web-chat");
+/** Integration tests isolate auth state without repurposing the process home. */
+const TEST_STATE_DIR = process.env.NODE_ENV === "test"
+  ? process.env.PI_WEB_TEST_STATE_DIR?.trim()
+  : undefined;
+const STATE_DIR = TEST_STATE_DIR
+  ? resolve(TEST_STATE_DIR)
+  : join(homedir(), ".pi", "web-chat");
 // Auth is constructed at import time, before server/index.ts creates the
 // workspace dir — make sure it exists so token/secret writes don't silently fail.
 mkdirSync(STATE_DIR, { recursive: true });

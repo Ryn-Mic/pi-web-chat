@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { UIActiveTodo } from "../../shared/protocol";
-import { activityDotClass } from "../lib/activity";
+import { activityEyeState, activityEyeTone } from "../lib/activity";
+import { AgentEyes } from "./AgentEyes";
 
 /**
  * Compact project status badge for the header.
@@ -70,23 +71,17 @@ function ScrollingLabel({ label }: { label: string }) {
   );
 }
 
-export function ActiveTodoBadge({
-  todo,
-  isStreaming = false,
-}: {
-  todo?: UIActiveTodo;
-  isStreaming?: boolean;
-}) {
+export function ActiveTodoBadge({ todo }: { todo?: UIActiveTodo }) {
   if (!todo) return null;
   const label = todo.activeForm ?? todo.subject;
-  const isPulsing = todo.status === "in_progress" && isStreaming;
   const dotState = todo.status === "in_progress" ? "running" : "idle";
 
   return (
     <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden font-mono text-[10px] leading-none text-muted sm:text-xs">
-      <span
-        className={`size-1.5 shrink-0 rounded-full ${activityDotClass(dotState, isPulsing)}`}
-        aria-hidden
+      <AgentEyes
+        state={activityEyeState(dotState)}
+        size={12}
+        className={activityEyeTone(dotState)}
       />
       <ScrollingLabel label={label} />
     </span>

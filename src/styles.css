@@ -167,33 +167,167 @@ html.ua-ios.ua-standalone body {
   display: none;
 }
 
-@keyframes loading-orbit {
+/* GrokBot-style agent bot (LaoA GrokBot, MIT). The body silhouette + antenna
+   sit behind the eyes; every eye path shares the same 48-point structure, so
+   changing `d` morphs smoothly between states. The body tints with the status
+   color (currentColor) at low opacity, so it reads as a background for the
+   expressive eyes. */
+.agent-eyes {
+  display: block;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.agent-eyes__body {
+  fill: color-mix(in srgb, currentColor 14%, transparent);
+  stroke: color-mix(in srgb, currentColor 28%, transparent);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  transition: fill 0.35s ease, stroke 0.35s ease;
+}
+.agent-eyes__path {
+  fill: currentColor;
+  transition: d 0.45s cubic-bezier(0.4, 0, 0.2, 1), fill 0.35s ease;
+}
+
+/* Morphicons keeps the action shape continuous; the pending arc adds only a
+   restrained rotation while the remote command is awaiting acknowledgement. */
+.remote-action-icon--pending {
+  animation: remote-action-pending 1.1s linear infinite;
+  transform-origin: center;
+}
+@keyframes remote-action-pending {
   to {
     transform: rotate(360deg);
   }
 }
 
-/* A compact, token-aware progress mark for local and full-page waits. */
-.loading-indicator__orbital {
-  position: relative;
-  display: inline-block;
-  border: 1.5px solid color-mix(in srgb, var(--c-faint) 35%, transparent);
-  border-top-color: var(--c-accent);
-  border-radius: 999px;
-  animation: loading-orbit 0.8s linear infinite;
+/* Refresh spin animation for tactile reload triggers */
+.refresh-action-icon--spinning {
+  animation: refresh-spin 0.75s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-origin: center;
 }
-.loading-indicator__orbital::after {
-  position: absolute;
-  top: -2px;
-  left: 50%;
-  width: 22%;
-  aspect-ratio: 1;
-  content: "";
-  border-radius: 999px;
-  background: var(--c-accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-card) 70%, transparent);
-  transform: translateX(-50%);
+@keyframes refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
+
+/* Agent identity badge: pi = π (theme accent), Codex = ⌘ (amber). The badge
+   tints with currentColor so callers pick the tone via a text-* utility, and
+   an SVG <text> glyph avoids emoji-font rendering differences across platforms. */
+.agent-icon {
+  display: block;
+}
+.agent-icon__badge {
+  fill: color-mix(in srgb, currentColor 10%, transparent);
+  stroke: color-mix(in srgb, currentColor 28%, transparent);
+  stroke-width: 1.2;
+}
+.agent-icon__glyph {
+  fill: currentColor;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Occasional GrokBot motions (LaoA GrokBot stateMotion, scaled to small
+   sizes via percentages / small fixed values). Each runs ~0.9-1s. */
+@keyframes agent-eyes-motion-bounce {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  40% {
+    transform: translateY(-16%) scale(0.96, 1.04);
+  }
+  65% {
+    transform: translateY(3%) scale(1.04, 0.96);
+  }
+}
+@keyframes agent-eyes-motion-tilt {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  35% {
+    transform: rotate(-14deg) translate(-6%, 4%);
+  }
+  70% {
+    transform: rotate(7deg);
+  }
+}
+@keyframes agent-eyes-motion-scan {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  30% {
+    transform: translateX(-14%);
+  }
+  70% {
+    transform: translateX(14%);
+  }
+}
+@keyframes agent-eyes-motion-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.07, 0.93);
+  }
+  65% {
+    transform: scale(0.95, 1.06);
+  }
+}
+@keyframes agent-eyes-motion-glitch {
+  0%,
+  100% {
+    transform: translate(0);
+  }
+  25% {
+    transform: translate(-6%, 2%);
+  }
+  50% {
+    transform: translate(7%, -2%);
+  }
+  75% {
+    transform: translate(-3%, 1%);
+  }
+}
+.agent-eyes--motion-bounce {
+  animation: agent-eyes-motion-bounce 0.95s ease;
+}
+.agent-eyes--motion-tilt {
+  animation: agent-eyes-motion-tilt 0.9s ease;
+}
+.agent-eyes--motion-scan {
+  animation: agent-eyes-motion-scan 0.95s ease;
+}
+.agent-eyes--motion-pulse {
+  animation: agent-eyes-motion-pulse 0.9s ease;
+}
+.agent-eyes--motion-glitch {
+  animation: agent-eyes-motion-glitch 0.7s steps(2);
+}
+.agent-eyes--blink .agent-eyes__path {
+  animation: agent-eyes-blink 0.24s ease-in-out;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@keyframes agent-eyes-blink {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  45% {
+    transform: scaleY(0.08);
+  }
+}
+
 
 /* User-message anchor jump highlight (fades out after 1.6s) */
 @keyframes anchor-flash {
@@ -235,8 +369,23 @@ html.ua-ios.ua-standalone body {
   animation: badge-marquee 14s ease-in-out 1.2s infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .badge-marquee,
-  .loading-indicator__orbital {
+  .badge-marquee {
+    animation: none;
+  }
+  .agent-eyes__path {
+    transition: none;
+  }
+  .remote-action-icon--pending {
+    animation: none;
+  }
+  .agent-eyes--blink .agent-eyes__path {
+    animation: none;
+  }
+  .agent-eyes--motion-bounce,
+  .agent-eyes--motion-tilt,
+  .agent-eyes--motion-scan,
+  .agent-eyes--motion-pulse,
+  .agent-eyes--motion-glitch {
     animation: none;
   }
 }

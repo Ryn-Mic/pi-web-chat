@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   UICustomModelsResponse,
   UICustomProvider,
+  UIAgentKind,
   UIModelDiscoveryRequest,
   UIModelDiscoveryResponse,
   UIExtensionsResponse,
@@ -181,10 +182,11 @@ export function useExtensions(enabled = true) {
   });
 }
 
-export function useModels() {
+export function useModels(agent?: UIAgentKind) {
   return useQuery({
-    queryKey: ["models"],
-    queryFn: () => fetchJson<UIModel[]>("/api/models"),
+    queryKey: ["models", agent ?? "all"],
+    queryFn: () =>
+      fetchJson<UIModel[]>(agent ? `/api/models?agent=${encodeURIComponent(agent)}` : "/api/models"),
     staleTime: 5 * 60_000,
   });
 }

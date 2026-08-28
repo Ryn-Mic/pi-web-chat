@@ -15,7 +15,7 @@ npm i -g @earendil-works/pi-coding-agent
 # 2) Install pi-web-chat
 pi install npm:pi-web-chat
 # pi install /path/to/pi-web-chat          # local path
-# pi install git:github.com/preinpost/pi-web-chat@v0.1.1
+# pi install git:github.com/Ryn-Mic/pi-web-chat@v0.1.106
 
 # 3) Start the web UI daemon only (no TUI; returns to the shell immediately)
 pi --web
@@ -23,7 +23,7 @@ pi --web
 
 pi --web status
 pi --web stop
-pi --web restart             # stop + start (keeps prior port/host)
+pi --web 3141 restart        # stop + start production (explicit port required)
 pi --web 3200                # custom port
 pi --web --lan               # bind 0.0.0.0 (LAN)
 pi --web --host 0.0.0.0      # same, explicit bind address
@@ -32,7 +32,7 @@ pi --web --token my-secret   # set the access token (default: auto-generated)
 pi --web rftoken             # rotate the access token (applies immediately)
 ```
 
-`pi --web` starts **only the web server daemon** and exits. It does not open the pi TUI.
+`pi --web` starts **one web server daemon for both pi and Codex** and exits. Choose the backend independently for each new session in Web settings; pi and Codex tabs remain connected and controllable at the same time. It does not open the pi TUI.
 If the server is already running, it prints the URL again.
 
 > **Auth (token + 2FA):** the server enforces access control on every API/WebSocket call.
@@ -123,6 +123,16 @@ Required secret:
 - `PI_WEB_TOKEN` — access token (default: auto-generated into `~/.pi/web-chat/token`)
 - `PI_WEB_2FA` — set to `off` to disable the TOTP second factor (default: on)
 - `PI_WEB_CWD` — agent working/session directory (default `~/.pi/web-chat`, created if missing)
+- `PI_WEB_AGENT` — default backend for new sessions: `pi` or `codex` (default: `pi`); the Web settings menu can override it per browser
+- `PI_WEB_CODEX_BIN` — Codex executable path (default `codex`)
+- `PI_WEB_CODEX_MODEL` — optional default Codex model id; the web model menu otherwise uses the native `model/list` catalog
+- `PI_WEB_CODEX_TRANSPORT` — `auto` (default), `proxy`, or `standalone`; `auto` prefers the shared Codex daemon through `app-server proxy` and falls back safely when it is unavailable
+- `PI_WEB_CODEX_SANDBOX` — `workspace-write` (default), `read-only`, or `danger-full-access`
+- `PI_WEB_CODEX_APPROVAL` — `on-request` (default), `untrusted`, or `never`; approval and input requests are shown in the authenticated Web UI and are never silently accepted
+
+Install and authenticate Codex separately (`codex login`) before creating a Codex session. In the Web settings menu, choose **pi** or **Codex** under “Agent for new sessions”; existing sessions keep their original backend. Codex sessions use native thread ids and native paged turn history, expose the real model/reasoning catalog, and preserve running tools, token usage, approvals, user questions, MCP elicitation, steering, and interruption across WebSocket reconnects.
+
+To co-control the same running threads as Codex Remote Control/Desktop/CLI, start the managed Codex daemon first (`codex remote-control start`) and then start Web Chat. The default `auto` transport attaches through `codex app-server proxy`; if no daemon is available, it reports `standalone` and still uses native persisted Codex threads, but cannot share an in-memory running turn. Set `PI_WEB_CODEX_TRANSPORT=proxy` when shared-daemon availability must be mandatory.
 
 LLM API auth uses the same `~/.pi/agent/auth.json` as the pi CLI. Configure pi (login / API keys) first.
 
@@ -153,13 +163,14 @@ dist/public/              built frontend (published)
 - Live streaming (text / thinking deltas)
 - **Streaming Markdown rendering** (Streamdown + Shiki syntax highlighting)
 - Tool-call display (bash, edit, read, …) with expandable results
-- Session list / switch / new session (can share pi CLI sessions)
+- Session list / switch / new session (shares pi sessions and native Codex daemon threads)
 - **Per-session URLs** (`/s/:sessionId`): each browser tab/device drives its own session; opening the same URL syncs live. `/` starts a fresh session
 - **Session fork** from a user message via the settings menu
 - Model switching + **thinking level**
 - **Custom model management**: add/edit custom providers and models in `~/.pi/agent/models.json` from the settings menu (Ollama, LM Studio, vLLM, proxies)
 - **Image attachments** (file picker / clipboard paste)
-- **Settings menu:** theme (system/light/dark), language, model management, session fork, extensions
-- Send while streaming → steering
+- **Settings menu:** choose pi/Codex for new sessions, theme (system/light/dark), language, model management, session fork, extensions
+- Send while streaming → steering (Codex keeps a separate stop control)
+- Codex command/file/permission approvals, user questions, and MCP forms are completed remotely in the Web UI
 - Abort
 - Mobile: safe-area, `dvh` layout, session drawer

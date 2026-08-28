@@ -54,9 +54,13 @@ export interface UIModel {
   id: string;
   name?: string;
   reasoning?: boolean;
+  /** Reasoning levels advertised by the provider for this exact model. */
+  thinkingLevels?: UIThinkingLevel[];
+  /** Provider-selected default reasoning level. */
+  defaultThinkingLevel?: UIThinkingLevel;
 }
 
-export type UIThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type UIThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 /** Session context usage (SDK getContextUsage) */
 export interface UIContextUsage {
@@ -92,6 +96,93 @@ export interface UIMessageAnchorsResponse {
   anchors: UIMessageAnchor[];
 }
 
+export type UIAgentKind = "pi" | "codex";
+
+export interface UIActiveTool {
+  toolCallId: string;
+  toolName: string;
+  /** Arguments are retained across reconnects while the item is running. */
+  args?: unknown;
+  /** Incremental command/MCP/file output retained across reconnects. */
+  output?: string;
+}
+
+export interface UICodexQuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface UICodexQuestion {
+  id: string;
+  header: string;
+  question: string;
+  options?: UICodexQuestionOption[];
+  allowOther?: boolean;
+  secret?: boolean;
+}
+
+/** A blocking app-server request that must be decided by a real user. */
+export type UICodexInteraction =
+  | {
+      id: string;
+      kind: "command_approval";
+      command: string;
+      cwd?: string;
+      reason?: string;
+      details?: unknown;
+      allowSessionApproval?: boolean;
+    }
+  | {
+      id: string;
+      kind: "file_approval";
+      reason?: string;
+      grantRoot?: string;
+      changes?: unknown;
+      allowSessionApproval?: boolean;
+    }
+  | {
+      id: string;
+      kind: "user_input";
+      questions: UICodexQuestion[];
+    }
+  | {
+      id: string;
+      kind: "mcp_elicitation";
+      serverName: string;
+      message: string;
+      mode: "form" | "url";
+      url?: string;
+      schema?: unknown;
+    }
+  | {
+      id: string;
+      kind: "permissions_approval";
+      cwd?: string;
+      reason?: string;
+      permissions: unknown;
+    };
+
+export interface UICodexInteractionResponse {
+  id: string;
+  action: "accept" | "accept_for_session" | "decline" | "cancel" | "submit";
+  /** request_user_input answers, keyed by question id. */
+  answers?: Record<string, string[]>;
+  /** MCP form response content. */
+  content?: unknown;
+  /** Permission grants may be scoped to one turn or the whole session. */
+  scope?: "turn" | "session";
+}
+
+export interface UICodexState {
+  threadId?: string;
+  /** Whether this Web server is attached to Codex's shared app-server daemon. */
+  transport: "shared" | "standalone" | "connecting" | "unavailable";
+  remoteControl?: "disabled" | "connecting" | "connected" | "errored";
+  /** True while attached read-only because another client owns the active turn.
+   * The session is visible and auto-upgrades to interactive once it frees up. */
+  observer?: boolean;
+}
+
 export interface UISnapshot {
   messages: UIMessage[];
   /** Older messages are loaded separately so live snapshot offsets stay stable. */
@@ -104,6 +195,8 @@ export interface UISnapshot {
   sessionFile?: string;
   /** Session identifier used in URL (/s/:id) */
   sessionId?: string;
+  /** Backend agent serving this session. */
+  agent?: UIAgentKind;
   /** Context usage (null for unsupported models) */
   context?: UIContextUsage | null;
   /** Session working directory (project display in the header) */
@@ -113,7 +206,11 @@ export interface UISnapshot {
   /** Current todo task, when the latest todo snapshot has an active item. */
   activeTodo?: UIActiveTodo;
   /** Authoritative in-flight tools for full snapshot/reconnect recovery. */
-  activeTools?: Array<{ toolCallId: string; toolName: string }>;
+  activeTools?: UIActiveTool[];
+  /** Blocking Codex requests survive WebSocket reconnects until explicitly resolved. */
+  pendingInteractions?: UICodexInteraction[];
+  /** Codex-native connection/thread state. */
+  codex?: UICodexState;
 }
 
 /** Snapshot fields that are always replaced atomically by an incremental update. */
@@ -140,6 +237,10 @@ export interface UISessionInfo {
   messageCount: number;
   /** Whether a loaded runtime for this session is streaming (running dot in sidebar) */
   isStreaming?: boolean;
+  /** Backend agent serving this persisted session. */
+  agent?: UIAgentKind;
+  /** Native Codex identity carried only by legacy bridge records. */
+  codexThreadId?: string;
 }
 
 export interface UIForkPoint {
@@ -381,9 +482,11 @@ export type ServerEvent =
       seq: number;
       toolCallId: string;
       toolName: string;
+      args?: unknown;
       /** Optimistic todo status derived from tool args before details.tasks arrives. */
       activeTodo?: UIActiveTodo;
     }
+  | { type: "tool_progress"; seq: number; toolCallId: string; delta: string }
   | { type: "tool_end"; seq: number; toolCallId: string; toolName: string; isError: boolean }
   | { type: "agent_start"; seq: number }
   | { type: "agent_end"; seq: number }
@@ -392,6 +495,8 @@ export type ServerEvent =
   | { type: "command_result"; message: string }
   | { type: "client_action"; action: UIClientAction }
   | { type: "extension_ui_request"; request: UIExtensionUIRequest }
+  | { type: "codex_interaction"; interaction: UICodexInteraction }
+  | { type: "codex_interaction_resolved"; id: string }
   | { type: "error"; message: string; requestId?: string };
 
 export type ClientCommand =
@@ -405,4 +510,5 @@ export type ClientCommand =
   | { type: "set_thinking_level"; level: UIThinkingLevel }
   | { type: "fork"; entryId: string }
   | { type: "get_commands" }
+  | { type: "codex_interaction_response"; response: UICodexInteractionResponse }
   | { type: "extension_ui_response"; response: UIExtensionUIResponse };

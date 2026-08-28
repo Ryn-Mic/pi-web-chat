@@ -4,6 +4,7 @@ public/file-viewer/
 *.log
 .DS_Store
 .env
+.vscode/
 
 # Playwright debugging and test artifacts
 .playwright-mcp/

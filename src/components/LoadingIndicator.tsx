@@ -1,9 +1,11 @@
+import { AgentEyes } from "./AgentEyes";
+
 type LoadingSize = "sm" | "md" | "lg";
 
-const sizeClass: Record<LoadingSize, string> = {
-  sm: "size-3",
-  md: "size-4",
-  lg: "size-7",
+const sizePx: Record<LoadingSize, number> = {
+  sm: 14,
+  md: 18,
+  lg: 30,
 };
 
 /** A restrained token-based loader for panels, actions, and full-page waits. */
@@ -25,7 +27,7 @@ export function LoadingIndicator({
       aria-atomic="true"
       className={`inline-flex items-center gap-2 text-muted ${className}`}
     >
-      <span className={`loading-indicator__orbital shrink-0 ${sizeClass[size]}`} aria-hidden />
+      <AgentEyes state="loading" size={sizePx[size]} className="shrink-0" />
       {showLabel ? <span>{label}</span> : <span className="sr-only">{label}</span>}
     </span>
   );

@@ -37,10 +37,11 @@
 
 ## Versioning and Release Notes
 
-- Every requirement, optimization, or bug-fix delivery increments the patch version exactly once; never reuse a version for different work.
-- Keep the version synchronized in `package.json` and both root/package entries in `package-lock.json`.
+- **Every delivery MUST increment the patch version** — requirements, optimizations, UI/UX changes, and bug fixes alike. The browser front-end only detects a new build via the version reported by `/api/health`, so skipping the bump means running deployments silently stay on the old UI. Never reuse a version for different work.
+- Bump as part of the delivery, before build/restart: keep the version synchronized in `package.json` and both root/package entries in `package-lock.json`.
 - Add concise user-facing entries under the same version in `release-notes.json`.
 - When continuing unfinished local work, preserve its intent and include the complete delivered scope in the new version notes.
+- After a bump, verify the served version matches: `curl -fsS http://127.0.0.1:3141/api/health` must report the new version (e.g. `"version":"0.1.94"`) after `pi --web 3141 restart`.
 
 ## Verification Matrix
 
@@ -53,14 +54,15 @@
 
 ## Runtime and Port Safety
 
-- Port `3141` is the protected production Web Chat service. Restart it only with `pi --web restart`, then verify:
+- **Iron rule: `pi --web restart` must always restart production on port `3141`; invoke it as `pi --web 3141 restart` so the port is explicit. Bare `pi --web restart` is forbidden because it can preserve a stale port from daemon state.**
+- Port `3141` is the protected production Web Chat service. Restart it only with `pi --web 3141 restart`, then verify:
   - `pi --web status` reports `127.0.0.1:3141`.
   - `curl -fsS http://127.0.0.1:3141/api/health` returns HTTP 200 and the intended version.
   - `lsof -nP -iTCP:3141 -sTCP:LISTEN` shows the managed server.
 - Use another port for debugging, for example `PORT=3242 npm run dev:server`; point Vite at it with `PI_WEB_DEV_PORT=3242 npm run dev:web`.
 - Do not run the default `npm run dev` while production 3141 is active, because its server defaults to 3141.
 - A debug process may be stopped only by its known PID/session. Afterward confirm the debug port is free and production 3141 is still healthy.
-- Before local production handoff: `npm run build`, optionally refresh the authorized local install with `pi update /Users/ryn/Documents/tmp/pi-web-chat --approve --force`, then use `pi --web restart`.
+- Before local production handoff: `npm run build`, optionally refresh the authorized local install with `pi update /Users/ryn/Documents/tmp/pi-web-chat --approve --force`, then use `pi --web 3141 restart`.
 
 ## Definition of Done
 

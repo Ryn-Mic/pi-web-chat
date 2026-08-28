@@ -5,6 +5,7 @@ import {
   openSync,
   readFileSync,
   readSync,
+  realpathSync,
   statSync,
   unlinkSync,
 } from "node:fs";
@@ -31,6 +32,8 @@ import type {
   UICustomModelsResponse,
   UICustomProvider,
   UIActiveTodo,
+  UIContextUsage,
+  UIAgentKind,
   UIFileSearchResponse,
   UIModelDiscoveryRequest,
   UIExtensionInfo,
@@ -70,8 +73,27 @@ import {
   applyExternalSessionEntries,
 } from "./session-append.ts";
 import { readSessionHistoryPage } from "./session-history.ts";
-import { createSessionUserMessageAnchors } from "./session-anchors.ts";
+import {
+  createCodexUserMessageAnchors,
+  createSessionUserMessageAnchors,
+} from "./session-anchors.ts";
 import { createCwdBoundCoreTools } from "./runtime-tools.ts";
+import {
+  CodexAppServerClient,
+  CodexSession,
+  codexThinkingLevels,
+  type CodexModelInfo,
+  type CodexRemoteStatus,
+  type CodexSessionEvent,
+  type CodexSessionState,
+  type CodexThreadInfo,
+  type CodexTransportMode,
+} from "./codex.ts";
+import {
+  forkCodexConnection,
+  nativeCodexSessionId,
+  nativeCodexThreadId,
+} from "./codex-fork.ts";
 import { SessionSummaryIndex } from "./session-index.ts";
 import {
   checkoutGitBranch,
@@ -92,10 +114,48 @@ const HOME = homedir();
 const DEFAULT_AGENT_CWD = join(HOME, ".pi", "web-chat");
 const AGENT_CWD = resolve(process.env.PI_WEB_CWD ?? DEFAULT_AGENT_CWD);
 mkdirSync(AGENT_CWD, { recursive: true });
+
+type AgentKind = UIAgentKind;
+const DEFAULT_AGENT_KIND: AgentKind =
+  process.env.PI_WEB_AGENT?.trim().toLowerCase() === "codex" ? "codex" : "pi";
+const CODEX_BINARY = process.env.PI_WEB_CODEX_BIN?.trim() || "codex";
+const CODEX_MODEL = process.env.PI_WEB_CODEX_MODEL?.trim() || undefined;
+const CODEX_SANDBOX =
+  process.env.PI_WEB_CODEX_SANDBOX?.trim() === "read-only"
+    ? "read-only"
+    : process.env.PI_WEB_CODEX_SANDBOX?.trim() === "danger-full-access"
+      ? "danger-full-access"
+      : "workspace-write";
+const CODEX_APPROVAL =
+  process.env.PI_WEB_CODEX_APPROVAL?.trim() === "never"
+    ? "never"
+    : process.env.PI_WEB_CODEX_APPROVAL?.trim() === "untrusted"
+      ? "untrusted"
+      : "on-request";
+const CODEX_TRANSPORT: CodexTransportMode =
+  process.env.PI_WEB_CODEX_TRANSPORT?.trim() === "proxy"
+    ? "proxy"
+    : process.env.PI_WEB_CODEX_TRANSPORT?.trim() === "standalone"
+      ? "standalone"
+      : "auto";
+const CODEX_METADATA_TYPE = "pi-web-chat.codex";
 const sessionSummaryIndex = new SessionSummaryIndex(join(getAgentDir(), "sessions"));
+const codexAppServer = new CodexAppServerClient({
+  cwd: AGENT_CWD,
+  binary: CODEX_BINARY,
+  transport: CODEX_TRANSPORT,
+});
+let codexModelsCache: { at: number; models: CodexModelInfo[] } | null = null;
+let codexThreadsCache: { at: number; threads: CodexThreadInfo[] } | null = null;
+let codexRemoteStatusCache: { at: number; status: CodexRemoteStatus } | null = null;
 
 /** Daemon state file dir (same STATE_DIR as extensions/pi-web-chat.ts) */
-const DAEMON_STATE_DIR = join(HOME, ".pi", "web-chat");
+const TEST_STATE_DIR = process.env.NODE_ENV === "test"
+  ? process.env.PI_WEB_TEST_STATE_DIR?.trim()
+  : undefined;
+const DAEMON_STATE_DIR = TEST_STATE_DIR
+  ? resolve(TEST_STATE_DIR)
+  : join(HOME, ".pi", "web-chat");
 
 /** Short-lived mobile preview capability store. Cleanup timer lives here so the
  * store itself stays testable without a background interval. */
@@ -190,7 +250,18 @@ type SessionEventPayload = SequencedServerEvent extends infer Event
 
 interface SessionEntry {
   id: string;
+  agent: AgentKind;
   runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>>;
+  /** Native Codex thread controller; Pi runtime is compatibility-only and in-memory for native sessions. */
+  codex?: CodexSession;
+  codexState?: CodexSessionState;
+  /** Name chosen before a native Codex draft has created its authoritative thread. */
+  codexDraftName?: string;
+  /** True when the URL directly represents a native Codex thread. */
+  codexNative?: boolean;
+  codexContext?: UIContextUsage | null;
+  codexAgentStarted?: boolean;
+  codexMessages: unknown[];
   clients: Set<WebSocket>;
   unsubscribe?: () => void;
   lastActive: number;
@@ -229,8 +300,42 @@ interface SessionEntry {
 const entries = new Map<string, SessionEntry>();
 const pending = new Map<string, Promise<SessionEntry>>();
 const wsEntry = new Map<WebSocket, SessionEntry>();
+/** Serializes later commands behind a native fork so they use the new binding. */
+const codexForksInFlight = new WeakMap<WebSocket, Promise<unknown>>();
 /** Grace period before idle session runtimes are cleaned up */
 const IDLE_TTL_MS = 15 * 60_000;
+const CODEX_CATALOG_TTL_MS = 15_000;
+
+async function codexModels(): Promise<CodexModelInfo[]> {
+  if (codexModelsCache && Date.now() - codexModelsCache.at < CODEX_CATALOG_TTL_MS) {
+    return codexModelsCache.models;
+  }
+  const models = await codexAppServer.listModels();
+  codexModelsCache = { at: Date.now(), models };
+  return models;
+}
+
+async function codexThreads(): Promise<CodexThreadInfo[]> {
+  if (codexThreadsCache && Date.now() - codexThreadsCache.at < CODEX_CATALOG_TTL_MS) {
+    return codexThreadsCache.threads;
+  }
+  const threads = await codexAppServer.listThreads();
+  codexThreadsCache = { at: Date.now(), threads };
+  return threads;
+}
+
+async function codexRemoteStatus(): Promise<CodexRemoteStatus | undefined> {
+  if (codexRemoteStatusCache && Date.now() - codexRemoteStatusCache.at < CODEX_CATALOG_TTL_MS) {
+    return codexRemoteStatusCache.status;
+  }
+  try {
+    const status = await codexAppServer.remoteControlStatus();
+    codexRemoteStatusCache = { at: Date.now(), status };
+    return status;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Session filename (<timestamp>_<uuid>.jsonl) → URL identifier */
 function sessionIdOf(file?: string): string {
@@ -242,6 +347,100 @@ function sessionIdOf(file?: string): string {
 
 async function resolveSessionPath(id: string): Promise<string | undefined> {
   return sessionSummaryIndex.resolve(id);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object";
+}
+
+function readCodexState(runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>>): CodexSessionState | undefined {
+  let state: CodexSessionState | undefined;
+  for (const entry of runtime.session.sessionManager.getEntries()) {
+    if (
+      entry.type !== "custom" ||
+      entry.customType !== CODEX_METADATA_TYPE ||
+      !entry.data ||
+      typeof entry.data !== "object"
+    )
+      continue;
+    const data = entry.data as Record<string, unknown>;
+    state = {
+      ...(typeof data.threadId === "string" ? { threadId: data.threadId } : {}),
+      ...(typeof data.model === "string" ? { model: data.model } : {}),
+      ...(typeof data.effort === "string" ? { effort: data.effort } : {}),
+    };
+  }
+  return state;
+}
+
+function agentKindForRuntime(
+  runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>>,
+  path: string | undefined,
+  requestedAgent?: AgentKind,
+): AgentKind {
+  // Persisted sessions are immutable with respect to their backend. Older
+  // sessions without Codex metadata remain Pi sessions even when the server's
+  // default for new drafts is Codex.
+  if (path) return readCodexState(runtime) ? "codex" : "pi";
+  return requestedAgent ?? DEFAULT_AGENT_KIND;
+}
+
+function entryMessages(entry: SessionEntry): unknown[] {
+  return entry.agent === "codex" ? entry.codexMessages : entry.runtime.session.messages;
+}
+
+function entryIsStreaming(entry: SessionEntry): boolean {
+  return entry.agent === "codex" ? entry.codex?.isStreaming === true : entry.runtime.session.isStreaming;
+}
+
+function entryCwd(entry: SessionEntry): string {
+  return entry.agent === "codex"
+    ? entry.codex?.currentCwd || entry.runtime.session.sessionManager.getHeader()?.cwd || entry.runtime.cwd
+    : entry.runtime.cwd;
+}
+
+function codexThinkingLevel(effort: string | undefined): UIThinkingLevel {
+  const value = effort?.trim().toLowerCase();
+  if (!value) return "off";
+  if (value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max" || value === "ultra") {
+    return value;
+  }
+  return "medium";
+}
+
+function codexEffortForLevel(level: UIThinkingLevel): string | undefined {
+  return level === "off" ? undefined : level;
+}
+
+function codexStateForEntry(entry: SessionEntry): CodexSessionState {
+  const state: CodexSessionState = {};
+  const threadId = entry.codex?.currentThreadId ?? entry.codexState?.threadId;
+  const model = entry.codex?.currentModel;
+  const effort = entry.codex?.currentEffort;
+  if (threadId) state.threadId = threadId;
+  if (model) state.model = model;
+  if (effort) state.effort = effort;
+  return state;
+}
+
+function appendCodexState(entry: SessionEntry, state: CodexSessionState): void {
+  entry.codexState = state;
+  // Native drafts are re-keyed to codex:<threadId> before publication. Never
+  // append their transient identity to Pi JSONL or they become a duplicate
+  // legacy bridge/ghost in the session catalog.
+  if (entry.codexNative || !entry.published) return;
+  entry.runtime.session.sessionManager.appendCustomEntry(CODEX_METADATA_TYPE, state);
+  const file = entry.runtime.session.sessionFile;
+  if (file) sessionSummaryIndex.invalidate(file);
+}
+
+function appendCodexMessage(entry: SessionEntry, message: Record<string, unknown>, completedAt?: number): void {
+  if (!entry.codexNative) entry.runtime.session.sessionManager.appendMessage(message as never);
+  entry.codexMessages.push(message);
+  if (message.role === "assistant") recordMessageCompletion(message, completedAt ?? Date.now());
+  const file = entry.runtime.session.sessionFile;
+  if (file) sessionSummaryIndex.invalidate(file);
+  broadcastSnapshot(entry);
 }
 
 /**
@@ -301,6 +500,10 @@ function expandHome(p: string): string {
   return p;
 }
 
+function parseAgentKind(value: string | null): AgentKind | undefined {
+  return value === "pi" || value === "codex" ? value : undefined;
+}
+
 /** Rebuild the browser's fixed tail window from the runtime's current leaf. */
 function refreshEntryFileState(entry: SessionEntry) {
   entry.externalDecoder = new AppendedJsonlDecoder();
@@ -316,7 +519,7 @@ function refreshEntryFileState(entry: SessionEntry) {
     const page = readSessionHistoryPage(file, {
       leafId: entry.runtime.session.sessionManager.getLeafId(),
     });
-    const messageCount = serializeMessages(entry.runtime.session.messages).length;
+    const messageCount = serializeMessages(entryMessages(entry)).length;
     entry.snapshotMessageOffset = Math.max(0, messageCount - page.messages.length);
     entry.historyCursor = page.cursor;
     entry.historyHasMore = page.hasMore;
@@ -348,21 +551,73 @@ function broadcastFullSnapshotReset(entry: SessionEntry) {
   });
 }
 
-async function createEntry(id: string | null, cwd?: string): Promise<SessionEntry> {
-  const path = id ? await resolveSessionPath(id) : undefined;
+async function createEntry(
+  id: string | null,
+  cwd?: string,
+  requestedAgent?: AgentKind,
+): Promise<SessionEntry> {
+  const nativeThreadId = nativeCodexThreadId(id);
+  const nativeThread = nativeThreadId
+    ? await codexAppServer.readThread(nativeThreadId).catch(() => undefined)
+    : undefined;
+  if (nativeThreadId && !nativeThread) throw new Error("Codex thread not found");
+  const path = id && !nativeThreadId ? await resolveSessionPath(id) : undefined;
   // Opening an existing session keeps the old behavior (AGENT_CWD); only
   // brand-new sessions honor the cwd parameter.
-  const sessionCwd = path ? AGENT_CWD : cwd ? expandHome(cwd) : AGENT_CWD;
+  const sessionCwd = nativeThread?.cwd ?? (path ? AGENT_CWD : cwd ? expandHome(cwd) : AGENT_CWD);
+  const inMemoryCodexRuntime = !!nativeThreadId
+    || (!path && (requestedAgent ?? DEFAULT_AGENT_KIND) === "codex");
   const runtime = await createAgentSessionRuntime(createRuntime, {
     cwd: sessionCwd,
     agentDir: getAgentDir(),
-    sessionManager: SessionManager.create(sessionCwd),
+    sessionManager: inMemoryCodexRuntime
+      ? SessionManager.inMemory(sessionCwd)
+      : SessionManager.create(sessionCwd),
   });
   if (path) await runtime.switchSession(path);
   recordSessionMessageCompletions(runtime.session.sessionManager.getEntries());
-  const entry: SessionEntry = {
-    id: sessionIdOf(runtime.session.sessionFile),
+
+  const agent = nativeThreadId ? "codex" : agentKindForRuntime(runtime, path, requestedAgent);
+  const codexState = agent === "codex"
+    ? nativeThreadId
+      ? { threadId: nativeThreadId }
+      : readCodexState(runtime) ?? (!path && CODEX_MODEL ? { model: CODEX_MODEL } : undefined)
+    : undefined;
+  const canonicalCodexThreadId = agent === "codex"
+    ? nativeThreadId ?? codexState?.threadId
+    : undefined;
+  const canonicalId = canonicalCodexThreadId
+    ? nativeCodexSessionId(canonicalCodexThreadId)
+    : sessionIdOf(runtime.session.sessionFile)
+      || "draft:" + runtime.session.sessionManager.getSessionId();
+  const canonicalEntry = canonicalCodexThreadId ? entries.get(canonicalId) : undefined;
+  if (canonicalEntry) {
+    await runtime.dispose().catch(() => {});
+    await canonicalEntry.codex?.connect();
+    return canonicalEntry;
+  }
+  const codexCwd = runtime.session.sessionManager.getHeader()?.cwd || runtime.cwd;
+  let entry!: SessionEntry;
+  const codex =
+    agent === "codex"
+      ? new CodexSession({
+          cwd: codexCwd,
+          state: codexState,
+          client: codexAppServer,
+          sandbox: CODEX_SANDBOX,
+          approvalPolicy: CODEX_APPROVAL,
+          onEvent: (event) => handleCodexEvent(entry, event),
+        })
+      : undefined;
+  entry = {
+    id: canonicalId,
+    agent,
     runtime,
+    codex,
+    codexState,
+    codexNative: !!canonicalCodexThreadId,
+    codexContext: null,
+    codexMessages: agent === "codex" ? [...runtime.session.messages] : [],
     clients: new Set(),
     lastActive: Date.now(),
     // Only sessions opened with an explicit id are published immediately.
@@ -381,20 +636,36 @@ async function createEntry(id: string | null, cwd?: string): Promise<SessionEntr
     activeTodos: new Map(),
   };
   refreshEntryFileState(entry);
-  entry.lastSnapshot = buildSnapshot(entry);
   entries.set(entry.id, entry);
-  bindSession(entry);
-  await bindWebExtensions(entry);
-  installEntryRuntimeRebind(entry);
+  if (entry.codex && (nativeThreadId || path)) {
+    await Promise.all([
+      entry.codex.connect(),
+      codexModels().catch(() => []),
+      codexRemoteStatus().catch(() => undefined),
+    ]);
+  }
+  entry.lastSnapshot = buildSnapshot(entry);
+  if (entry.agent === "pi") {
+    bindSession(entry);
+    await bindWebExtensions(entry);
+    installEntryRuntimeRebind(entry);
+  }
   return entry;
 }
 
 /** New session when id is null, otherwise reuse the existing runtime (avoids
  * concurrent-connect races) */
-async function acquireEntry(id: string | null, cwd?: string): Promise<SessionEntry> {
-  if (!id) return createEntry(null, cwd);
+async function acquireEntry(
+  id: string | null,
+  cwd?: string,
+  requestedAgent?: AgentKind,
+): Promise<SessionEntry> {
+  if (!id) return createEntry(null, cwd, requestedAgent);
   const hit = entries.get(id);
-  if (hit) return hit;
+  if (hit) {
+    if (hit.agent === "codex") await hit.codex?.connect();
+    return hit;
+  }
   const inflight = pending.get(id);
   if (inflight) return inflight;
   const p = createEntry(id).finally(() => pending.delete(id));
@@ -406,10 +677,11 @@ async function acquireEntry(id: string | null, cwd?: string): Promise<SessionEnt
 setInterval(() => {
   const now = Date.now();
   for (const entry of [...entries.values()]) {
-    if (entry.clients.size > 0 || entry.runtime.session.isStreaming) continue;
+    if (entry.clients.size > 0 || entryIsStreaming(entry)) continue;
     if (now - entry.lastActive < IDLE_TTL_MS) continue;
     entries.delete(entry.id);
     entry.unsubscribe?.();
+    void entry.codex?.dispose().catch(() => {});
     void entry.runtime.dispose().catch(() => {});
   }
 }, 60_000).unref();
@@ -503,9 +775,10 @@ setInterval(() => {
     const file = entry.runtime.session.sessionFile;
     if (
       !file ||
+      entry.agent === "codex" ||
       entry.reloading ||
       entry.syncingExternal ||
-      entry.runtime.session.isStreaming
+      entryIsStreaming(entry)
     )
       continue;
     let stat;
@@ -586,7 +859,7 @@ async function knownProjectRoots(): Promise<Set<string>> {
     return knownRootsCache.roots;
   }
   const roots = new Set<string>([AGENT_CWD]);
-  for (const entry of entries.values()) roots.add(entry.runtime.cwd);
+  for (const entry of entries.values()) roots.add(entryCwd(entry));
   try {
     for (const session of await sessionSummaryIndex.list()) {
       if (session.project.startsWith("/")) roots.add(session.project);
@@ -594,8 +867,31 @@ async function knownProjectRoots(): Promise<Set<string>> {
   } catch {
     /* keep the entry/AGENT_CWD roots */
   }
+  for (const thread of codexThreadsCache?.threads ?? []) roots.add(resolve(thread.cwd));
   knownRootsCache = { at: Date.now(), roots };
   return roots;
+}
+
+async function authorizedSessionCwd(value: string | undefined): Promise<string | undefined> {
+  if (!value) return undefined;
+  const requested = resolve(expandHome(value));
+  let requestedReal = requested;
+  try {
+    requestedReal = realpathSync(requested);
+  } catch {
+    throw new Error("Unknown project cwd");
+  }
+  for (const root of await knownProjectRoots()) {
+    const normalized = resolve(root);
+    let real = normalized;
+    try {
+      real = realpathSync(normalized);
+    } catch {
+      continue;
+    }
+    if (requested === normalized || requestedReal === real) return real;
+  }
+  throw new Error("Unknown project cwd");
 }
 
 function supportedThinkingLevels(model: unknown): UIThinkingLevel[] {
@@ -615,9 +911,36 @@ function supportedThinkingLevels(model: unknown): UIThinkingLevel[] {
 
 function buildSnapshot(entry: SessionEntry): UISnapshot {
   const session = entry.runtime.session;
-  const model = session.model;
-  const cwd = entry.runtime.cwd;
-  const allMessages = serializeMessages(session.messages);
+  const piModel = session.model;
+  const codex = entry.codex;
+  const codexModelId = codex?.currentModel ?? CODEX_MODEL
+    ?? codexModelsCache?.models.find((candidate) => candidate.isDefault)?.model
+    ?? "default";
+  const codexModel = codexModelsCache?.models.find(
+    (candidate) => candidate.model === codexModelId || candidate.id === codexModelId,
+  );
+  const model =
+    entry.agent === "codex"
+      ? {
+          provider: "codex",
+          id: codexModelId,
+          name: codexModel?.displayName ?? codexModelId,
+          reasoning: true,
+          thinkingLevels: codexThinkingLevels(codexModel),
+          ...(codexModel?.defaultReasoningEffort
+            ? { defaultThinkingLevel: codexThinkingLevel(codexModel.defaultReasoningEffort) }
+            : {}),
+        }
+      : piModel
+        ? {
+            provider: piModel.provider,
+            id: piModel.id,
+            name: (piModel as { name?: string }).name,
+            reasoning: (piModel as { reasoning?: boolean }).reasoning,
+          }
+        : null;
+  const cwd = entryCwd(entry);
+  const allMessages = serializeMessages(entryMessages(entry));
   const messages = allMessages.slice(entry.snapshotMessageOffset);
   return {
     messages,
@@ -625,27 +948,37 @@ function buildSnapshot(entry: SessionEntry): UISnapshot {
       cursor: entry.historyCursor,
       hasMore: entry.historyHasMore,
     },
-    isStreaming: session.isStreaming,
-    model: model
-      ? {
-          provider: model.provider,
-          id: model.id,
-          name: (model as { name?: string }).name,
-          reasoning: (model as { reasoning?: boolean }).reasoning,
-        }
-      : null,
-    thinkingLevel: session.thinkingLevel as UIThinkingLevel,
-    thinkingLevels: supportedThinkingLevels(model),
-    context: session.getContextUsage() ?? null,
-    sessionFile: session.sessionFile,
+    isStreaming: entryIsStreaming(entry),
+    model,
+    thinkingLevel:
+      entry.agent === "codex"
+        ? codexThinkingLevel(codex?.currentEffort ?? codexModel?.defaultReasoningEffort)
+        : session.thinkingLevel as UIThinkingLevel,
+    thinkingLevels:
+      entry.agent === "codex" ? codexThinkingLevels(codexModel) : supportedThinkingLevels(piModel),
+    context: entry.agent === "codex" ? entry.codexContext ?? null : session.getContextUsage() ?? null,
+    sessionFile: entry.codexNative ? undefined : session.sessionFile,
     sessionId: entry.id,
+    agent: entry.agent,
     cwd,
     gitBranch: gitBranchAt(cwd),
     activeTodo: [...entry.activeTodos.values()].at(-1) ?? getActiveTodo(allMessages),
-    activeTools: [...entry.activeTools].map(([toolCallId, toolName]) => ({
-      toolCallId,
-      toolName,
-    })),
+    activeTools: entry.agent === "codex"
+      ? codex?.activeTools ?? []
+      : [...entry.activeTools].map(([toolCallId, toolName]) => ({ toolCallId, toolName })),
+    pendingInteractions: entry.agent === "codex" ? codex?.pendingInteractions ?? [] : [],
+    ...(entry.agent === "codex"
+      ? {
+          codex: {
+            threadId: codex?.currentThreadId,
+            transport: codex?.transport ?? codexAppServer.activeTransport,
+            ...(entry.codex?.observerMode === true ? { observer: true } : {}),
+            ...(codexRemoteStatusCache?.status.status
+              ? { remoteControl: codexRemoteStatusCache.status.status }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -703,8 +1036,18 @@ const BUILTIN_COMMANDS: UICommandInfo[] = [
   { name: "session", description: "Show current session statistics", source: "builtin" },
   { name: "reload", description: "Reload extensions, skills, prompts, and themes", source: "builtin" },
 ];
+const CODEX_COMMANDS = BUILTIN_COMMANDS
+  .filter((command) =>
+    ["settings", "model", "new", "resume", "fork", "copy", "name", "session"].includes(command.name),
+  )
+  .map((command) =>
+    command.name === "fork"
+      ? { ...command, description: "Fork the current native Codex thread" }
+      : command,
+  );
 
 function buildCommandCatalog(entry: SessionEntry): UICommandInfo[] {
+  if (entry.agent === "codex") return [...CODEX_COMMANDS];
   const session = entry.runtime.session;
   const builtinNames = new Set(BUILTIN_COMMANDS.map((command) => command.name));
   const commands: UICommandInfo[] = [...BUILTIN_COMMANDS];
@@ -746,6 +1089,156 @@ function sendCommandCatalog(entry: SessionEntry, ws?: WebSocket) {
   else broadcastTo(entry, event);
 }
 
+function handleCodexEvent(entry: SessionEntry, event: CodexSessionEvent): void {
+  if (!entry || entry.agent !== "codex") return;
+  entry.lastActive = Date.now();
+  const broadcast = (payload: SessionEventPayload) => broadcastSessionEvent(entry, payload);
+  switch (event.type) {
+    case "history": {
+      entry.codexMessages = [...event.messages];
+      // The app-server cursor starts before the entire hydrated turn page.
+      // Keep that page intact; slicing inside it would make omitted messages
+      // unreachable from the cursor.
+      entry.snapshotMessageOffset = 0;
+      entry.historyCursor = event.cursor;
+      entry.historyHasMore = event.cursor !== null;
+      entry.activeTools.clear();
+      for (const tool of event.activeTools) entry.activeTools.set(tool.toolCallId, tool.toolName);
+      entry.codexAgentStarted = event.isStreaming;
+      if (event.reset) broadcastFullSnapshotReset(entry);
+      else broadcastSnapshot(entry, { isStreaming: event.isStreaming });
+      break;
+    }
+    case "thread_ready": {
+      const cwdChanged = event.cwd !== undefined && entry.lastSnapshot?.cwd !== event.cwd;
+      if (cwdChanged) knownRootsCache = null;
+      const nextState: CodexSessionState = {
+        ...(entry.codexState ?? {}),
+        threadId: event.threadId,
+        ...(event.model ? { model: event.model } : {}),
+      };
+      if (event.effort !== undefined) {
+        if (event.effort) nextState.effort = event.effort;
+        else delete nextState.effort;
+      }
+      const changed = JSON.stringify(nextState) !== JSON.stringify(entry.codexState ?? {});
+      if (changed) appendCodexState(entry, nextState);
+      // cwd is native thread state rather than legacy Web metadata. A settings
+      // update that only changes cwd still has to refresh file/Git authority in
+      // every connected browser.
+      if (changed || cwdChanged) broadcastSnapshot(entry);
+      break;
+    }
+    case "turn_start":
+      if (!entry.codexAgentStarted) {
+        entry.codexAgentStarted = true;
+        broadcast({ type: "agent_start" });
+      }
+      break;
+    case "text_delta":
+      broadcast({ type: "delta", kind: "text", delta: event.delta });
+      break;
+    case "thinking_delta":
+      broadcast({ type: "delta", kind: "thinking", delta: event.delta });
+      break;
+    case "thinking_end":
+      broadcast({ type: "thinking_end" });
+      break;
+    case "tool_start":
+      entry.activeTools.set(event.toolCallId, event.toolName);
+      broadcast({
+        type: "tool_start",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        args: event.args,
+      });
+      break;
+    case "tool_progress":
+      broadcast({ type: "tool_progress", toolCallId: event.toolCallId, delta: event.delta });
+      break;
+    case "message":
+      appendCodexMessage(entry, event.message, event.completedAt);
+      break;
+    case "tool_end":
+      entry.activeTools.delete(event.toolCallId);
+      broadcast({
+        type: "tool_end",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        isError: event.isError,
+      });
+      broadcastSnapshot(entry);
+      break;
+    case "context":
+      entry.codexContext = event.context;
+      broadcastSnapshot(entry);
+      break;
+    case "plan": {
+      const current = event.plan.findIndex((step) => step.status === "inProgress" || step.status === "in_progress");
+      const completed = current < 0 && event.plan.length > 0 && event.plan.every((step) => step.status === "completed");
+      if (current >= 0 || completed) {
+        const index = current >= 0 ? current : event.plan.length - 1;
+        const step = event.plan[index]!;
+        entry.activeTodos.set("codex-plan", {
+          subject: step.step,
+          activeForm: event.explanation,
+          status: completed ? "completed" : "in_progress",
+          current: index + 1,
+          total: event.plan.length,
+        });
+      } else {
+        entry.activeTodos.delete("codex-plan");
+      }
+      broadcastSnapshot(entry);
+      break;
+    }
+    case "interaction":
+      broadcastTo(entry, { type: "codex_interaction", interaction: event.interaction });
+      broadcastSnapshot(entry);
+      break;
+    case "interaction_resolved":
+      broadcastTo(entry, { type: "codex_interaction_resolved", id: event.id });
+      broadcastSnapshot(entry);
+      break;
+    case "catalog_changed":
+      codexThreadsCache = null;
+      knownRootsCache = null;
+      break;
+    case "remote_status":
+      codexRemoteStatusCache = { at: Date.now(), status: event.status };
+      broadcastSnapshot(entry);
+      break;
+    case "turn_end":
+      entry.codexAgentStarted = false;
+      entry.activeTools.clear();
+      entry.activeTodos.clear();
+      codexThreadsCache = null;
+      broadcast({ type: "agent_end" });
+      broadcastSnapshot(entry, { isStreaming: false });
+      if (event.error) broadcastTo(entry, { type: "error", message: event.error });
+      break;
+    case "error": {
+      // A crashed/errored backend must surface immediately: force the transport
+      // / remote state into the snapshot so the connection badge turns red
+      // instead of pinning a stale "connected". Non-fatal errors (guardrails,
+      // warnings) keep the old behavior and skip the full snapshot.
+      const backendDown = entry.codex?.transport === "unavailable";
+      if (!entry.codex?.isStreaming && entry.codexAgentStarted) {
+        entry.codexAgentStarted = false;
+        entry.activeTools.clear();
+        entry.activeTodos.clear();
+        broadcast({ type: "agent_end" });
+      }
+      if (backendDown) {
+        codexRemoteStatusCache = { at: Date.now(), status: { status: "errored" } };
+        broadcastSnapshot(entry);
+      }
+      broadcastTo(entry, { type: "error", message: event.message });
+      break;
+    }
+  }
+}
+
 function parseSlashCommand(text: string): { name: string; args: string } | null {
   if (!text.startsWith("/")) return null;
   const firstSpace = text.search(/\s/);
@@ -754,11 +1247,100 @@ function parseSlashCommand(text: string): { name: string; args: string } | null 
   return { name, args: firstSpace === -1 ? "" : text.slice(firstSpace).trim() };
 }
 
+async function handleCodexBuiltinCommand(
+  parsed: { name: string; args: string },
+  entry: SessionEntry,
+  ws: WebSocket,
+): Promise<boolean> {
+  const codex = entry.codex;
+  const session = entry.runtime.session;
+  switch (parsed.name) {
+    case "settings":
+      sendTo(ws, { type: "client_action", action: { action: "open_settings" } });
+      return true;
+    case "model": {
+      if (!parsed.args) {
+        sendTo(ws, { type: "client_action", action: { action: "open_model" } });
+        return true;
+      }
+      const slash = parsed.args.indexOf("/");
+      const model = slash >= 0 ? parsed.args.slice(slash + 1).trim() : parsed.args.trim();
+      if (!model || (slash >= 0 && parsed.args.slice(0, slash).trim() !== "codex")) {
+        sendTo(ws, { type: "error", message: "Use /model codex/<model>." });
+        return true;
+      }
+      codex?.setModel(model);
+      appendCodexState(entry, codexStateForEntry(entry));
+      broadcastSnapshot(entry);
+      sendTo(ws, { type: "command_result", message: `Codex model set to ${model}.` });
+      return true;
+    }
+    case "new":
+      sendTo(ws, { type: "client_action", action: { action: "new_session" } });
+      return true;
+    case "resume":
+      sendTo(ws, { type: "client_action", action: { action: "open_sessions" } });
+      return true;
+    case "fork":
+      sendTo(ws, { type: "client_action", action: { action: "open_fork" } });
+      return true;
+    case "copy": {
+      const text = codex?.lastAssistantText || [...serializeMessages(entryMessages(entry))]
+        .reverse()
+        .find((message) => message.role === "assistant")
+        ?.content.filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("\n");
+      if (!text) {
+        sendTo(ws, { type: "error", message: "There is no assistant message to copy." });
+        return true;
+      }
+      sendTo(ws, { type: "client_action", action: { action: "copy_text", text } });
+      return true;
+    }
+    case "name":
+      if (!parsed.args) {
+        sendTo(ws, { type: "error", message: "Use /name <name>." });
+        return true;
+      }
+      if (!entry.published && !codex?.currentThreadId) {
+        // Keep a draft name in memory until the first real prompt creates the
+        // authoritative native thread. Writing it through Pi's SessionManager
+        // here would materialize a shadow JSONL session.
+        entry.codexDraftName = parsed.args;
+      } else if (codex?.currentThreadId) {
+        await codexAppServer.renameThread(codex.currentThreadId, parsed.args);
+        codexThreadsCache = null;
+      }
+      if (entry.published && !entry.codexNative) session.setSessionName(parsed.args);
+      broadcastSnapshot(entry);
+      sendTo(ws, { type: "command_result", message: "Session name updated." });
+      return true;
+    case "session": {
+      const messages = entryMessages(entry) as Array<{ role?: unknown; content?: unknown }>;
+      const userMessages = messages.filter((message) => message.role === "user").length;
+      const assistantMessages = messages.filter((message) => message.role === "assistant").length;
+      const toolCalls = messages.filter((message) =>
+        Array.isArray(message.content) && message.content.some((block) => isRecord(block) && block.type === "toolCall"),
+      ).length;
+      sendTo(ws, {
+        type: "command_result",
+        message: `Codex session: ${userMessages} user messages, ${assistantMessages} assistant messages, ${toolCalls} tool calls.`,
+      });
+      return true;
+    }
+    default:
+      sendTo(ws, { type: "error", message: `/${parsed.name} is not available for Codex sessions.` });
+      return true;
+  }
+}
+
 async function handleBuiltinCommand(
   parsed: { name: string; args: string },
   entry: SessionEntry,
   ws: WebSocket,
 ): Promise<boolean> {
+  if (entry.agent === "codex") return handleCodexBuiltinCommand(parsed, entry, ws);
   const session = entry.runtime.session;
   switch (parsed.name) {
     case "settings":
@@ -923,6 +1505,13 @@ function rememberReceivedPrompt(entry: SessionEntry, requestId: string): boolean
 }
 
 async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
+  const pendingFork = codexForksInFlight.get(ws);
+  if (pendingFork && cmd.type !== "fork") {
+    // The message listener invokes handlers concurrently. Commands that arrive
+    // after a fork click must resolve their entry after the binding changes,
+    // otherwise a fast prompt can accidentally continue the source thread.
+    await pendingFork.catch(() => {});
+  }
   const entry = wsEntry.get(ws);
   if (!entry) return;
   entry.lastActive = Date.now();
@@ -946,13 +1535,54 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
         sendTo(ws, { type: "error", message: "Prompt text or an image is required.", requestId: cmd.requestId });
         return;
       }
+      const slashCommand = parseSlashCommand(text);
+      // Codex slash commands are Web-local control operations. Handle them
+      // before connecting a blank draft so opening settings, choosing a model,
+      // naming the future task, etc. cannot create an empty native thread.
+      if (slashCommand && entry.agent === "codex" && (await handleBuiltinCommand(slashCommand, entry, ws))) {
+        return;
+      }
       if (cmd.requestId && !rememberReceivedPrompt(entry, cmd.requestId)) {
         sendTo(ws, { type: "prompt_received", requestId: cmd.requestId });
         return;
       }
-      // Publish the session to the URL at first input → client switches to /s/:id
-      if (!entry.published) publishEntry(entry, ws);
-      const slashCommand = parseSlashCommand(text);
+      // Codex drafts become native thread URLs before they are published. This
+      // avoids a shadow Pi session that can turn into a ghost after first-turn
+      // failure and makes Codex the authoritative identity/history source.
+      if (!entry.published && entry.agent === "codex") {
+        await Promise.all([
+          entry.codex!.connect(),
+          codexModels().catch(() => []),
+          codexRemoteStatus().catch(() => undefined),
+        ]);
+        const threadId = entry.codex?.currentThreadId;
+        if (!threadId) throw new Error("Codex thread was not initialized");
+        entries.delete(entry.id);
+        entry.id = nativeCodexSessionId(threadId);
+        entry.codexNative = true;
+        entry.codexState = { ...codexStateForEntry(entry), threadId };
+        entries.set(entry.id, entry);
+        codexThreadsCache = null;
+        publishEntry(entry, ws);
+        const draftName = entry.codexDraftName;
+        entry.codexDraftName = undefined;
+        if (draftName) {
+          // Naming is cosmetic and must not hold the first real turn behind a
+          // slow shared-daemon round trip.
+          void codexAppServer.renameThread(threadId, draftName)
+            .then(() => {
+              codexThreadsCache = null;
+            })
+            .catch((error) => {
+              sendTo(ws, {
+                type: "error",
+                message: `Unable to apply the draft name: ${error instanceof Error ? error.message : String(error)}`,
+              });
+            });
+        }
+      } else if (!entry.published) {
+        publishEntry(entry, ws);
+      }
       if (slashCommand && (await handleBuiltinCommand(slashCommand, entry, ws))) {
         return;
       }
@@ -962,10 +1592,13 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
       // call, without making the client wait for agent lifecycle events.
       let promptRun: Promise<unknown>;
       try {
-        promptRun = session.prompt(text, {
-          images: images.length > 0 ? images : undefined,
-          ...(session.isStreaming ? { streamingBehavior: "steer" as const } : {}),
-        });
+        promptRun =
+          entry.agent === "codex"
+            ? entry.codex!.prompt(text, images, cmd.requestId)
+            : session.prompt(text, {
+                images: images.length > 0 ? images : undefined,
+                ...(session.isStreaming ? { streamingBehavior: "steer" as const } : {}),
+              });
       } catch (err) {
         if (cmd.requestId) entry.receivedPromptIds.delete(cmd.requestId);
         sendTo(ws, {
@@ -995,17 +1628,28 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
     }
     case "abort":
       try {
-        await session.abort();
+        if (entry.agent === "codex") await entry.codex?.abort();
+        else await session.abort();
       } finally {
         // Always refresh the UI after an abort attempt. Only acknowledge the
         // recovery barrier once the session is no longer streaming; if abort
         // failed while work is still active, the client must keep blocking a
         // retry until the normal agent_end/snapshot sequence settles it.
         broadcastSnapshot(entry);
-        if (!session.isStreaming) sendTo(ws, { type: "abort_complete" });
+        if (!entryIsStreaming(entry)) sendTo(ws, { type: "abort_complete" });
       }
       break;
     case "set_model": {
+      if (entry.agent === "codex") {
+        if (cmd.provider !== "codex") {
+          sendTo(ws, { type: "error", message: "Codex sessions only accept codex/<model>." });
+          return;
+        }
+        entry.codex?.setModel(cmd.id);
+        appendCodexState(entry, codexStateForEntry(entry));
+        broadcastSnapshot(entry);
+        return;
+      }
       const model = modelRuntime.getModel(cmd.provider, cmd.id);
       if (!model) {
         sendTo(ws, { type: "error", message: `Model not found: ${cmd.provider}/${cmd.id}` });
@@ -1016,10 +1660,68 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
       break;
     }
     case "set_thinking_level":
-      session.setThinkingLevel(cmd.level);
+      if (entry.agent === "codex") {
+        entry.codex?.setEffort(codexEffortForLevel(cmd.level));
+        appendCodexState(entry, codexStateForEntry(entry));
+      } else {
+        if (cmd.level === "ultra") {
+          sendTo(ws, { type: "error", message: "Ultra reasoning is only available for Codex models that advertise it." });
+          return;
+        }
+        session.setThinkingLevel(cmd.level);
+      }
       broadcastSnapshot(entry);
       break;
     case "fork": {
+      if (entry.agent === "codex") {
+        const codex = entry.codex;
+        const threadId = codex?.currentThreadId;
+        if (!codex || !threadId || entry.id !== nativeCodexSessionId(threadId)) {
+          sendTo(ws, { type: "error", message: "Send a message before forking this Codex session." });
+          return;
+        }
+        if (cmd.entryId !== entry.id) {
+          sendTo(ws, { type: "error", message: "The Codex session changed before the fork started." });
+          return;
+        }
+        if (entryIsStreaming(entry) || codex.pendingInteractions.length > 0) {
+          sendTo(ws, { type: "error", message: "Stop the active Codex task and resolve pending requests before forking." });
+          return;
+        }
+        if (codexForksInFlight.has(ws)) {
+          sendTo(ws, { type: "error", message: "A Codex fork is already in progress." });
+          return;
+        }
+        const forkOperation = forkCodexConnection({
+          client: ws,
+          source: entry,
+          bindings: wsEntry,
+          forkThread: async () => {
+            const forkedThreadId = await codex.fork();
+            codexThreadsCache = null;
+            return forkedThreadId;
+          },
+          acquireEntry: (sessionId) => acquireEntry(sessionId),
+          canMoveClient: () => ws.readyState === ws.OPEN && wsEntry.get(ws) === entry,
+          sendSessionBound: (_target, sessionId) => {
+            sendTo(ws, { type: "session_bound", sessionId });
+          },
+          sendFullSnapshot: (target) => sendFullSnapshot(target, ws),
+          sendCommandCatalog: (target) => sendCommandCatalog(target, ws),
+          sendForked: () => sendTo(ws, { type: "forked" }),
+        });
+        codexForksInFlight.set(ws, forkOperation);
+        try {
+          await forkOperation;
+        } finally {
+          if (codexForksInFlight.get(ws) === forkOperation) codexForksInFlight.delete(ws);
+        }
+        return;
+      }
+      if (!cmd.entryId) {
+        sendTo(ws, { type: "error", message: "Choose a message to fork from." });
+        return;
+      }
       const result = await runtime.fork(cmd.entryId);
       if (result.cancelled) return;
       // AgentSessionRuntime's rebind callback has already refreshed the entry,
@@ -1029,6 +1731,11 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
     }
     case "get_commands":
       sendCommandCatalog(entry, ws);
+      break;
+    case "codex_interaction_response":
+      if (entry.agent !== "codex" || !entry.codex?.respondToInteraction(cmd.response)) {
+        sendTo(ws, { type: "error", message: "This Codex request is no longer pending." });
+      }
       break;
     case "extension_ui_response": {
       const pending = entry.pendingExtensionUI.get(cmd.response.id);
@@ -1199,10 +1906,65 @@ function installEntryRuntimeRebind(entry: SessionEntry) {
  * the file directly instead of using an SDK delete API.
  */
 async function deleteSession(id: string): Promise<{ ok: boolean; error?: string }> {
+  const codexThreadId = nativeCodexThreadId(id);
+  if (codexThreadId) {
+    try {
+      await codexAppServer.deleteThread(codexThreadId);
+      codexThreadsCache = null;
+      const entry = entries.get(id);
+      if (entry) {
+        for (const ws of entry.clients) ws.close(1000, "session deleted");
+        entries.delete(id);
+        await entry.codex?.dispose();
+        await entry.runtime.dispose();
+      }
+      // Remove obsolete Pi bridge records for the same native identity. They
+      // are hidden while the native thread exists and would otherwise reappear
+      // as zombie sessions immediately after a native delete.
+      for (const legacy of await sessionSummaryIndex.list()) {
+        if (legacy.codexThreadId !== codexThreadId) continue;
+        try {
+          unlinkSync(legacy.path);
+          sessionSummaryIndex.invalidate(legacy.path);
+        } catch {
+          // Native deletion already succeeded; a stale migration record must
+          // not turn the whole operation into a false failure.
+        }
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: "failed to delete Codex thread: " + (error instanceof Error ? error.message : String(error)) };
+    }
+  }
   const path = await resolveSessionPath(id);
   if (!path) return { ok: false, error: "session not found" };
 
   const entry = entries.get(id);
+  let bridgedCodexThreadId = entry?.codex?.currentThreadId;
+  if (!bridgedCodexThreadId) {
+    try {
+      for (const stored of SessionManager.open(path).getEntries()) {
+        if (
+          stored.type === "custom"
+          && stored.customType === CODEX_METADATA_TYPE
+          && isRecord(stored.data)
+          && typeof stored.data.threadId === "string"
+        ) {
+          bridgedCodexThreadId = stored.data.threadId;
+        }
+      }
+    } catch {
+      /* leave this as a Pi-only deletion when legacy metadata is unreadable */
+    }
+  }
+  if (bridgedCodexThreadId) {
+    try {
+      await codexAppServer.deleteThread(bridgedCodexThreadId);
+      codexThreadsCache = null;
+    } catch (error) {
+      return { ok: false, error: "failed to delete Codex thread: " + (error instanceof Error ? error.message : String(error)) };
+    }
+  }
   if (entry) {
     entry.unsubscribe?.();
     for (const ws of [...entry.clients]) {
@@ -1215,6 +1977,7 @@ async function deleteSession(id: string): Promise<{ ok: boolean; error?: string 
     entry.clients.clear();
     entries.delete(id);
     try {
+      await entry.codex?.dispose();
       await entry.runtime.dispose();
     } catch {
       /* ignore */
@@ -1235,11 +1998,29 @@ async function renameSession(
   id: string,
   name: string,
 ): Promise<{ ok: boolean; error?: string; name?: string }> {
+  const codexThreadId = nativeCodexThreadId(id);
+  if (codexThreadId) {
+    try {
+      await codexAppServer.renameThread(codexThreadId, name);
+      codexThreadsCache = null;
+      return { ok: true, name };
+    } catch (error) {
+      return { ok: false, error: "failed to rename Codex thread: " + (error instanceof Error ? error.message : String(error)) };
+    }
+  }
   const path = await resolveSessionPath(id);
   if (!path) return { ok: false, error: "session not found" };
 
   const entry = entries.get(id);
   if (entry) {
+    if (entry.agent === "codex" && entry.codex?.currentThreadId) {
+      try {
+        await codexAppServer.renameThread(entry.codex.currentThreadId, name);
+        codexThreadsCache = null;
+      } catch (error) {
+        return { ok: false, error: "failed to rename Codex thread: " + (error instanceof Error ? error.message : String(error)) };
+      }
+    }
     // Loaded runtime: setSessionName → appendSessionInfo (persisted to the file
     // immediately) + emits an event
     entry.runtime.session.setSessionName(name);
@@ -1631,18 +2412,59 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/api/codex/status") {
+      const remote = await codexRemoteStatus();
+      res.writeHead(remote ? 200 : 503, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      res.end(JSON.stringify({
+        transport: codexAppServer.activeTransport,
+        remoteControl: remote ?? null,
+      }));
+      return;
+    }
+
     if (url.pathname === "/api/sessions") {
-      const sessions = await sessionSummaryIndex.list();
+      const [sessions, nativeThreads] = await Promise.all([
+        sessionSummaryIndex.list(),
+        codexThreads().catch(() => []),
+      ]);
+      void codexRemoteStatus();
       // Which loaded runtimes are currently streaming (for the sidebar running dot)
       const streamingIds = new Set<string>();
       for (const entry of entries.values()) {
-        if (entry.runtime.session.isStreaming) streamingIds.add(entry.id);
+        if (entryIsStreaming(entry)) streamingIds.add(entry.id);
       }
-      const list: UISessionInfo[] = sessions.slice(0, 300).map((session) => ({
+      const nativeThreadIds = new Set(nativeThreads.map((thread) => thread.id));
+      const piList: UISessionInfo[] = sessions
+        .filter((session) => !session.codexThreadId || !nativeThreadIds.has(session.codexThreadId))
+        .slice(0, 300)
+        .map((session) => ({
         ...session,
         project: projectOf({ cwd: session.project, path: session.path }),
         isStreaming: streamingIds.has(session.id),
+        agent: entries.get(session.id)?.agent ?? session.agent ?? "pi",
       }));
+      const codexList: UISessionInfo[] = nativeThreads
+        .map((thread) => {
+          const id = nativeCodexSessionId(thread.id);
+          const status = isRecord(thread.status) ? thread.status : undefined;
+          return {
+            id,
+            path: thread.path ?? id,
+            project: projectOf({ cwd: thread.cwd, path: thread.path ?? id }),
+            ...(thread.name ? { name: thread.name } : {}),
+            firstMessage: thread.preview,
+            modified: new Date(Math.max(thread.updatedAt, thread.createdAt) * 1000).toISOString(),
+            messageCount: 0,
+            isStreaming: streamingIds.has(id) || status?.type === "active",
+            agent: "codex" as const,
+          };
+        });
+      const list = [...piList, ...codexList]
+        .sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified))
+        .slice(0, 300);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(list));
       return;
@@ -1651,6 +2473,28 @@ const httpServer = createServer(async (req, res) => {
     const historyMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/history$/);
     if (req.method === "GET" && historyMatch) {
       const id = decodeURIComponent(historyMatch[1]!);
+      if (nativeCodexThreadId(id)) {
+        try {
+          const loaded = await acquireEntry(id);
+          const cursor = url.searchParams.get("cursor");
+          if (!cursor) {
+            res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+            res.end(JSON.stringify({
+              messages: serializeMessages(loaded.codexMessages),
+              cursor: loaded.historyCursor,
+              hasMore: loaded.historyHasMore,
+            }));
+            return;
+          }
+          const page = await loaded.codex!.loadHistory(cursor);
+          res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ ...page, messages: serializeMessages(page.messages) }));
+        } catch {
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "Codex history read failed" }));
+        }
+        return;
+      }
       const path = await resolveSessionPath(id);
       if (!path) {
         res.writeHead(404, { "content-type": "application/json" });
@@ -1682,6 +2526,30 @@ const httpServer = createServer(async (req, res) => {
     const anchorsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/anchors$/);
     if (req.method === "GET" && anchorsMatch) {
       const id = decodeURIComponent(anchorsMatch[1]!);
+      const codexThreadId = nativeCodexThreadId(id);
+      if (codexThreadId) {
+        try {
+          const anchors = await createCodexUserMessageAnchors(async (cursor) => {
+            const response = await codexAppServer.request("thread/items/list", {
+              threadId: codexThreadId,
+              cursor,
+              limit: 100,
+              sortDirection: "asc",
+            });
+            const record = isRecord(response) ? response : {};
+            return {
+              data: Array.isArray(record.data) ? record.data : [],
+              nextCursor: typeof record.nextCursor === "string" ? record.nextCursor : null,
+            };
+          });
+          res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ anchors }));
+        } catch {
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "Codex message anchor read failed" }));
+        }
+        return;
+      }
       const path = await resolveSessionPath(id);
       if (!path) {
         res.writeHead(404, { "content-type": "application/json" });
@@ -1750,18 +2618,52 @@ const httpServer = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/models") {
+      const requestedModelAgent = parseAgentKind(url.searchParams.get("agent"));
+      if (requestedModelAgent === "codex") {
+        try {
+          const models = await codexModels();
+          const available = models.map((model) => ({
+            provider: "codex",
+            id: model.model,
+            name: model.displayName,
+            reasoning: true,
+            thinkingLevels: codexThinkingLevels(model),
+            ...(model.defaultReasoningEffort
+              ? { defaultThinkingLevel: codexThinkingLevel(model.defaultReasoningEffort) }
+              : {}),
+          }));
+          res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify(available));
+        } catch (error) {
+          res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        }
+        return;
+      }
       const models = await modelRuntime.getAvailable();
+      const codexEnabled =
+        DEFAULT_AGENT_KIND === "codex" || [...entries.values()].some((entry) => entry.agent === "codex");
+      const available = models.map((m) => ({
+        provider: m.provider,
+        id: m.id,
+        name: (m as { name?: string }).name,
+        reasoning: (m as { reasoning?: boolean }).reasoning,
+      }));
+      if (codexEnabled && requestedModelAgent !== "pi") {
+        const nativeModels = await codexModels().catch(() => []);
+        available.unshift(...nativeModels.map((model) => ({
+          provider: "codex",
+          id: model.model,
+          name: model.displayName,
+          reasoning: true,
+          thinkingLevels: codexThinkingLevels(model),
+          ...(model.defaultReasoningEffort
+            ? { defaultThinkingLevel: codexThinkingLevel(model.defaultReasoningEffort) }
+            : {}),
+        })));
+      }
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify(
-          models.map((m) => ({
-            provider: m.provider,
-            id: m.id,
-            name: (m as { name?: string }).name,
-            reasoning: (m as { reasoning?: boolean }).reasoning,
-          })),
-        ),
-      );
+      res.end(JSON.stringify(available));
       return;
     }
 
@@ -1967,7 +2869,7 @@ const httpServer = createServer(async (req, res) => {
                 activeSessions: [...entries.values()].map((e) => ({
                   id: e.id,
                   clients: e.clients.size,
-                  isStreaming: e.runtime.session.isStreaming,
+                  isStreaming: entryIsStreaming(e),
                 })),
               },
         ),
@@ -2047,6 +2949,25 @@ const httpServer = createServer(async (req, res) => {
 
 const wss = new WebSocketServer({ noServer: true });
 
+// Heartbeat: browsers auto-pong server pings at the WebSocket layer, so a
+// socket that misses pongs is provably dead at the protocol level. Without it,
+// a half-open connection (laptop sleep, WiFi roam, VPN drop) can leave both
+// ends reporting "connected" while no frames flow, and the client's DOM
+// onclose/auto-reconnect never fires because the TCP socket stays up.
+const HEARTBEAT_INTERVAL_MS = 30_000;
+const wssHeartbeat = setInterval(() => {
+  for (const client of wss.clients) {
+    const alive = (client as WebSocket & { isAlive?: boolean }).isAlive;
+    if (!alive) {
+      client.terminate();
+      continue;
+    }
+    (client as WebSocket & { isAlive?: boolean }).isAlive = false;
+    client.ping();
+  }
+}, HEARTBEAT_INTERVAL_MS);
+wss.on("close", () => clearInterval(wssHeartbeat));
+
 // WS handshake validates the session token (?token=)
 httpServer.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -2064,9 +2985,14 @@ httpServer.on("upgrade", (req, socket, head) => {
 });
 
 wss.on("connection", (ws, req) => {
+  (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
+  ws.on("pong", () => {
+    (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
+  });
   const query = new URL(req.url ?? "/ws", "http://localhost").searchParams;
   const requested = query.get("session");
   const cwd = query.get("cwd") ?? undefined;
+  const requestedAgent = parseAgentKind(query.get("agent"));
   const sinceValue = query.get("since");
   const parsedSince = sinceValue === null ? null : Number(sinceValue);
   const since =
@@ -2102,7 +3028,7 @@ wss.on("connection", (ws, req) => {
     // A cold runtime switch synchronously parses the whole JSONL. Send a cheap
     // tail page first, then yield once so the browser can paint while the SDK
     // reconstructs the full agent context in the background.
-    if (requested && !entries.has(requested)) {
+    if (requested && !nativeCodexThreadId(requested) && !entries.has(requested)) {
       const path = await resolveSessionPath(requested);
       if (path && ws.readyState === ws.OPEN) {
         try {
@@ -2132,43 +3058,80 @@ wss.on("connection", (ws, req) => {
         }
       }
     }
-    return acquireEntry(requested, cwd);
+    const safeCwd = requested ? undefined : await authorizedSessionCwd(cwd);
+    return acquireEntry(requested, safeCwd, requestedAgent);
   };
 
-  prepareEntry()
-    .then((entry) => {
-      if (ws.readyState !== ws.OPEN) return;
-      entry.clients.add(ws);
-      entry.lastActive = Date.now();
-      wsEntry.set(ws, entry);
-      // Only existing (/s/:id) or already-published sessions bind immediately.
-      // A `/` blank draft gets session_bound → URL rewrite on the first prompt.
-      if (!preloaded && (entry.published || requested)) {
-        publishEntry(entry, ws);
-      }
-      if (!preloaded) {
-        sendTo(ws, { type: "hello", version: PACKAGE_VERSION, updateNotes: RELEASE_NOTES });
-      }
-      if (preloaded || since === null) sendFullSnapshot(entry, ws);
-      else sendEventsSince(entry, ws, since);
-      sendCommandCatalog(entry, ws);
-      ready = true;
-      for (const cmd of queue.splice(0)) {
-        handleCommand(cmd, ws).catch((err) => {
-          sendTo(ws, {
-            type: "error",
-            message: String(err instanceof Error ? err.message : err),
-            requestId: cmd.type === "prompt" ? cmd.requestId : undefined,
-          });
+  // Binding a session can fail transiently — most often a Codex thread whose
+  // active turn is owned by another client ("already has an active writer").
+  // Closing the socket on every failure makes the browser auto-reconnect in a
+  // tight loop: the UI flickers and the same error repeats indefinitely.
+  // Instead keep the socket open, surface the error once, and retry with a
+  // capped backoff; when the conflict clears the bind completes and the
+  // session materializes without a reconnect.
+  let bindAttempts = 0;
+  let bindErrorShown = false;
+  let bindTimer: ReturnType<typeof setTimeout> | null = null;
+  const bindSession = async (): Promise<void> => {
+    let entry: SessionEntry;
+    try {
+      entry = await prepareEntry();
+    } catch (error) {
+      if (ws.readyState === ws.OPEN && !bindErrorShown) {
+        bindErrorShown = true;
+        sendTo(ws, {
+          type: "error",
+          message:
+            String(error instanceof Error ? error.message : error)
+            + " — retrying automatically",
         });
       }
-    })
-    .catch((err) => {
-      sendTo(ws, { type: "error", message: String(err instanceof Error ? err.message : err) });
-      ws.close();
-    });
+      if (ws.readyState === ws.OPEN) {
+        const delay = Math.min(2_000 * Math.pow(1.6, bindAttempts++), 10_000);
+        bindTimer = setTimeout(() => {
+          bindTimer = null;
+          void bindSession();
+        }, delay);
+      }
+      return;
+    }
+    if (ws.readyState !== ws.OPEN) return;
+    if (bindTimer !== null) {
+      clearTimeout(bindTimer);
+      bindTimer = null;
+    }
+    entry.clients.add(ws);
+    entry.lastActive = Date.now();
+    wsEntry.set(ws, entry);
+    // Only existing (/s/:id) or already-published sessions bind immediately.
+    // A `/` blank draft gets session_bound → URL rewrite on the first prompt.
+    if (!preloaded && (entry.published || requested)) {
+      publishEntry(entry, ws);
+    }
+    if (!preloaded) {
+      sendTo(ws, { type: "hello", version: PACKAGE_VERSION, updateNotes: RELEASE_NOTES });
+    }
+    if (preloaded || since === null) sendFullSnapshot(entry, ws);
+    else sendEventsSince(entry, ws, since);
+    sendCommandCatalog(entry, ws);
+    ready = true;
+    for (const cmd of queue.splice(0)) {
+      handleCommand(cmd, ws).catch((err) => {
+        sendTo(ws, {
+          type: "error",
+          message: String(err instanceof Error ? err.message : err),
+          requestId: cmd.type === "prompt" ? cmd.requestId : undefined,
+        });
+      });
+    }
+  };
+  void bindSession();
 
   ws.on("close", () => {
+    if (bindTimer !== null) {
+      clearTimeout(bindTimer);
+      bindTimer = null;
+    }
     const entry = wsEntry.get(ws);
     if (entry) {
       if (entry.extensionUIClient === ws) {
@@ -2239,9 +3202,18 @@ function shutDown(): void {
   auth.flushSessions();
   for (const client of wss.clients) client.terminate();
   wss.close();
-  httpServer.close(() => process.exit(0));
-  httpServer.closeAllConnections();
-  setTimeout(() => process.exit(0), 1_000).unref();
+  void Promise.allSettled(
+    [...entries.values()].map(async (entry) => {
+      await entry.codex?.dispose();
+      await entry.runtime.dispose();
+    }),
+  )
+    .then(() => codexAppServer.dispose())
+    .finally(() => {
+      httpServer.close(() => process.exit(0));
+      httpServer.closeAllConnections();
+    });
+  setTimeout(() => process.exit(0), 2_000).unref();
 }
 
 process.once("SIGTERM", shutDown);

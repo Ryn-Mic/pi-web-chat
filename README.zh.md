@@ -15,7 +15,7 @@ npm i -g @earendil-works/pi-coding-agent
 # 2) 安装 pi-web-chat
 pi install npm:pi-web-chat
 # pi install /path/to/pi-web-chat          # 本地路径
-# pi install git:github.com/preinpost/pi-web-chat@v0.1.1
+# pi install git:github.com/Ryn-Mic/pi-web-chat@v0.1.106
 
 # 3) 仅启动 Web UI 守护进程（不打开 TUI，立即返回 shell）
 pi --web
@@ -23,7 +23,7 @@ pi --web
 
 pi --web status
 pi --web stop
-pi --web restart             # 停止 + 启动（保留原有端口/host）
+pi --web 3141 restart        # 停止 + 启动正式服务（必须显式端口）
 pi --web 3200                # 自定义端口
 pi --web --lan               # 绑定 0.0.0.0（局域网）
 pi --web --host 0.0.0.0      # 同上，显式指定绑定地址
@@ -32,7 +32,7 @@ pi --web --token my-secret   # 指定访问令牌（默认自动生成）
 pi --web rftoken             # 轮换访问令牌（立即生效）
 ```
 
-`pi --web` 只启动 Web 服务器守护进程然后退出，不会打开 pi TUI。
+`pi --web` 只启动一个同时服务 **pi 与 Codex** 的 Web 守护进程然后退出。网页设置可为每个新会话独立选择后端，pi 与 Codex 标签可同时保持连接和控制；命令不会打开 pi TUI。
 如果服务器已在运行，会再次打印访问地址。
 
 > **认证（令牌 + 2FA）：** 服务器对每个 API/WebSocket 调用强制执行访问控制。
@@ -123,6 +123,16 @@ pi -e .
 - `PI_WEB_TOKEN` — 访问令牌（默认自动生成到 `~/.pi/web-chat/token`）
 - `PI_WEB_2FA` — 设为 `off` 关闭 TOTP 二次验证（默认开启）
 - `PI_WEB_CWD` — 代理工作/会话目录（默认 `~/.pi/web-chat`，不存在则自动创建）
+- `PI_WEB_AGENT` — 新会话的默认后端，可设为 `pi` 或 `codex`（默认 `pi`）；也可在网页设置中按浏览器覆盖
+- `PI_WEB_CODEX_BIN` — Codex 可执行文件路径（默认 `codex`）
+- `PI_WEB_CODEX_MODEL` — 可选的默认 Codex 模型 id；未指定时网页模型菜单使用原生 `model/list` 目录
+- `PI_WEB_CODEX_TRANSPORT` — `auto`（默认）、`proxy` 或 `standalone`；`auto` 优先通过 `app-server proxy` 接入 Codex 共享 daemon，不可用时安全回退
+- `PI_WEB_CODEX_SANDBOX` — `workspace-write`（默认）、`read-only` 或 `danger-full-access`
+- `PI_WEB_CODEX_APPROVAL` — `on-request`（默认）、`untrusted` 或 `never`；审批与输入请求会进入已认证网页，绝不会被静默同意
+
+创建 Codex 会话前，需要单独安装并登录 Codex（`codex login`）。在网页「设置」中可以选择新会话使用 **pi** 或 **Codex**；已有会话保持原后端。Codex 会话现在直接使用原生 thread id 与分页 turn 历史，读取真实模型/推理档位，并在 WebSocket 重连后恢复运行中工具、上下文用量、审批、用户提问、MCP 表单、steering 与中止状态。
+
+若要与 Codex Remote Control/Desktop/CLI 共同控制同一批运行中线程，请先启动托管 daemon（`codex remote-control start`），再启动 Web Chat。默认 `auto` 会通过 `codex app-server proxy` 接入；如果 daemon 不存在，界面会明确显示 `standalone`，仍可使用原生持久化 Codex 线程，但无法共享内存中的运行中 turn。要求必须接入共享 daemon 时可设 `PI_WEB_CODEX_TRANSPORT=proxy`。
 
 LLM API 认证与 pi CLI 相同，使用 `~/.pi/agent/auth.json`。请先配置好 pi（登录 / API 密钥）。
 
@@ -153,13 +163,14 @@ dist/public/              构建后的前端（随包发布）
 - 实时流式输出（文本 / thinking 增量）
 - **流式 Markdown 渲染**（Streamdown + Shiki 语法高亮）
 - 工具调用展示（bash、edit、read 等），结果可展开；edit 以 git diff 样式呈现
-- 会话列表 / 切换 / 新建（可与 pi CLI 会话共享）
+- 会话列表 / 切换 / 新建（可共享 pi 会话与 Codex daemon 原生线程）
 - **每会话独立 URL**（`/s/:sessionId`）：每个浏览器标签/设备驱动自己的会话；打开同一 URL 实时同步。`/` 开启新会话
 - **会话 fork**：从设置菜单按用户消息分叉
 - 模型切换 + **thinking 级别**
 - **自定义模型管理**：在设置菜单中直接编辑 `~/.pi/agent/models.json` 添加/编辑自定义提供商与模型（Ollama、LM Studio、vLLM、代理等）
 - **图片附件**（文件选择 / 剪贴板粘贴）
-- **设置菜单：** 主题（system/light/dark）、语言、模型管理、会话 fork、扩展列表、输入框透明度
-- 流式期间发送 → 自动 steering（转向）
+- **设置菜单：** 新会话选择 pi/Codex、主题（system/light/dark）、语言、模型管理、会话 fork、扩展列表、输入框透明度
+- 流式期间发送 → 自动 steering（Codex 同时保留独立停止按钮）
+- 可在网页远程处理 Codex 命令/文件/权限审批、用户问题与 MCP 表单
 - 中止（Abort）
 - 移动端：安全区适配、`dvh` 布局、会话抽屉

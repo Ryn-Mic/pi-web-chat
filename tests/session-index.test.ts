@@ -56,6 +56,25 @@ test("indexes session summaries and reuses unchanged cached objects", async () =
   }
 });
 
+test("identifies Codex sessions from persisted adapter metadata", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-web-index-"));
+  const file = sessionFile(root, "codex-a");
+  writeFileSync(
+    file,
+    line(header("codex-a")) +
+      line({ type: "custom", customType: "pi-web-chat.codex", data: { threadId: "thread-1" } }) +
+      line(message("u1", null, "user", "hello Codex", "2025-01-01T00:01:00.000Z")),
+  );
+  try {
+    const index = new SessionSummaryIndex(root);
+    const sessions = await index.list();
+    assert.equal(sessions[0]?.agent, "codex");
+    assert.equal(sessions[0]?.codexThreadId, "thread-1");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("reads only an append into the existing summary state", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-web-index-"));
   const file = sessionFile(root, "id-a");

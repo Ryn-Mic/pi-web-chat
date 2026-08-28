@@ -1,17 +1,17 @@
 {
   "name": "pi-web-chat",
-  "version": "0.1.91",
+  "version": "0.1.106",
   "description": "Web UI for the pi coding agent (OpenWebUI-style, mobile-friendly)",
   "type": "module",
   "license": "MIT",
   "author": "minsoo.lee <preinpost@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/preinpost/pi-web-chat.git"
+    "url": "git+https://github.com/Ryn-Mic/pi-web-chat.git"
   },
-  "homepage": "https://github.com/preinpost/pi-web-chat#readme",
+  "homepage": "https://github.com/Ryn-Mic/pi-web-chat#readme",
   "bugs": {
-    "url": "https://github.com/preinpost/pi-web-chat/issues"
+    "url": "https://github.com/Ryn-Mic/pi-web-chat/issues"
   },
   "keywords": [
     "pi-package",
@@ -56,6 +56,7 @@
     "@file-viewer/core": "^2.2.8",
     "@file-viewer/react-full": "^2.2.8",
     "ignore": "^7.0.6",
+    "morphicons": "^1.7.0",
     "qrcode": "^1.5.4",
     "shiki": "^3.23.0",
     "streamdown": "^2.5.0",

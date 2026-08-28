@@ -1,10 +1,27 @@
 import { Dialog } from "@base-ui-components/react/dialog";
 import { useEffect, useState, type ReactNode } from "react";
+import type { UIAgentKind } from "../../shared/protocol";
 import { logout } from "../lib/auth";
 import {
   setBrowserNotificationsEnabled,
   useBrowserNotifications,
 } from "../lib/browserNotifications";
+import { setAgentPreference, useAgentPreference } from "../lib/agent";
+import { AgentIcon } from "./AgentIcon";
+import { AgentEyes } from "./AgentEyes";
+import { SettingsTriggerIcon } from "./MorphIcons";
+import { activityEyeTone } from "../lib/activity";
+import {
+  useGrokTheme,
+  setGrokTheme,
+  usePiPersona,
+  setPiPersona,
+  useCodexPersona,
+  setCodexPersona,
+  type GrokTheme,
+  type GrokPersona,
+} from "../lib/grok-theme";
+import { chatClient, useChat } from "../lib/chat";
 import {
   chatFontSizePixels,
   setChatFontSize,
@@ -27,10 +44,21 @@ const itemClass =
 
 type SegmentOption = { value: string; label: string; display?: ReactNode };
 
-function PreferenceRow({ label, children }: { label: string; children: React.ReactNode }) {
+function PreferenceRow({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex items-center justify-between gap-3 px-3 py-1.5">
-      <span className="min-w-0 shrink text-xs font-medium text-muted">{label}</span>
+      <span className="min-w-0 shrink text-xs font-medium text-muted">
+        {label}
+        {hint && <span className="ml-1 font-normal text-[10px] text-faint">{hint}</span>}
+      </span>
       {children}
     </div>
   );
@@ -154,6 +182,8 @@ function Toggle({
 
 export function SettingsMenu({ openToken = 0 }: { openToken?: number }) {
   const t = useT();
+  const { snapshot } = useChat();
+  const agentPreference = useAgentPreference();
   const preference = useThemePreference();
   const locale = useLocale();
   const resumeEnabled = useResumeEnabled();
@@ -173,12 +203,81 @@ export function SettingsMenu({ openToken = 0 }: { openToken?: number }) {
     { value: "light", label: t("themeLight"), display: <ThemeIcon value="light" /> },
     { value: "dark", label: t("themeDark"), display: <ThemeIcon value="dark" /> },
   ];
+  const grokTheme = useGrokTheme();
+  const piPersona = usePiPersona();
+  const codexPersona = useCodexPersona();
+
+  const grokThemeOptions: SegmentOption[] = [
+    {
+      value: "classic",
+      label: t("grokbotThemeClassic"),
+      display: (
+        <span className="flex items-center gap-1">
+          <span className="size-1.5 shrink-0 rounded-full bg-sky-400" />
+          <span className="truncate">{t("grokbotThemeClassic")}</span>
+        </span>
+      ),
+    },
+    {
+      value: "cyberpunk",
+      label: t("grokbotThemeCyberpunk"),
+      display: (
+        <span className="flex items-center gap-1">
+          <span className="size-1.5 shrink-0 rounded-full bg-cyan-400" />
+          <span className="truncate">{t("grokbotThemeCyberpunk")}</span>
+        </span>
+      ),
+    },
+    {
+      value: "matrix",
+      label: t("grokbotThemeMatrix"),
+      display: (
+        <span className="flex items-center gap-1">
+          <span className="size-1.5 shrink-0 rounded-full bg-emerald-400" />
+          <span className="truncate">{t("grokbotThemeMatrix")}</span>
+        </span>
+      ),
+    },
+    {
+      value: "amber",
+      label: t("grokbotThemeAmber"),
+      display: (
+        <span className="flex items-center gap-1">
+          <span className="size-1.5 shrink-0 rounded-full bg-amber-400" />
+          <span className="truncate">{t("grokbotThemeAmber")}</span>
+        </span>
+      ),
+    },
+    {
+      value: "sakura",
+      label: t("grokbotThemeSakura"),
+      display: (
+        <span className="flex items-center gap-1">
+          <span className="size-1.5 shrink-0 rounded-full bg-pink-400" />
+          <span className="truncate">{t("grokbotThemeSakura")}</span>
+        </span>
+      ),
+    },
+  ];
+
+  const personaOptions: SegmentOption[] = [
+    { value: "playful", label: t("personaPlayful") },
+    { value: "analytic", label: t("personaAnalytic") },
+    { value: "zen", label: t("personaZen") },
+    { value: "cyber", label: t("personaCyber") },
+  ];
   const fontSizeOptions: SegmentOption[] = [
     { value: "tiny", label: t("fontSizeTiny"), display: t("fontSizeTinyShort") },
     { value: "small", label: t("fontSizeSmall"), display: t("fontSizeSmallShort") },
     { value: "default", label: t("fontSizeDefault"), display: t("fontSizeDefaultShort") },
     { value: "large", label: t("fontSizeLarge"), display: t("fontSizeLargeShort") },
   ];
+  const agentOptions: SegmentOption[] = [
+    { value: "pi", label: t("agentPi"), display: <AgentIcon agent="pi" size={15} className="text-accent" /> },
+    { value: "codex", label: t("agentCodex"), display: <AgentIcon agent="codex" size={15} className="text-amber-500" /> },
+  ];
+  const selectedAgent: UIAgentKind = agentPreference ?? snapshot?.agent ?? "pi";
+  const isCodexSession = snapshot?.agent === "codex";
 
   return (
     <>
@@ -188,19 +287,29 @@ export function SettingsMenu({ openToken = 0 }: { openToken?: number }) {
           aria-label={t("settings")}
           title={t("settings")}
         >
-          <svg viewBox="0 0 24 24" className="size-5 fill-none stroke-current stroke-2">
-            <circle cx="12" cy="12" r="3" />
-            <path
-              d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1.1 1.5 1.1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
+          <SettingsTriggerIcon open={open} size={19} />
         </Dialog.Trigger>
         <Dialog.Portal>
           <Dialog.Backdrop className="fixed inset-0 bg-black/35 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
           <Dialog.Popup className="fixed top-1/2 left-1/2 max-h-[min(88vh,42rem)] w-[min(94vw,37rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-line bg-card py-1 shadow-[0_18px_60px_rgba(0,0,0,0.16)] outline-none">
             <Dialog.Title className="sr-only">{t("settings")}</Dialog.Title>
+              <PreferenceRow
+                label={t("newSessionAgent")}
+                hint={t("agentAppliesToNewSessions")}
+              >
+                <SegmentedControl
+                  label={t("newSessionAgent")}
+                  value={selectedAgent}
+                  options={agentOptions}
+                  onChange={(value) => {
+                    if (value === "pi" || value === "codex") {
+                      const agent = value as UIAgentKind;
+                      setAgentPreference(agent);
+                      chatClient.selectAgentForDraft(agent);
+                    }
+                  }}
+                />
+              </PreferenceRow>
               <PreferenceRow label={t("theme")}>
                 <SegmentedControl
                   label={t("theme")}
@@ -213,6 +322,48 @@ export function SettingsMenu({ openToken = 0 }: { openToken?: number }) {
                   }}
                 />
               </PreferenceRow>
+              <PreferenceRow label={t("grokbotTheme")}>
+                <SegmentedControl
+                  label={t("grokbotTheme")}
+                  value={grokTheme}
+                  options={grokThemeOptions}
+                  onChange={(value) => setGrokTheme(value as GrokTheme)}
+                />
+              </PreferenceRow>
+              <PreferenceRow label={t("piPersona")}>
+                <SegmentedControl
+                  label={t("piPersona")}
+                  value={piPersona}
+                  options={personaOptions}
+                  onChange={(value) => setPiPersona(value as GrokPersona)}
+                />
+              </PreferenceRow>
+              <PreferenceRow label={t("codexPersona")}>
+                <SegmentedControl
+                  label={t("codexPersona")}
+                  value={codexPersona}
+                  options={personaOptions}
+                  onChange={(value) => setCodexPersona(value as GrokPersona)}
+                />
+              </PreferenceRow>
+              <div className="mx-3 my-1.5 flex items-center justify-between rounded-lg border border-line bg-canvas px-3 py-1.5">
+                <span className="text-[11px] font-medium text-faint">{t("grokbotPreview")}</span>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1.5" title="Pi">
+                    <AgentIcon agent="pi" size={13} className="text-accent" />
+                    <AgentEyes agent="pi" size={15} state="idle" className={activityEyeTone("idle", grokTheme)} />
+                    <AgentEyes agent="pi" size={15} state="working" className={activityEyeTone("running", grokTheme)} />
+                    <AgentEyes agent="pi" size={15} state="thinking" className={activityEyeTone("waiting", grokTheme)} />
+                  </div>
+                  <div className="h-3 w-px bg-line" />
+                  <div className="flex items-center gap-1.5" title="Codex">
+                    <AgentIcon agent="codex" size={13} className="text-amber-500" />
+                    <AgentEyes agent="codex" size={15} state="idle" className={activityEyeTone("idle", grokTheme)} />
+                    <AgentEyes agent="codex" size={15} state="working" className={activityEyeTone("running", grokTheme)} />
+                    <AgentEyes agent="codex" size={15} state="thinking" className={activityEyeTone("waiting", grokTheme)} />
+                  </div>
+                </div>
+              </div>
               <PreferenceRow label={t("conversationFontSize", { size: chatFontSizePixels(chatFontSize) })}>
                 <SegmentedControl
                   label={t("conversationFontSize", { size: chatFontSizePixels(chatFontSize) })}
@@ -255,16 +406,18 @@ export function SettingsMenu({ openToken = 0 }: { openToken?: number }) {
               </PreferenceRow>
 
               <div className="my-1 border-t border-line" />
-              <button type="button" className={itemClass} onClick={() => { setOpen(false); setModelsOpen(true); }}>
-                <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2">
-                  <path
-                    d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Zm0 0v9m0 0 8-4.5M12 12l-8-4.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-                {t("manageModelsEllipsis")}
-              </button>
+              {!isCodexSession && (
+                <button type="button" className={itemClass} onClick={() => { setOpen(false); setModelsOpen(true); }}>
+                  <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2">
+                    <path
+                      d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Zm0 0v9m0 0 8-4.5M12 12l-8-4.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  {t("manageModelsEllipsis")}
+                </button>
+              )}
               <button type="button" className={itemClass} onClick={() => { setOpen(false); setForkOpen(true); }}>
                 <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2">
                   <circle cx="6" cy="5" r="2" />
@@ -274,16 +427,18 @@ export function SettingsMenu({ openToken = 0 }: { openToken?: number }) {
                 </svg>
                 {t("forkSessionEllipsis")}
               </button>
-              <button type="button" className={itemClass} onClick={() => { setOpen(false); setExtensionsOpen(true); }}>
-                <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2">
-                  <path
-                    d="M20 7h-3a2 2 0 1 0-4 0H4a2 2 0 0 0-2 2v3a2 2 0 1 1 0 4v3a2 2 0 0 0 2 2h3a2 2 0 1 1 4 0h9a2 2 0 0 0 2-2v-3a2 2 0 1 0 0-4V9a2 2 0 0 0-2-2Z"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-                {t("activeExtensionsEllipsis")}
-              </button>
+              {!isCodexSession && (
+                <button type="button" className={itemClass} onClick={() => { setOpen(false); setExtensionsOpen(true); }}>
+                  <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-2">
+                    <path
+                      d="M20 7h-3a2 2 0 1 0-4 0H4a2 2 0 0 0-2 2v3a2 2 0 1 1 0 4v3a2 2 0 0 0 2 2h3a2 2 0 1 1 4 0h9a2 2 0 0 0 2-2v-3a2 2 0 1 0 0-4V9a2 2 0 0 0-2-2Z"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  {t("activeExtensionsEllipsis")}
+                </button>
+              )}
 
               <div className="my-1 border-t border-line" />
               <button type="button" className={itemClass} onClick={() => { setOpen(false); void logout(); }}>
@@ -298,9 +453,9 @@ export function SettingsMenu({ openToken = 0 }: { openToken?: number }) {
         </Dialog.Portal>
       </Dialog.Root>
 
-      <ModelsDialog open={modelsOpen} onOpenChange={setModelsOpen} />
+      {!isCodexSession && <ModelsDialog open={modelsOpen} onOpenChange={setModelsOpen} />}
       <ForkDialog open={forkOpen} onOpenChange={setForkOpen} />
-      <ExtensionsDialog open={extensionsOpen} onOpenChange={setExtensionsOpen} />
+      {!isCodexSession && <ExtensionsDialog open={extensionsOpen} onOpenChange={setExtensionsOpen} />}
     </>
   );
 }

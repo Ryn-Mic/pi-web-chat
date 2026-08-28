@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   nextWorkspaceFocusAfterClose,
   nextWorkspaceTabId,
@@ -7,6 +7,7 @@ import {
 } from "../lib/file-workspace-tabs";
 import { previewIdentity, type PreviewWorkspaceState } from "../lib/file-preview";
 import { useT } from "../lib/i18n";
+import { RefreshActionIcon } from "./MorphIcons";
 
 export const FILES_TAB_ID = "files";
 export const GIT_TAB_ID = "git";
@@ -33,6 +34,13 @@ export function FileWorkspaceTabs({
   onRefresh?: () => void;
 }) {
   const t = useT();
+  const [refreshing, setRefreshing] = useState(false);
+  const handleRefresh = () => {
+    if (!onRefresh) return;
+    setRefreshing(true);
+    window.setTimeout(() => setRefreshing(false), 750);
+    onRefresh();
+  };
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
   const tabs = [
     { identity: FILES_TAB_ID, name: t("files"), title: t("files"), closeable: false },
@@ -129,14 +137,12 @@ export function FileWorkspaceTabs({
       {onRefresh && (
         <button
           type="button"
-          onClick={onRefresh}
+          onClick={handleRefresh}
           aria-label={t("refreshPreview")}
           title={t("refreshPreview")}
           className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink"
         >
-          <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-[1.8]" aria-hidden>
-            <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          <RefreshActionIcon refreshing={refreshing} size={15} />
         </button>
       )}
     </div>

@@ -22,6 +22,23 @@ export type Messages = {
   fontSizeLargeShort: string;
   language: string;
   browserNotifications: string;
+  newSessionAgent: string;
+  agentAppliesToNewSessions: string;
+  agentPi: string;
+  agentCodex: string;
+  grokbotTheme: string;
+  grokbotThemeClassic: string;
+  grokbotThemeCyberpunk: string;
+  grokbotThemeMatrix: string;
+  grokbotThemeAmber: string;
+  grokbotThemeSakura: string;
+  piPersona: string;
+  codexPersona: string;
+  personaPlayful: string;
+  personaAnalytic: string;
+  personaZen: string;
+  personaCyber: string;
+  grokbotPreview: string;
 
   // sessions
   sessions: string;
@@ -103,6 +120,7 @@ export type Messages = {
   removeImage: string;
   send: string;
   abort: string;
+  codexSteerPlaceholder: string;
 
   // model
   selectModel: string;
@@ -115,6 +133,10 @@ export type Messages = {
   forkSession: string;
   forkSessionEllipsis: string;
   forkDescription: string;
+  codexForkDescription: string;
+  codexForkAction: string;
+  codexForkUnavailable: string;
+  codexForkNoThread: string;
   emptyMessage: string;
   noForkPoints: string;
 
@@ -185,6 +207,62 @@ export type Messages = {
   copied: string;
   reuseMessage: string;
 
+  // Codex remote control
+  codexApprovalTitle: string;
+  codexApprovalQueue: string;
+  codexCommandRequest: string;
+  codexFileRequest: string;
+  codexPermissionsRequest: string;
+  codexInputRequest: string;
+  codexMcpRequest: string;
+  codexReason: string;
+  codexRequestDetails: string;
+  codexWorkingDirectory: string;
+  codexChanges: string;
+  codexPermissions: string;
+  codexAcceptOnce: string;
+  codexAcceptSession: string;
+  codexDecline: string;
+  codexCancelTurn: string;
+  codexSubmit: string;
+  codexSelectOptions: string;
+  codexOtherAnswer: string;
+  codexOpenAuthorization: string;
+  codexAuthorizationDone: string;
+  codexMcpFormData: string;
+  codexInvalidForm: string;
+  codexInteractionSendFailed: string;
+  codexRequired: string;
+  codexTransportShared: string;
+  codexTransportStandalone: string;
+  codexTransportConnecting: string;
+  codexTransportUnavailable: string;
+  codexSharedHint: string;
+  codexStandaloneHint: string;
+  codexRemoteConnected: string;
+  codexObserverTitle: string;
+  codexObserverHint: string;
+
+  // new UI enhancements
+  searchSessions: string;
+  noMatchingSessions: string;
+  searchFiles: string;
+  noMatchingFiles: string;
+  scrollToBottom: string;
+  generatingResponse: string;
+  dropFilesHere: string;
+  contextDetails: string;
+  contextUsed: string;
+  contextWindowSize: string;
+  starterTitleExplore: string;
+  starterExploreCodebase: string;
+  starterTitleGit: string;
+  starterReviewGit: string;
+  starterTitleTests: string;
+  starterWriteTests: string;
+  starterTitlePerf: string;
+  starterOptimizePerf: string;
+
   // auth
   login: string;
   loginFailed: string;
@@ -219,6 +297,23 @@ export const en: Messages = {
   fontSizeLargeShort: "L",
   language: "Language",
   browserNotifications: "Task completion notifications",
+  newSessionAgent: "Agent for new sessions",
+  agentAppliesToNewSessions: "new sessions only",
+  agentPi: "pi",
+  agentCodex: "Codex",
+  grokbotTheme: "GrokBot Theme",
+  grokbotThemeClassic: "Classic Azure",
+  grokbotThemeCyberpunk: "Cyber Neon",
+  grokbotThemeMatrix: "Matrix Green",
+  grokbotThemeAmber: "Sunset Amber",
+  grokbotThemeSakura: "Sakura Pink",
+  piPersona: "Pi Expression Personality",
+  codexPersona: "Codex Expression Personality",
+  personaPlayful: "Playful & Curious",
+  personaAnalytic: "Analytic & Sharp",
+  personaZen: "Calm & Zen",
+  personaCyber: "Cyber Hacker",
+  grokbotPreview: "Live Preview",
 
   sessions: "Sessions",
   newSession: "New session",
@@ -295,6 +390,7 @@ export const en: Messages = {
   removeImage: "Remove image",
   send: "Send",
   abort: "Stop",
+  codexSteerPlaceholder: "Guide Codex while it works…",
 
   selectModel: "Select model",
   searchModels: "Search models…",
@@ -306,6 +402,11 @@ export const en: Messages = {
   forkSessionEllipsis: "Fork session…",
   forkDescription:
     "Creates a new session up to the selected message. The message text is filled back into the composer.",
+  codexForkDescription:
+    "Creates a new native Codex thread from the current conversation and moves this tab to it. The original thread stays saved.",
+  codexForkAction: "Fork current thread",
+  codexForkUnavailable: "Stop the active task and resolve pending requests before forking.",
+  codexForkNoThread: "Send a message first to create a Codex thread.",
   emptyMessage: "(empty message)",
   noForkPoints: "No user messages to fork from",
 
@@ -372,6 +473,61 @@ export const en: Messages = {
   copyMessage: "Copy message",
   copied: "Copied",
   reuseMessage: "Reuse in composer",
+
+  codexApprovalTitle: "Codex is waiting for your decision. Nothing is approved automatically.",
+  codexApprovalQueue: "{count} waiting",
+  codexCommandRequest: "Run this command?",
+  codexFileRequest: "Apply these file changes?",
+  codexPermissionsRequest: "Grant additional permissions?",
+  codexInputRequest: "Codex needs your input",
+  codexMcpRequest: "Connected tool needs your input",
+  codexReason: "Reason",
+  codexRequestDetails: "Request details",
+  codexWorkingDirectory: "Working directory",
+  codexChanges: "Requested changes",
+  codexPermissions: "Requested permissions",
+  codexAcceptOnce: "Allow once",
+  codexAcceptSession: "Allow for session",
+  codexDecline: "Decline",
+  codexCancelTurn: "Cancel task",
+  codexSubmit: "Send answer",
+  codexSelectOptions: "Select one option.",
+  codexOtherAnswer: "Type another answer…",
+  codexOpenAuthorization: "Open authorization page",
+  codexAuthorizationDone: "I've finished",
+  codexMcpFormData: "Form response as JSON",
+  codexInvalidForm: "Enter valid JSON before sending.",
+  codexInteractionSendFailed: "Reconnecting. Your decision was not sent.",
+  codexRequired: "Complete all required fields.",
+  codexTransportShared: "Shared daemon",
+  codexTransportStandalone: "Standalone · isolated",
+  codexTransportConnecting: "Connecting",
+  codexTransportUnavailable: "Unavailable",
+  codexSharedHint: "Connected to the shared Codex app-server daemon.",
+  codexStandaloneHint: "Isolated process — it does not share the running Codex daemon.",
+  codexRemoteConnected: "Remote",
+  codexObserverTitle: "Read-only",
+  codexObserverHint: "Another client is running this session; you can watch it and regain control automatically when it finishes.",
+
+  // new UI enhancements
+  searchSessions: "Search sessions…",
+  noMatchingSessions: "No matching sessions",
+  searchFiles: "Search files…",
+  noMatchingFiles: "No matching files",
+  scrollToBottom: "Scroll to bottom",
+  generatingResponse: "Generating…",
+  dropFilesHere: "Drop images or files here",
+  contextDetails: "Context usage",
+  contextUsed: "Used",
+  contextWindowSize: "Context window",
+  starterTitleExplore: "Explore Codebase",
+  starterExploreCodebase: "Analyze repository architecture and key module structure",
+  starterTitleGit: "Review Git Changes",
+  starterReviewGit: "Check recent git changes, uncommitted diffs, and branch status",
+  starterTitleTests: "Write Unit Tests",
+  starterWriteTests: "Write comprehensive unit tests with edge cases for recent code",
+  starterTitlePerf: "Optimize Performance",
+  starterOptimizePerf: "Identify potential performance bottlenecks and memory leaks",
 
   login: "Sign in",
   loginFailed: "Invalid token or 2FA code.",

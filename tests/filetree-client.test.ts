@@ -4,7 +4,12 @@ import {
   onRequestOpenFilesDrawer,
   requestOpenFilesDrawer,
 } from "../src/lib/drawer.ts";
-import { parseExpanded, toggleExpandedPath } from "../src/lib/filetree.ts";
+import {
+  currentFileSearchMatches,
+  parseExpanded,
+  revealExpandedPath,
+  toggleExpandedPath,
+} from "../src/lib/filetree.ts";
 
 test("toggleExpandedPath: expands then collapses a dir within a cwd", () => {
   let state: Record<string, string[]> = {};
@@ -23,6 +28,35 @@ test("toggleExpandedPath: expansion state is isolated per cwd", () => {
   // toggling /a must not touch /b
   state = toggleExpandedPath(state, "/a", "src");
   assert.deepEqual(state, { "/a": [], "/b": ["lib"] });
+});
+
+test("revealExpandedPath: expands a matched directory and every ancestor", () => {
+  const original = { "/proj": ["docs"], "/other": ["keep"] };
+  const state = revealExpandedPath(original, "/proj", "src/components/deep");
+  assert.deepEqual(state, {
+    "/proj": ["docs", "src", "src/components", "src/components/deep"],
+    "/other": ["keep"],
+  });
+  assert.deepEqual(original, { "/proj": ["docs"], "/other": ["keep"] });
+  assert.equal(revealExpandedPath(state, "/proj", "src/components/deep"), state);
+});
+
+test("currentFileSearchMatches: distinguishes stale, pending, and resolved-empty results", () => {
+  const response = {
+    root: "/proj",
+    query: "tree",
+    matches: [
+      { name: "tree", path: "src/tree", type: "dir" as const },
+      { name: "tree.ts", path: "src/tree.ts", type: "file" as const },
+    ],
+  };
+  assert.equal(currentFileSearchMatches(response, "other"), undefined);
+  assert.equal(currentFileSearchMatches(response, "   "), undefined);
+  assert.deepEqual(currentFileSearchMatches(response, " tree "), response.matches);
+  assert.deepEqual(
+    currentFileSearchMatches({ ...response, matches: [] }, "tree"),
+    [],
+  );
 });
 
 test("parseExpanded: valid JSON round-trips", () => {

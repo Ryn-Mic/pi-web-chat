@@ -8,6 +8,7 @@ import {
   useInvalidateModels,
 } from "../lib/api";
 import { useT } from "../lib/i18n";
+import { AgentEyes } from "./AgentEyes";
 import { LoadingIndicator } from "./LoadingIndicator";
 
 const APIS: UICustomApi[] = [
@@ -705,7 +706,7 @@ export function ModelsDialog({
                 <span className="text-red-500 dark:text-red-400">{error}</span>
               ) : status === "saved" ? (
                 <span className="inline-flex items-center gap-1.5 font-medium text-emerald-600 dark:text-emerald-400">
-                  <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden />
+                  <AgentEyes state="happy" size={12} className="text-emerald-500" />
                   {t("saved")}
                 </span>
               ) : null}

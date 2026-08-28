@@ -1,7 +1,7 @@
 import { open, readdir, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import type { UISessionInfo } from "../shared/protocol.ts";
+import type { UIAgentKind, UISessionInfo } from "../shared/protocol.ts";
 
 const COLD_SUMMARY_BATCH_SIZE = 16;
 const ANSI_RE = /[\u001b\u009b][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
@@ -18,6 +18,8 @@ type FileState = {
   id: string;
   cwd: string;
   name?: string;
+  agent: UIAgentKind;
+  codexThreadId?: string;
   firstMessage: string;
   messageCount: number;
   createdMs: number;
@@ -31,6 +33,8 @@ type JsonEntry = {
   cwd?: unknown;
   timestamp?: unknown;
   name?: unknown;
+  customType?: unknown;
+  data?: unknown;
   message?: {
     role?: unknown;
     timestamp?: unknown;
@@ -85,6 +89,7 @@ function createState(path: string, ino: number, size: number, mtimeMs: number): 
     headerSeen: false,
     id: sessionIdOf(path),
     cwd: "",
+    agent: "pi",
     firstMessage: "",
     messageCount: 0,
     createdMs: now,
@@ -109,6 +114,17 @@ function applyEntry(state: FileState, entry: JsonEntry) {
     state.cwd = typeof entry.cwd === "string" ? entry.cwd : "";
     state.createdMs = parseTime(entry.timestamp) ?? state.mtimeMs;
     state.lastActivityMs = state.createdMs;
+    return;
+  }
+  if (entry.type === "custom" && entry.customType === "pi-web-chat.codex") {
+    state.agent = "codex";
+    if (
+      entry.data
+      && typeof entry.data === "object"
+      && typeof (entry.data as { threadId?: unknown }).threadId === "string"
+    ) {
+      state.codexThreadId = (entry.data as { threadId: string }).threadId;
+    }
     return;
   }
   if (entry.type === "session_info") {
@@ -146,6 +162,8 @@ function finalizeInfo(state: FileState): UISessionInfo {
     path: state.path,
     project: projectOf(state.cwd, state.path),
     name: state.name,
+    agent: state.agent,
+    ...(state.codexThreadId ? { codexThreadId: state.codexThreadId } : {}),
     firstMessage: (state.firstMessage || "(no messages)").slice(0, 200),
     modified: new Date(modifiedMs).toISOString(),
     messageCount: state.messageCount,

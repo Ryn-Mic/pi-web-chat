@@ -1,6 +1,10 @@
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { activityDotClass, connectionActivity } from "../lib/activity";
+import type { UICodexState } from "../../shared/protocol";
+import { activityEyeState, activityEyeTone, connectionActivity } from "../lib/activity";
+import { getAgentPreference } from "../lib/agent";
+import { AgentEyes } from "./AgentEyes";
+import { AgentIcon } from "./AgentIcon";
 import { chatClient, useChat } from "../lib/chat";
 import { requestOpenFilesDrawer, requestOpenSessionsDrawer } from "../lib/drawer";
 import { setFilesPanelOpen, useFilesPanelOpen } from "../lib/filetree";
@@ -15,11 +19,13 @@ import { useSidebarPinned } from "../lib/sidebar";
 import { useTheme } from "../lib/theme";
 import { useLeftEdgeSwipe, useRightEdgeSwipe } from "../lib/useEdgeSwipe";
 import { Composer } from "./Composer";
+import { CodexInteractionHost } from "./CodexInteractionHost";
 import { ExtensionUIHost } from "./ExtensionUIHost";
 import { FilesDrawer } from "./FileTreePanel";
 import { MobileGitCommitDetail, type MobileGitCommitSelection } from "./MobileGitCommitDetail";
 import { FileWorkspaceSidebar, openWorkspacePreview } from "./FileWorkspaceSidebar";
 import { LoadingIndicator } from "./LoadingIndicator";
+import { NewSessionIcon } from "./MorphIcons";
 import { ProjectBadge } from "./ProjectBadge";
 import { MessageList } from "./MessageList";
 import {
@@ -28,14 +34,6 @@ import {
 } from "./MobileFilePreview";
 import { SessionTabs } from "./SessionTabs";
 import { SessionsDrawer, SessionsSidebar } from "./SessionsDrawer";
-
-function NewSessionIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-5 fill-none stroke-current stroke-[1.8]" aria-hidden>
-      <path d="M12 5v14M5 12h14" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 function connectionLabel(
   connection: "connecting" | "connected" | "disconnected",
@@ -49,6 +47,54 @@ function connectionLabel(
     case "disconnected":
       return t("disconnected");
   }
+}
+
+function CodexConnectionBadge({ state }: { state: UICodexState | undefined }) {
+  const t = useT();
+  if (state?.observer) {
+    return (
+      <span
+        className="flex max-w-[42vw] shrink-0 items-center gap-1.5 truncate rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-1 font-mono text-[10px] text-sky-700 dark:text-sky-300"
+        title={t("codexObserverHint")}
+        aria-label={`${t("codexObserverTitle")} · ${t("codexObserverHint")}`}
+      >
+        <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-current opacity-75" aria-hidden />
+        <span className="truncate">{t("codexObserverTitle")}</span>
+      </span>
+    );
+  }
+  const transport = state?.transport ?? "connecting";
+  const remoteConnected = state?.remoteControl === "connected";
+  const label = transport === "shared"
+    ? t("codexTransportShared")
+    : transport === "standalone"
+      ? t("codexTransportStandalone")
+      : transport === "unavailable"
+        ? t("codexTransportUnavailable")
+        : t("codexTransportConnecting");
+  const title = transport === "standalone"
+    ? t("codexStandaloneHint")
+    : transport === "shared"
+      ? t("codexSharedHint")
+      : label;
+  const tone = transport === "shared"
+    ? "border-emerald-500/25 bg-emerald-500/8 text-emerald-700 dark:text-emerald-300"
+    : transport === "standalone"
+      ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+      : transport === "unavailable"
+        ? "border-red-500/25 bg-red-500/8 text-red-600 dark:text-red-300"
+        : "border-line bg-card text-faint";
+  return (
+    <span
+      className={`flex max-w-[42vw] shrink-0 items-center gap-1.5 truncate rounded-full border px-2 py-1 font-mono text-[10px] ${tone}`}
+      title={`${title}${remoteConnected ? ` · ${t("codexRemoteConnected")}` : ""}`}
+      aria-label={`${label}${remoteConnected ? `, ${t("codexRemoteConnected")}` : ""}`}
+    >
+      <span className="size-1.5 shrink-0 rounded-full bg-current opacity-75" aria-hidden />
+      <span className="truncate">{label}</span>
+      {remoteConnected && <span className="shrink-0">· {t("codexRemoteConnected")}</span>}
+    </span>
+  );
 }
 
 export function ChatPage() {
@@ -99,6 +145,7 @@ export function ChatPage() {
   const resumeEnabled = useResumeEnabled();
   const messageListRef = useRef<HTMLDivElement>(null);
   const [settingsOpenToken, setSettingsOpenToken] = useState(0);
+  const [newSessionBurst, setNewSessionBurst] = useState(0);
   const [mobilePreview, setMobilePreview] = useState<MobilePreviewSelection | null>(null);
   const [mobileGitCommit, setMobileGitCommit] = useState<MobileGitCommitSelection | null>(null);
 
@@ -119,7 +166,7 @@ export function ChatPage() {
         return;
       }
     }
-    chatClient.connect(null);
+    chatClient.connect(null, { agent: getAgentPreference() ?? undefined });
   }, [routeSessionId, resumeEnabled, navigate]);
 
   // Connection → URL (address rewrites once the session is published: first
@@ -161,7 +208,7 @@ export function ChatPage() {
     } else if (commandIntent.action === "new_session") {
       chatClient.consumeCommandIntent();
       markFreshDraftRequested();
-      chatClient.connect(null, { force: true });
+      chatClient.connect(null, { force: true, agent: getAgentPreference() ?? undefined });
       void navigate({ to: "/" });
       chatClient.requestComposerFocus();
     }
@@ -194,16 +241,24 @@ export function ChatPage() {
           />
           <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
             {!sidebarPinned && (
-              <span className="shrink-0 text-sm font-medium text-ink" aria-label="pi">
-                &#x03c0;
-              </span>
+              <AgentIcon
+                agent={snapshot?.agent === "codex" ? "codex" : "pi"}
+                size={17}
+                className={snapshot?.agent === "codex" ? "text-amber-500" : "text-accent"}
+                title={snapshot?.agent === "codex" ? "Codex" : "pi"}
+              />
             )}
-            <span
-              className={`size-1.5 shrink-0 rounded-full ${activityDotClass(connectionActivity(connection, isStreaming))}`}
-              title={connectionLabel(connection, t)}
-              aria-label={connectionLabel(connection, t)}
-            />
+            <span title={connectionLabel(connection, t)}>
+              <AgentEyes
+                state={activityEyeState(connectionActivity(connection, isStreaming))}
+                size={14}
+                agent={snapshot?.agent === "codex" ? "codex" : "pi"}
+                className={activityEyeTone(connectionActivity(connection, isStreaming))}
+                title={connectionLabel(connection, t)}
+              />
+            </span>
             <ProjectBadge cwd={snapshot?.cwd} />
+            {snapshot?.agent === "codex" && <CodexConnectionBadge state={snapshot.codex} />}
           </div>
           <button
             type="button"
@@ -231,8 +286,9 @@ export function ChatPage() {
           <button
             type="button"
             onClick={() => {
+              setNewSessionBurst((t) => t + 1);
               markFreshDraftRequested();
-              chatClient.connect(null, { force: true });
+              chatClient.connect(null, { force: true, agent: getAgentPreference() ?? undefined });
               void navigate({ to: "/" });
               chatClient.requestComposerFocus();
             }}
@@ -240,7 +296,7 @@ export function ChatPage() {
             title={t("newSession")}
             className="flex size-9 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink"
           >
-            <NewSessionIcon />
+            <NewSessionIcon size={19} burstToken={newSessionBurst} />
           </button>
         </header>
         <SessionTabs />
@@ -266,6 +322,7 @@ export function ChatPage() {
               onLoadOlder={() => chatClient.loadOlderMessages()}
               containerRef={messageListRef}
               cwd={snapshot?.cwd}
+              agent={snapshot?.agent ?? getAgentPreference() ?? "pi"}
               onPreviewFile={previewMessageFile}
             />
             {updateAvailable && (
@@ -348,6 +405,7 @@ export function ChatPage() {
           </>
         )}
         <ExtensionUIHost />
+        <CodexInteractionHost />
       </div>
       <FileWorkspaceSidebar />
       <FilesDrawer onPreviewFile={setMobilePreview} onSelectCommit={setMobileGitCommit} />

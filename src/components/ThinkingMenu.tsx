@@ -10,18 +10,19 @@ const LEVEL_BAR_COUNT: Record<UIThinkingLevel, number> = {
   high: 4,
   xhigh: 5,
   max: 6,
+  ultra: 7,
 };
 
 function ThinkingLevelIcon({ level }: { level: UIThinkingLevel }) {
   const barCount = LEVEL_BAR_COUNT[level];
   return (
     <svg viewBox="0 0 24 24" className="size-4 shrink-0 fill-current" aria-hidden>
-      {Array.from({ length: 6 }, (_, index) => {
+      {Array.from({ length: 7 }, (_, index) => {
         const height = 4 + index * 2;
         return (
           <rect
             key={index}
-            x={2 + index * 3.4}
+            x={1 + index * 3.15}
             y={20 - height}
             width="2.4"
             height={height}

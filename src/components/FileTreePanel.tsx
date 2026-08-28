@@ -1,14 +1,24 @@
 import { Dialog } from "@base-ui-components/react/dialog";
 import { useEffect, useState, type MouseEvent } from "react";
-import type { UITreeNode } from "../../shared/protocol";
-import { useInvalidateGit, useInvalidateTree, useTree } from "../lib/api";
+import type { UIFileMatch, UITreeNode } from "../../shared/protocol";
+import { useFileSearch, useInvalidateGit, useInvalidateTree, useTree } from "../lib/api";
 import { chatClient, useChat } from "../lib/chat";
 import { onRequestOpenFilesDrawer } from "../lib/drawer";
 import { previewIdentity } from "../lib/file-preview";
-import { toggleTreeDirExpanded, useTreeDirExpanded } from "../lib/filetree";
+import {
+  currentFileSearchMatches,
+  revealTreeDir,
+  toggleTreeDirExpanded,
+  useTreeDirExpanded,
+} from "../lib/filetree";
 import { useT } from "../lib/i18n";
 import { GitWorkspacePanel } from "./GitWorkspacePanel";
 import { LoadingIndicator } from "./LoadingIndicator";
+import {
+  FolderTreeIcon,
+  RefreshActionIcon,
+  TreeChevronIcon,
+} from "./MorphIcons";
 
 export interface PreviewFileSelection {
   cwd: string;
@@ -18,15 +28,7 @@ export interface PreviewFileSelection {
 }
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className={`size-3 shrink-0 fill-none stroke-current stroke-2 transition-transform ${expanded ? "rotate-90" : ""}`}
-      aria-hidden
-    >
-      <path d="m9 6 6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+  return <TreeChevronIcon expanded={expanded} size={11} className="text-faint" />;
 }
 
 function TreeNodeRow({
@@ -87,9 +89,7 @@ function TreeNodeRow({
             className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] text-muted transition-colors hover:bg-hover hover:text-ink"
           >
             <ChevronIcon expanded={expanded} />
-            <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
-              {expanded ? "\uf115" : "\uf114"}
-            </span>
+            <FolderTreeIcon open={expanded} size={14} />
             <span className="truncate">{node.name}</span>
           </button>
           {expanded && (
@@ -234,6 +234,151 @@ function TreeDir({
   );
 }
 
+function FileSearchResultRow({
+  cwd,
+  match,
+  onPreviewFile,
+  onPickFile,
+  onRevealDirectory,
+  selectedFileIdentity,
+}: {
+  cwd: string;
+  match: UIFileMatch;
+  onPreviewFile?: (file: PreviewFileSelection) => void;
+  onPickFile?: () => void;
+  onRevealDirectory: (path: string) => void;
+  selectedFileIdentity?: string;
+}) {
+  const t = useT();
+  const secondaryPath = match.path === match.name ? "" : match.path;
+
+  if (match.type === "dir") {
+    return (
+      <button
+        type="button"
+        onClick={() => onRevealDirectory(match.path)}
+        title={match.path}
+        className="flex min-h-8 w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[13px] text-muted transition-colors hover:bg-hover hover:text-ink"
+      >
+        <span className="size-3 shrink-0" aria-hidden />
+        <FolderTreeIcon open={false} size={14} />
+        <span className="shrink-0 truncate">{match.name}/</span>
+        {secondaryPath && <span className="min-w-0 flex-1 truncate text-xs text-faint">{secondaryPath}</span>}
+      </button>
+    );
+  }
+
+  const selected = selectedFileIdentity === previewIdentity(cwd, match.path);
+  const previewOrReference = (event: MouseEvent<HTMLButtonElement>) => {
+    const file = { cwd, path: match.path, name: match.name, trigger: event.currentTarget };
+    if (onPreviewFile) onPreviewFile(file);
+    else chatClient.insertComposerText(`@${match.path} `);
+    onPickFile?.();
+  };
+
+  return (
+    <div
+      className={`flex min-w-0 items-center rounded-md transition-colors ${
+        selected ? "bg-hover text-ink" : "text-muted hover:bg-hover hover:text-ink"
+      }`}
+    >
+      <button
+        type="button"
+        onClick={previewOrReference}
+        title={match.path}
+        aria-label={t("previewFile", { name: match.name })}
+        aria-current={selected ? "true" : undefined}
+        className="flex min-h-8 min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left text-[13px]"
+      >
+        <span className={`size-1.5 shrink-0 rounded-full ${selected ? "bg-accent" : "bg-transparent"}`} aria-hidden />
+        <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
+          {"\uf016"}
+        </span>
+        <span className="shrink-0 truncate">{match.name}</span>
+        {secondaryPath && <span className="min-w-0 flex-1 truncate text-xs text-faint">{secondaryPath}</span>}
+      </button>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          chatClient.insertComposerText(`@${match.path} `);
+          onPickFile?.();
+        }}
+        title={`@${match.path}`}
+        aria-label={t("referenceFile", { name: match.name })}
+        className="flex size-8 shrink-0 items-center justify-center rounded-md text-xs font-medium text-faint transition-colors hover:bg-hover hover:text-ink"
+      >
+        @
+      </button>
+    </div>
+  );
+}
+
+function FileSearchResults({
+  cwd,
+  matches,
+  loading,
+  error,
+  partial,
+  onRetry,
+  onPreviewFile,
+  onPickFile,
+  onRevealDirectory,
+  selectedFileIdentity,
+}: {
+  cwd: string;
+  matches: UIFileMatch[] | undefined;
+  loading: boolean;
+  error: boolean;
+  partial?: boolean;
+  onRetry: () => void;
+  onPreviewFile?: (file: PreviewFileSelection) => void;
+  onPickFile?: () => void;
+  onRevealDirectory: (path: string) => void;
+  selectedFileIdentity?: string;
+}) {
+  const t = useT();
+  if (loading) {
+    return (
+      <div className="px-2 py-3">
+        <LoadingIndicator label={t("loading")} size="sm" showLabel />
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <button
+        type="button"
+        onClick={onRetry}
+        className="px-2 py-3 text-left text-[12px] text-faint transition-colors hover:text-ink"
+      >
+        {t("treeLoadError")}
+      </button>
+    );
+  }
+  if (matches?.length === 0) {
+    return <div className="px-4 py-8 text-center text-sm text-faint">{t("noMatchingFiles")}</div>;
+  }
+  if (!matches) return null;
+
+  return (
+    <>
+      {matches.map((match) => (
+        <FileSearchResultRow
+          key={`${match.type}:${match.path}`}
+          cwd={cwd}
+          match={match}
+          onPreviewFile={onPreviewFile}
+          onPickFile={onPickFile}
+          onRevealDirectory={onRevealDirectory}
+          selectedFileIdentity={selectedFileIdentity}
+        />
+      ))}
+      {partial && <div className="px-2 py-1.5 text-[11px] text-faint">{t("mentionPartial")}</div>}
+    </>
+  );
+}
+
 /** Shared tree content, rooted at the active chat tab's project directory. */
 export function FileTreePanel({
   onPickFile,
@@ -249,21 +394,98 @@ export function FileTreePanel({
   const t = useT();
   const { snapshot } = useChat();
   const cwd = cwdOverride ?? snapshot?.cwd;
+  const [filterQuery, setFilterQuery] = useState("");
+  const searchQuery = filterQuery.trim();
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+
+  useEffect(() => {
+    if (!searchQuery) {
+      setDebouncedSearchQuery("");
+      return;
+    }
+    const id = window.setTimeout(() => setDebouncedSearchQuery(searchQuery), 150);
+    return () => window.clearTimeout(id);
+  }, [searchQuery]);
+
+  const searchReady = Boolean(searchQuery) && debouncedSearchQuery === searchQuery;
+  const {
+    data: searchData,
+    isPending: searchPending,
+    isFetching: searchFetching,
+    isError: searchFailed,
+    refetch: refetchSearch,
+  } = useFileSearch(cwd, debouncedSearchQuery, searchReady);
+  const searchMatches = currentFileSearchMatches(searchData, searchQuery);
+  const searchLoading = Boolean(searchQuery) && (
+    !searchReady || (searchMatches === undefined && (searchPending || searchFetching))
+  );
+  const clearSearch = () => {
+    setFilterQuery("");
+    setDebouncedSearchQuery("");
+  };
 
   return (
-    <div className="thin-scroll flex-1 overflow-y-auto px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
-      {cwd ? (
-        <TreeDir
-          cwd={cwd}
-          path=""
-          depth={0}
-          onPreviewFile={onPreviewFile}
-          onPickFile={onPickFile}
-          selectedFileIdentity={selectedFileIdentity}
-        />
-      ) : (
-        <div className="px-4 py-8 text-center text-sm text-faint">{t("emptyDirectory")}</div>
-      )}
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="px-2 pt-2 pb-1">
+        <div className="relative flex items-center">
+          <svg
+            viewBox="0 0 24 24"
+            className="pointer-events-none absolute left-2.5 size-3.5 fill-none stroke-current stroke-2 text-faint"
+            aria-hidden
+          >
+            <circle cx="11" cy="11" r="7" />
+            <path d="m21 21-4.35-4.35" strokeLinecap="round" />
+          </svg>
+          <input
+            type="text"
+            value={filterQuery}
+            onChange={(e) => setFilterQuery(e.target.value)}
+            placeholder={t("searchFiles")}
+            className="w-full rounded-lg border border-line bg-card py-1.5 pr-7 pl-8 text-xs text-ink outline-none transition-colors placeholder:text-faint focus:border-accent/60"
+          />
+          {filterQuery && (
+            <button
+              type="button"
+              onClick={clearSearch}
+              title={t("clearSearch")}
+              aria-label={t("clearSearch")}
+              className="absolute right-2 flex size-4 items-center justify-center rounded text-faint hover:text-ink"
+            >
+              ×
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="thin-scroll flex-1 overflow-y-auto px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
+        {cwd && searchQuery ? (
+          <FileSearchResults
+            cwd={cwd}
+            matches={searchMatches}
+            loading={searchLoading}
+            error={searchReady && searchFailed && searchMatches === undefined}
+            partial={searchMatches ? searchData?.partial : undefined}
+            onRetry={() => void refetchSearch()}
+            onPreviewFile={onPreviewFile}
+            onPickFile={onPickFile}
+            onRevealDirectory={(path) => {
+              revealTreeDir(cwd, path);
+              clearSearch();
+            }}
+            selectedFileIdentity={selectedFileIdentity}
+          />
+        ) : cwd ? (
+          <TreeDir
+            cwd={cwd}
+            path=""
+            depth={0}
+            onPreviewFile={onPreviewFile}
+            onPickFile={onPickFile}
+            selectedFileIdentity={selectedFileIdentity}
+          />
+        ) : (
+          <div className="px-4 py-8 text-center text-sm text-faint">{t("emptyDirectory")}</div>
+        )}
+      </div>
     </div>
   );
 }
@@ -286,8 +508,11 @@ export function FilesDrawer({
     if (nextView) setView(nextView);
     setOpen(true);
   }), []);
+  const [refreshing, setRefreshing] = useState(false);
   const refresh = () => {
     if (!snapshot?.cwd) return;
+    setRefreshing(true);
+    window.setTimeout(() => setRefreshing(false), 750);
     if (view === "files") invalidateTree(snapshot.cwd);
     else invalidateGit(snapshot.cwd);
   };
@@ -320,9 +545,7 @@ export function FilesDrawer({
               title={view === "files" ? t("refreshTree") : t("refreshPreview")}
               className="flex size-8 shrink-0 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink disabled:opacity-50"
             >
-              <svg viewBox="0 0 24 24" className="size-4 fill-none stroke-current stroke-[1.8]" aria-hidden>
-                <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              <RefreshActionIcon refreshing={refreshing} size={16} />
             </button>
             <button
               type="button"

@@ -1,8 +1,10 @@
 import { useNavigate } from "@tanstack/react-router";
-import { activityDotClass, connectionActivity } from "../lib/activity";
+import { activityEyeState, activityEyeTone, connectionActivity } from "../lib/activity";
 import { chatClient, useChatTabs, type ChatTab } from "../lib/chat";
 import { useT } from "../lib/i18n";
 import { markFreshDraftRequested } from "../lib/resume";
+import { AgentEyes } from "./AgentEyes";
+import { AgentIcon } from "./AgentIcon";
 
 function firstUserText(tab: ChatTab): string | null {
   const message = tab.state.snapshot?.messages.find((item) => item.role === "user");
@@ -65,11 +67,16 @@ export function SessionTabs() {
               title={title}
               className="flex min-w-0 items-center gap-1.5 px-2.5 py-1.5 text-left text-xs"
             >
-              <span
-                className={`size-1.5 shrink-0 rounded-full ${activityDotClass(
-                  connectionActivity(tab.state.connection, Boolean(running)),
-                )}`}
-                aria-hidden
+              <AgentEyes
+                state={activityEyeState(connectionActivity(tab.state.connection, Boolean(running)))}
+                size={12}
+                agent={tab.state.snapshot?.agent === "codex" ? "codex" : "pi"}
+                className={activityEyeTone(connectionActivity(tab.state.connection, Boolean(running)))}
+              />
+              <AgentIcon
+                agent={tab.state.snapshot?.agent === "codex" ? "codex" : "pi"}
+                size={11}
+                className={tab.state.snapshot?.agent === "codex" ? "text-amber-500" : "text-faint"}
               />
               <span className="truncate">{title}</span>
             </button>

@@ -1,18 +1,8 @@
+import type { GrokEyeState } from "./grok-eyes";
+import { getGrokTheme, GROK_THEME_PALETTES, type GrokTheme } from "./grok-theme";
+
 export type ActivityDotState = "running" | "waiting" | "error" | "idle";
 export type ConnectionState = "connecting" | "connected" | "disconnected";
-
-export function activityDotClass(state: ActivityDotState, animated = true): string {
-  switch (state) {
-    case "running":
-      return `bg-emerald-500/80${animated ? " animate-pulse" : ""}`;
-    case "waiting":
-      return `bg-amber-400${animated ? " animate-pulse" : ""}`;
-    case "error":
-      return "bg-red-500";
-    case "idle":
-      return "bg-zinc-400/80 dark:bg-zinc-500/80";
-  }
-}
 
 export function connectionActivity(
   connection: ConnectionState,
@@ -21,4 +11,24 @@ export function connectionActivity(
   if (connection === "disconnected") return "error";
   if (connection === "connecting") return "waiting";
   return running ? "running" : "idle";
+}
+
+/** Map an activity state to a GrokBot eye expression for AgentEyes. */
+export function activityEyeState(state: ActivityDotState): GrokEyeState {
+  switch (state) {
+    case "running":
+      return "working";
+    case "waiting":
+      return "thinking";
+    case "error":
+      return "error";
+    case "idle":
+      return "idle";
+  }
+}
+
+/** Tone color for AgentEyes, resolving by theme. */
+export function activityEyeTone(state: ActivityDotState, theme?: GrokTheme): string {
+  const currentTheme = theme ?? getGrokTheme();
+  return GROK_THEME_PALETTES[currentTheme]?.[state] ?? GROK_THEME_PALETTES.classic[state];
 }

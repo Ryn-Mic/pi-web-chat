@@ -57,14 +57,17 @@ export function useSidebarPinned(): boolean {
   return useSyncExternalStore(subscribe, () => cache, () => false);
 }
 
-/** Project group collapse/expand (default: collapsed — only expanded projects are stored) */
+const EMPTY_SET = new Set<string>();
+
 export function isProjectCollapsed(project: string): boolean {
   return !expanded.has(project);
 }
 
 export function toggleProjectCollapsed(project: string) {
-  if (expanded.has(project)) expanded.delete(project);
-  else expanded.add(project);
+  const next = new Set(expanded);
+  if (next.has(project)) next.delete(project);
+  else next.add(project);
+  expanded = next;
   try {
     localStorage.setItem(EXPANDED_KEY, JSON.stringify([...expanded]));
   } catch {
@@ -73,6 +76,11 @@ export function toggleProjectCollapsed(project: string) {
   emit();
 }
 
+export function useExpandedProjects(): Set<string> {
+  return useSyncExternalStore(subscribe, () => expanded, () => EMPTY_SET);
+}
+
 export function useProjectCollapsed(project: string): boolean {
-  return useSyncExternalStore(subscribe, () => isProjectCollapsed(project), () => false);
+  const currentExpanded = useExpandedProjects();
+  return !currentExpanded.has(project);
 }

@@ -342,6 +342,113 @@ test("todo tool start exposes optimistic active status immediately", () => {
   }
 });
 
+test("Codex interactions survive snapshots and clear only after server resolution", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    const interaction = {
+      id: "thread:approval-1",
+      kind: "command_approval",
+      command: "npm test",
+      allowSessionApproval: true,
+    } as const;
+    emit(client, {
+      type: "snapshot",
+      revision: 0,
+      snapshot: {
+        messages: [],
+        isStreaming: true,
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+        pendingInteractions: [interaction],
+      },
+    });
+    assert.deepEqual(client.state.pendingInteractions, [interaction]);
+
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    assert.equal(
+      client.respondCodexInteraction({ id: interaction.id, action: "accept_for_session" }),
+      true,
+    );
+    assert.deepEqual(JSON.parse(socket.sent.at(-1)!), {
+      type: "codex_interaction_response",
+      response: { id: interaction.id, action: "accept_for_session" },
+    });
+    assert.equal(client.state.pendingInteractions.length, 1, "a local send is not an approval ack");
+
+    emit(client, { type: "codex_interaction_resolved", id: interaction.id });
+    assert.deepEqual(client.state.pendingInteractions, []);
+  } finally {
+    restore();
+  }
+});
+
+test("active Codex tools retain arguments and append incremental output", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, {
+      type: "tool_start",
+      toolCallId: "command-1",
+      toolName: "command",
+      args: { command: "npm test" },
+    });
+    emit(client, { type: "tool_progress", toolCallId: "command-1", delta: "first\n" });
+    emit(client, { type: "tool_progress", toolCallId: "command-1", delta: "second\n" });
+
+    assert.deepEqual(client.state.activeTools, [
+      {
+        toolCallId: "command-1",
+        toolName: "command",
+        args: { command: "npm test" },
+        output: "first\nsecond\n",
+      },
+    ]);
+  } finally {
+    restore();
+  }
+});
+
+test("a running Codex turn sends guidance without replacing its initial prompt receipt", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    assert.equal(client.send({ type: "prompt", text: "initial task" }), true);
+    const initial = JSON.parse(socket.sent[0]!);
+
+    // App-server can start streaming before the initial user item reaches the
+    // hydrated snapshot. The first delivery receipt must remain independently
+    // replayable while the second prompt is sent as turn/steer.
+    emit(client, {
+      type: "snapshot",
+      revision: 0,
+      snapshot: {
+        messages: [],
+        isStreaming: true,
+        agent: "codex",
+        model: null,
+        thinkingLevel: "off",
+        thinkingLevels: ["off"],
+      },
+    });
+    assert.equal(client.send({ type: "prompt", text: "focus on the failing test" }), true);
+    assert.equal(socket.sent.length, 2);
+    const guidance = JSON.parse(socket.sent[1]!);
+    assert.equal(guidance.type, "prompt");
+    assert.equal(guidance.text, "focus on the failing test");
+    assert.notEqual(guidance.requestId, initial.requestId);
+
+    emit(client, { type: "prompt_received", requestId: guidance.requestId });
+    assert.equal(client.state.promptStatus, "running");
+    assert.equal(
+      client.state.optimisticMessages.length,
+      2,
+      "accepted guidance stays visible until the authoritative user item arrives",
+    );
+  } finally {
+    restore();
+  }
+});
+
 test("the first delta of a stream is not held for a full flush window", async () => {
   const { client, restore } = createConnectedClient();
   try {
@@ -821,6 +928,39 @@ test("a reconnect advertises the last contiguous event sequence", () => {
     const url = new URL(socket.url);
     assert.equal(url.searchParams.get("session"), "session-a");
     assert.equal(url.searchParams.get("since"), "12");
+  } finally {
+    client.dispose();
+    Object.defineProperty(globalThis, "WebSocket", {
+      configurable: true,
+      value: previousWebSocket,
+    });
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: previousLocation,
+    });
+  }
+});
+
+test("a new draft advertises the selected backend without changing existing-session URLs", () => {
+  const previousLocation = (globalThis as { location?: unknown }).location;
+  const previousWebSocket = (globalThis as { WebSocket?: unknown }).WebSocket;
+  Object.defineProperty(globalThis, "location", {
+    configurable: true,
+    value: { protocol: "http:", host: "localhost" },
+  });
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    value: FakeWebSocket,
+  });
+  const client = new ChatClient();
+  try {
+    client.connect(null, { force: true, agent: "codex" });
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    assert.equal(new URL(socket.url).searchParams.get("agent"), "codex");
+
+    client.connect("session-a");
+    const existingSocket = (client as unknown as { ws: FakeWebSocket }).ws;
+    assert.equal(new URL(existingSocket.url).searchParams.get("agent"), null);
   } finally {
     client.dispose();
     Object.defineProperty(globalThis, "WebSocket", {
