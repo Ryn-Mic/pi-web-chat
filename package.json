@@ -1,6 +1,6 @@
 {
   "name": "@ryn-mic/web-chat",
-  "version": "0.1.108",
+  "version": "0.1.109",
   "description": "Mobile-friendly Web UI for pi and Codex coding agents",
   "type": "module",
   "license": "MIT",
@@ -49,6 +49,9 @@
     "test:e2e": "playwright test",
     "start": "node bin/pi-web-chat.mjs",
     "typecheck": "tsc --noEmit",
+    "notes:check:tree": "tsx .agents/skills/write-notes-like-deepseek/scripts/verify-agent-note-tree.ts",
+    "notes:check:format": "tsx .agents/skills/write-notes-like-deepseek/scripts/verify-agent-note-format.ts",
+    "notes:check": "npm run notes:check:tree && npm run notes:check:format",
     "prepack": "npm run build",
     "pack:check": "npm run build && node scripts/check-pack-size.mjs"
   },

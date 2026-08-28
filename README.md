@@ -91,7 +91,7 @@ npm i -g @earendil-works/pi-coding-agent
 pi install npm:@ryn-mic/web-chat
 
 # 或安装当前 GitHub Release
-pi install git:github.com/Ryn-Mic/pi-web-chat@v0.1.108
+pi install git:github.com/Ryn-Mic/pi-web-chat@v0.1.109
 ```
 
 npm 包名是 `@ryn-mic/web-chat`；产品名与本地命令仍为 `pi-web-chat`，启动方式仍是 `pi --web`。
@@ -219,8 +219,11 @@ Pi 模型认证沿用 `~/.pi/agent/auth.json`；请先在 pi CLI 中完成登录
 
 ## 开发与发布
 
+工程约束见 [AGENTS.md](AGENTS.md)，完整资料入口见 [docs/README.md](docs/README.md)。
+
 ```bash
 npm install
+npm run notes:check
 npm run typecheck
 npm test
 npm run build
