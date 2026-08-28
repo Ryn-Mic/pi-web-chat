@@ -29,7 +29,7 @@ function git(...args: string[]) {
 
 function fixture() {
   root = mkdtempSync(join(tmpdir(), "pi-git-test-"));
-  git("init", "-q");
+  git("init", "-q", "--initial-branch=main");
   git("config", "user.email", "test@example.com");
   git("config", "user.name", "Git Test");
   writeFileSync(join(root, "README.md"), "one\n");

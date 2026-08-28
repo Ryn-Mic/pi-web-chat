@@ -2889,16 +2889,19 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
+    // Validate static paths even when no production build is present. This keeps
+    // malformed request handling independent from whether dist/public exists.
+    let pathname: string;
+    try {
+      pathname = decodeURIComponent(url.pathname);
+    } catch {
+      res.writeHead(400, { "content-type": "text/plain" });
+      res.end("Bad request");
+      return;
+    }
+
     // Static files (production build)
     if (existsSync(DIST_DIR)) {
-      let pathname: string;
-      try {
-        pathname = decodeURIComponent(url.pathname);
-      } catch {
-        res.writeHead(400, { "content-type": "text/plain" });
-        res.end("Bad request");
-        return;
-      }
       const viewerPrefix = "/file-viewer/";
       const isViewer = pathname.startsWith(viewerPrefix);
 
