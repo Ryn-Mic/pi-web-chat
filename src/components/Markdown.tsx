@@ -16,6 +16,55 @@ import { streamdownPlugins } from "../lib/streamdownCode";
 
 export { streamdownPlugins } from "../lib/streamdownCode";
 
+/**
+ * Keep GFM tables and task lists, but treat tildes as ordinary chat text.
+ * Korean and other conversational text commonly uses `~` as punctuation,
+ * while remark-gfm enables both single- and double-tilde strikethrough.
+ */
+function remarkNoStrikethrough(this: unknown) {
+  const data = (this as { data?: () => unknown }).data?.() as
+    | Record<string, unknown>
+    | undefined;
+  const extensions = data?.micromarkExtensions as
+    | Record<string, unknown>[]
+    | undefined;
+
+  for (const extension of extensions ?? []) {
+    const text = extension.text as Record<string, unknown> | undefined;
+    if (text && Array.isArray(text["126"])) {
+      const kept = (text["126"] as { name?: string }[]).filter(
+        (tokenizer) => tokenizer?.name !== "strikethrough",
+      );
+      if (kept.length > 0) text["126"] = kept;
+      else delete text["126"];
+    }
+
+    const insideSpan = extension.insideSpan as Record<string, unknown> | undefined;
+    for (const key of Object.keys(insideSpan ?? {})) {
+      const tokenizers = insideSpan?.[key];
+      if (!Array.isArray(tokenizers)) continue;
+      const kept = (tokenizers as { name?: string }[]).filter(
+        (tokenizer) => tokenizer?.name !== "strikethrough",
+      );
+      if (kept.length > 0) insideSpan![key] = kept;
+      else delete insideSpan![key];
+    }
+
+    const attentionMarkers = extension.attentionMarkers as
+      | Record<string, unknown>
+      | undefined;
+    for (const key of Object.keys(attentionMarkers ?? {})) {
+      const markers = attentionMarkers?.[key];
+      if (!Array.isArray(markers)) continue;
+      const kept = (markers as number[]).filter((code) => code !== 126);
+      if (kept.length > 0) attentionMarkers![key] = kept;
+      else delete attentionMarkers![key];
+    }
+  }
+
+  return () => {};
+}
+
 export interface MessageFilePreview {
   cwd: string;
   path: string;
@@ -168,6 +217,7 @@ export const Markdown = memo(function Markdown({
   const remarkPlugins = useMemo(
     () => [
       ...Object.values(defaultRemarkPlugins),
+      remarkNoStrikethrough,
       [remarkMessageFileReferences, { cwd }] as [
         typeof remarkMessageFileReferences,
         { cwd?: string },
@@ -177,7 +227,7 @@ export const Markdown = memo(function Markdown({
   );
 
   return (
-    <div className="message-markdown max-w-none leading-[1.6]">
+    <div className="message-markdown min-w-0 max-w-none leading-[1.6]">
       <Streamdown
         key={cwd ?? "no-workspace"}
         mode={streaming ? "streaming" : "static"}

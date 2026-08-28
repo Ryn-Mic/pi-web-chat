@@ -311,6 +311,7 @@ export function ChatPage() {
         ) : (
           <>
             <MessageList
+              key={activeTabKey}
               messages={messages}
               streamText={streamText}
               streamThinking={streamThinking}

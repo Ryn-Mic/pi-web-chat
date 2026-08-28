@@ -1,4 +1,13 @@
-import { memo, type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  type CSSProperties,
+  type TouchEvent,
+  type WheelEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { UIAgentKind, UIContentBlock, UIMessage } from "../../shared/protocol";
 import { chatClient, type ActiveTool } from "../lib/chat";
 import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
@@ -22,6 +31,9 @@ import {
   type PreviewMessageFile,
 } from "./Markdown";
 import { Streamdown } from "streamdown";
+
+/** Only re-enable auto-follow when the viewport is genuinely at the bottom. */
+const BOTTOM_TOLERANCE = 8;
 
 /** todo 工具: 状态 → 표시 색/심볼 */
 function TodoStatusIcon({ status }: { status: string }) {
@@ -707,6 +719,10 @@ export function MessageList({
   const t = useT();
   const chatFontSize = useChatFontSize();
   const stickToBottom = useRef(true);
+  const previousScrollHeight = useRef(0);
+  const pendingBottomSnap = useRef(false);
+  const bottomSnapBaseline = useRef(0);
+  const touchStartY = useRef<number | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const chatStyle = {
     "--chat-font-size": `${chatFontSizePixels(chatFontSize)}px`,
@@ -717,6 +733,7 @@ export function MessageList({
     const previousHeight = container?.scrollHeight ?? 0;
     const previousTop = container?.scrollTop ?? 0;
     stickToBottom.current = false;
+    pendingBottomSnap.current = false;
     setIsAtBottom(false);
     const loaded = await onLoadOlder();
     if (!loaded) return;
@@ -724,6 +741,7 @@ export function MessageList({
       const current = containerRef.current;
       if (!current) return;
       current.scrollTop = previousTop + (current.scrollHeight - previousHeight);
+      previousScrollHeight.current = current.scrollHeight;
     });
   };
 
@@ -731,24 +749,96 @@ export function MessageList({
     const el = containerRef.current;
     if (!el) return;
     stickToBottom.current = true;
+    pendingBottomSnap.current = false;
+    previousScrollHeight.current = 0;
     setIsAtBottom(true);
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   };
 
-  // Scroll to bottom on new content. rAF-coalesced and gated on the user
-  // already being at the bottom — the old bare scrollIntoView ran on every
-  // render (per stream delta) and forced synchronous layout.
+  // Coalesce streaming updates into one scroll per frame. Compare the current
+  // position with the pre-render height so a delayed scroll event cannot let a
+  // token render yank the user back down after they started scrolling upward.
   useEffect(() => {
-    if (!stickToBottom.current) return;
     const container = containerRef.current;
     if (!container) return;
+
+    const priorHeight = previousScrollHeight.current;
+    const wasAtBottomBeforeRender =
+      container.scrollTop + container.clientHeight >= priorHeight - BOTTOM_TOLERANCE;
+    previousScrollHeight.current = container.scrollHeight;
+
+    if (!stickToBottom.current) {
+      pendingBottomSnap.current = false;
+      return;
+    }
+    if (wasAtBottomBeforeRender && !pendingBottomSnap.current) {
+      pendingBottomSnap.current = true;
+      bottomSnapBaseline.current = priorHeight;
+    }
+    if (!pendingBottomSnap.current) return;
+
     const raf = requestAnimationFrame(() => {
-      if (!stickToBottom.current) return;
-      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
-      if (distance > 1) container.scrollTop = container.scrollHeight;
+      if (!stickToBottom.current || !pendingBottomSnap.current) return;
+      pendingBottomSnap.current = false;
+
+      const current = containerRef.current;
+      if (!current) return;
+      const userStayedAtBottom =
+        current.scrollTop + current.clientHeight >=
+        bottomSnapBaseline.current - BOTTOM_TOLERANCE;
+      if (!userStayedAtBottom) {
+        stickToBottom.current = false;
+        setIsAtBottom(false);
+        return;
+      }
+
+      const distance = current.scrollHeight - current.scrollTop - current.clientHeight;
+      if (distance > 1) current.scrollTop = current.scrollHeight;
+      previousScrollHeight.current = current.scrollHeight;
     });
     return () => cancelAnimationFrame(raf);
-  }, [messages, streamText, streamThinking, activeTools, isStreaming, containerRef]);
+  }, [
+    messages,
+    streamText,
+    streamThinking,
+    activeTools,
+    isStreaming,
+    containerRef,
+    chatFontSize,
+  ]);
+
+  const handleScroll = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    const atBottom =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_TOLERANCE;
+    stickToBottom.current = atBottom;
+    if (!atBottom) pendingBottomSnap.current = false;
+    setIsAtBottom(atBottom);
+  };
+
+  const handleWheel = (event: WheelEvent) => {
+    // Ctrl+wheel is trackpad pinch zoom rather than scroll intent.
+    if (event.ctrlKey || event.deltaY >= 0) return;
+    stickToBottom.current = false;
+    pendingBottomSnap.current = false;
+    setIsAtBottom(false);
+  };
+
+  const handleTouchStart = (event: TouchEvent) => {
+    touchStartY.current = event.touches[0]?.clientY ?? null;
+  };
+
+  const handleTouchMove = (event: TouchEvent) => {
+    if (touchStartY.current === null) return;
+    const y = event.touches[0]?.clientY;
+    // A downward finger movement scrolls toward older content. Unpin on the
+    // first pixel, before the browser's asynchronous scroll event arrives.
+    if (y == null || y <= touchStartY.current) return;
+    stickToBottom.current = false;
+    pendingBottomSnap.current = false;
+    setIsAtBottom(false);
+  };
 
   // Only show ... while waiting for a response (hidden when final assistant
   // text exists → no ghost dots after the stream ends)
@@ -764,13 +854,10 @@ export function MessageList({
     <div className="message-list relative min-h-0 min-w-0 flex-1" style={chatStyle}>
       <div
         ref={containerRef}
-        onScroll={() => {
-          const el = containerRef.current;
-          if (!el) return;
-          const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-          stickToBottom.current = atBottom;
-          setIsAtBottom(atBottom);
-        }}
+        onScroll={handleScroll}
+        onWheel={handleWheel}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
         className="thin-scroll h-full overflow-x-hidden overflow-y-auto"
       >
         <div className="mx-auto flex min-w-0 max-w-3xl flex-col gap-4 px-3 py-4 sm:gap-5 sm:px-4 sm:py-5 min-h-full">
