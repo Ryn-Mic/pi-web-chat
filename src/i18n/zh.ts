@@ -146,6 +146,7 @@ export const zh: Messages = {
   scopeTemporary: "临时",
   tools: "工具",
   commands: "命令",
+  commandSourceCodex: "Codex",
   commandSourceBuiltin: "内置",
   commandSourceExtension: "扩展",
   commandSourcePrompt: "提示词",

@@ -153,6 +153,349 @@ test("keeps an optimistic prompt visible when the server rejects it", () => {
   }
 });
 
+test("settles a slash command only when its correlated terminal result arrives", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    client.send({ type: "prompt", text: "/status" });
+    const command = JSON.parse(socket.sent[0]!);
+
+    emit(client, { type: "command_result", message: "Codex status: idle", requestId: "another-request" });
+    assert.equal(client.state.promptStatus, "sending");
+    assert.equal(client.state.optimisticMessages.length, 1);
+
+    emit(client, { type: "command_result", message: "Codex status: idle", requestId: command.requestId });
+    assert.equal(client.state.promptStatus, "idle");
+    assert.equal(client.state.optimisticMessages.length, 0);
+    assert.equal(client.state.lastNotice, "Codex status: idle");
+  } finally {
+    restore();
+  }
+});
+
+test("a slash command result does not clear an unrelated pending Codex steer", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, {
+      type: "snapshot",
+      seq: 0,
+      revision: 0,
+      snapshot: {
+        messages: [],
+        isStreaming: true,
+        model: { provider: "codex", id: "gpt-test" },
+        thinkingLevel: "medium",
+        thinkingLevels: ["medium", "high"],
+        agent: "codex",
+      },
+    });
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    assert.equal(client.send({ type: "prompt", text: "keep checking" }), true);
+    const first = JSON.parse(socket.sent.at(-1)!);
+    emit(client, { type: "prompt_received", requestId: first.requestId });
+
+    assert.equal(client.send({ type: "prompt", text: "/status" }), true);
+    const command = JSON.parse(socket.sent.at(-1)!);
+    emit(client, { type: "command_result", message: "Codex status: running", requestId: command.requestId });
+
+    const pendingSteers = (client as unknown as { pendingSteers: Map<string, unknown> }).pendingSteers;
+    assert.equal(pendingSteers.has(first.requestId), true);
+    assert.equal(pendingSteers.has(command.requestId), false);
+    assert.equal(client.state.optimisticMessages.length, 1);
+    assert.equal(client.state.optimisticMessages[0]?.content[0]?.text, "keep checking");
+    assert.equal(client.state.promptStatus, "running");
+  } finally {
+    restore();
+  }
+});
+
+test("agent_end preserves a running Web slash command until its correlated terminal arrives", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, {
+      type: "snapshot",
+      seq: 0,
+      revision: 0,
+      snapshot: {
+        messages: [],
+        isStreaming: true,
+        model: { provider: "codex", id: "gpt-test" },
+        thinkingLevel: "medium",
+        thinkingLevels: ["medium", "high"],
+        agent: "codex",
+      },
+    });
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    assert.equal(client.send({ type: "prompt", text: "/status" }), true);
+    const command = JSON.parse(socket.sent.at(-1)!);
+
+    emit(client, { type: "agent_end", seq: 1 });
+
+    const pendingSteers = (client as unknown as { pendingSteers: Map<string, unknown> }).pendingSteers;
+    assert.equal(pendingSteers.has(command.requestId), true);
+    assert.equal(client.state.optimisticMessages.length, 1);
+    assert.equal(client.state.promptStatus, "sending");
+    assert.equal(client.state.snapshot?.isStreaming, false);
+
+    emit(client, { type: "command_result", message: "Codex status: idle", requestId: command.requestId });
+    assert.equal(pendingSteers.size, 0);
+    assert.equal(client.state.optimisticMessages.length, 0);
+    assert.equal(client.state.promptStatus, "idle");
+  } finally {
+    restore();
+  }
+});
+
+test("a command terminal does not clear an unrelated failed steer restored to the composer", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, {
+      type: "snapshot",
+      seq: 0,
+      revision: 0,
+      snapshot: {
+        messages: [],
+        isStreaming: true,
+        model: { provider: "codex", id: "gpt-test" },
+        thinkingLevel: "medium",
+        thinkingLevels: ["medium", "high"],
+        agent: "codex",
+      },
+    });
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    client.send({ type: "prompt", text: "ordinary steer" });
+    const steer = JSON.parse(socket.sent.at(-1)!);
+    emit(client, { type: "prompt_received", requestId: steer.requestId });
+    client.send({ type: "prompt", text: "/status" });
+    const command = JSON.parse(socket.sent.at(-1)!);
+
+    emit(client, { type: "error", message: "steer failed", requestId: steer.requestId });
+    assert.equal(client.state.restorePrompt?.text, "ordinary steer");
+    emit(client, { type: "command_result", message: "Codex status: running", requestId: command.requestId });
+
+    assert.equal(client.state.restorePrompt?.text, "ordinary steer");
+  } finally {
+    restore();
+  }
+});
+
+test("snapshot reconciliation does not clear another command's restored input", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, {
+      type: "snapshot",
+      seq: 0,
+      revision: 0,
+      snapshot: {
+        messages: [],
+        isStreaming: true,
+        model: { provider: "codex", id: "gpt-test" },
+        thinkingLevel: "medium",
+        thinkingLevels: ["medium", "high"],
+        agent: "codex",
+      },
+    });
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    client.send({ type: "prompt", text: "ordinary steer" });
+    const steer = JSON.parse(socket.sent.at(-1)!);
+    emit(client, { type: "prompt_received", requestId: steer.requestId });
+    client.send({ type: "prompt", text: "/bad-command" });
+    const command = JSON.parse(socket.sent.at(-1)!);
+    emit(client, { type: "error", message: "unknown command", requestId: command.requestId });
+    assert.equal(client.state.restorePrompt?.text, "/bad-command");
+
+    emit(client, {
+      type: "snapshot",
+      seq: 1,
+      revision: 1,
+      snapshot: {
+        messages: [{ role: "user", content: [{ type: "text", text: "ordinary steer" }] }],
+        isStreaming: true,
+        model: { provider: "codex", id: "gpt-test" },
+        thinkingLevel: "medium",
+        thinkingLevels: ["medium", "high"],
+        agent: "codex",
+      },
+    });
+
+    assert.equal(client.state.restorePrompt?.text, "/bad-command");
+  } finally {
+    restore();
+  }
+});
+
+test("an old uncorrelated command result does not guess between pending Codex steers", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, {
+      type: "snapshot",
+      seq: 0,
+      revision: 0,
+      snapshot: {
+        messages: [],
+        isStreaming: true,
+        model: { provider: "codex", id: "gpt-test" },
+        thinkingLevel: "medium",
+        thinkingLevels: ["medium", "high"],
+        agent: "codex",
+      },
+    });
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    client.send({ type: "prompt", text: "first steer" });
+    const first = JSON.parse(socket.sent.at(-1)!);
+    emit(client, { type: "prompt_received", requestId: first.requestId });
+    client.send({ type: "prompt", text: "second steer" });
+    const second = JSON.parse(socket.sent.at(-1)!);
+    emit(client, { type: "prompt_received", requestId: second.requestId });
+
+    emit(client, { type: "command_result", message: "legacy terminal" });
+
+    const pendingSteers = (client as unknown as { pendingSteers: Map<string, unknown> }).pendingSteers;
+    assert.equal(pendingSteers.size, 2);
+    assert.equal(client.state.optimisticMessages.length, 2);
+    assert.equal(client.state.promptStatus, "running");
+  } finally {
+    restore();
+  }
+});
+
+test("an old uncorrelated slash result settles the slash without clearing an ordinary steer", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, {
+      type: "snapshot",
+      seq: 0,
+      revision: 0,
+      snapshot: {
+        messages: [],
+        isStreaming: true,
+        model: { provider: "codex", id: "gpt-test" },
+        thinkingLevel: "medium",
+        thinkingLevels: ["medium", "high"],
+        agent: "codex",
+      },
+    });
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    client.send({ type: "prompt", text: "ordinary steer" });
+    const steer = JSON.parse(socket.sent.at(-1)!);
+    emit(client, { type: "prompt_received", requestId: steer.requestId });
+    client.send({ type: "prompt", text: "/status" });
+    const slash = JSON.parse(socket.sent.at(-1)!);
+    emit(client, { type: "prompt_received", requestId: slash.requestId });
+
+    emit(client, { type: "command_result", message: "legacy status terminal" });
+
+    const pendingSteers = (client as unknown as { pendingSteers: Map<string, unknown> }).pendingSteers;
+    assert.equal(pendingSteers.has(steer.requestId), true);
+    assert.equal(pendingSteers.has(slash.requestId), false);
+    assert.equal(client.state.optimisticMessages.length, 1);
+    assert.equal(client.state.optimisticMessages[0]?.content[0]?.text, "ordinary steer");
+    assert.equal(client.state.promptStatus, "running");
+  } finally {
+    restore();
+  }
+});
+
+test("an old uncorrelated slash error restores the sole failed command", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, {
+      type: "snapshot",
+      seq: 0,
+      revision: 0,
+      snapshot: {
+        messages: [],
+        isStreaming: false,
+        model: { provider: "codex", id: "gpt-test" },
+        thinkingLevel: "medium",
+        thinkingLevels: ["medium", "high"],
+        agent: "codex",
+      },
+    });
+    client.send({ type: "prompt", text: "/bad" });
+    emit(client, { type: "error", message: "legacy unknown command" });
+
+    assert.equal(client.state.promptStatus, "idle");
+    assert.equal(client.state.restorePrompt?.text, "/bad");
+    assert.equal(client.state.optimisticMessages[0]?.errorMessage, "legacy unknown command");
+  } finally {
+    restore();
+  }
+});
+
+test("an old uncorrelated slash error does not fail an ordinary Codex steer", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, {
+      type: "snapshot",
+      seq: 0,
+      revision: 0,
+      snapshot: {
+        messages: [],
+        isStreaming: true,
+        model: { provider: "codex", id: "gpt-test" },
+        thinkingLevel: "medium",
+        thinkingLevels: ["medium", "high"],
+        agent: "codex",
+      },
+    });
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    client.send({ type: "prompt", text: "ordinary steer" });
+    const steer = JSON.parse(socket.sent.at(-1)!);
+    emit(client, { type: "prompt_received", requestId: steer.requestId });
+    client.send({ type: "prompt", text: "/bad" });
+    const slash = JSON.parse(socket.sent.at(-1)!);
+    emit(client, { type: "prompt_received", requestId: slash.requestId });
+
+    emit(client, { type: "error", message: "legacy unknown command" });
+
+    const pendingSteers = (client as unknown as { pendingSteers: Map<string, unknown> }).pendingSteers;
+    assert.equal(pendingSteers.has(steer.requestId), true);
+    assert.equal(pendingSteers.has(slash.requestId), false);
+    assert.equal(client.state.restorePrompt?.text, "/bad");
+    assert.equal(client.state.promptStatus, "running");
+    assert.equal(client.state.optimisticMessages.some((message) => message.content[0]?.text === "ordinary steer"), true);
+  } finally {
+    restore();
+  }
+});
+
+test("an ambiguous old uncorrelated error preserves every pending steer", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, {
+      type: "snapshot",
+      seq: 0,
+      revision: 0,
+      snapshot: {
+        messages: [],
+        isStreaming: true,
+        model: { provider: "codex", id: "gpt-test" },
+        thinkingLevel: "medium",
+        thinkingLevels: ["medium", "high"],
+        agent: "codex",
+      },
+    });
+    const socket = (client as unknown as { ws: FakeWebSocket }).ws;
+    client.send({ type: "prompt", text: "/first" });
+    const first = JSON.parse(socket.sent.at(-1)!);
+    emit(client, { type: "prompt_received", requestId: first.requestId });
+    client.send({ type: "prompt", text: "/second" });
+    const second = JSON.parse(socket.sent.at(-1)!);
+    emit(client, { type: "prompt_received", requestId: second.requestId });
+
+    emit(client, { type: "error", message: "legacy ambiguous error" });
+
+    const pendingSteers = (client as unknown as { pendingSteers: Map<string, unknown> }).pendingSteers;
+    assert.equal(pendingSteers.size, 2);
+    assert.equal(client.state.optimisticMessages.every((message) => message.errorMessage === undefined), true);
+    assert.equal(client.state.lastError, "legacy ambiguous error");
+    assert.equal(client.state.promptStatus, "running");
+  } finally {
+    restore();
+  }
+});
+
 test("does not enter loading when the prompt cannot be sent", () => {
   const previousWebSocket = (globalThis as { WebSocket?: unknown }).WebSocket;
   Object.defineProperty(globalThis, "WebSocket", {
@@ -957,10 +1300,22 @@ test("a new draft advertises the selected backend without changing existing-sess
     client.connect(null, { force: true, agent: "codex" });
     const socket = (client as unknown as { ws: FakeWebSocket }).ws;
     assert.equal(new URL(socket.url).searchParams.get("agent"), "codex");
+    const firstDraft = new URL(socket.url).searchParams.get("draft");
+    assert.ok(firstDraft);
+
+    (client as unknown as { ws: FakeWebSocket | null }).ws = null;
+    client.connect(null);
+    const reconnectSocket = (client as unknown as { ws: FakeWebSocket }).ws;
+    assert.equal(new URL(reconnectSocket.url).searchParams.get("draft"), firstDraft);
 
     client.connect("session-a");
     const existingSocket = (client as unknown as { ws: FakeWebSocket }).ws;
     assert.equal(new URL(existingSocket.url).searchParams.get("agent"), null);
+    assert.equal(new URL(existingSocket.url).searchParams.get("draft"), null);
+
+    client.connect(null, { force: true, agent: "codex" });
+    const nextDraftSocket = (client as unknown as { ws: FakeWebSocket }).ws;
+    assert.notEqual(new URL(nextDraftSocket.url).searchParams.get("draft"), firstDraft);
   } finally {
     client.dispose();
     Object.defineProperty(globalThis, "WebSocket", {

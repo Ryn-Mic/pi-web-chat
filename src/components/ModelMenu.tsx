@@ -16,7 +16,15 @@ function matchesQuery(model: UIModel, q: string) {
   return hay.includes(q);
 }
 
-export function ModelMenu({ current, openToken = 0 }: { current: UIModel | null; openToken?: number }) {
+export function ModelMenu({
+  current,
+  openToken = 0,
+  disabled = false,
+}: {
+  current: UIModel | null;
+  openToken?: number;
+  disabled?: boolean;
+}) {
   const t = useT();
   const { snapshot } = useChat();
   const { data: models, isPending, isFetching } = useModels(snapshot?.agent);
@@ -51,12 +59,16 @@ export function ModelMenu({ current, openToken = 0 }: { current: UIModel | null;
   }, [open]);
 
   useEffect(() => {
-    if (openToken > 0) setOpen(true);
-  }, [openToken]);
+    if (disabled) setOpen(false);
+    else if (openToken > 0) setOpen(true);
+  }, [disabled, openToken]);
 
   return (
-    <Menu.Root open={open} onOpenChange={setOpen}>
-      <Menu.Trigger className="max-w-[40vw] truncate rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-hover hover:text-ink sm:max-w-xs">
+    <Menu.Root open={disabled ? false : open} onOpenChange={setOpen}>
+      <Menu.Trigger
+        disabled={disabled}
+        className="max-w-[40vw] truncate rounded-lg px-2.5 py-1.5 text-[13px] text-muted transition-colors hover:bg-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-50 sm:max-w-xs"
+      >
         {current ? (current.name ?? current.id) : t("selectModel")}
       </Menu.Trigger>
       <Menu.Portal>

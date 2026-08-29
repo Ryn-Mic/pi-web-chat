@@ -193,8 +193,8 @@ async function nextTask(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-async function waitUntil(predicate: () => boolean, message: string): Promise<void> {
-  const deadline = Date.now() + 2_000;
+async function waitUntil(predicate: () => boolean, message: string, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error(message);
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -536,6 +536,146 @@ test("history invalidation received during a refresh schedules one deterministic
   }
 });
 
+test("native compact and review commands use structured thread RPCs and publish review lifecycle items", async () => {
+  const process = new FakeRpcProcess((request, fake) => {
+    if (request.method === "initialize") fake.respond(request, {});
+    else if (request.method === "thread/resume") {
+      fake.respond(request, {
+        thread: { id: "thr_commands", status: { type: "idle" } },
+        initialTurnsPage: { data: [], nextCursor: null },
+      });
+    } else if (request.method === "thread/compact/start") {
+      fake.respond(request, {});
+    } else if (request.method === "review/start") {
+      const turn = { id: "turn_review", status: "inProgress", items: [] };
+      fake.respond(request, { turn, reviewThreadId: "thr_commands" });
+    }
+  });
+  const { spawnProcess } = fakeSpawner(() => process);
+  const events: CodexSessionEvent[] = [];
+  const session = new CodexSession({
+    cwd: "/tmp/project",
+    state: { threadId: "thr_commands" },
+    onEvent: (event) => events.push(event),
+    spawnProcess,
+  });
+
+  try {
+    await session.connect();
+    events.length = 0;
+    await session.compact();
+    assert.deepEqual(process.requests("thread/compact/start")[0]?.params, { threadId: "thr_commands" });
+    assert.equal(session.isStreaming, true, "accepted compaction must occupy the response/notification gap");
+    assert.equal(session.controlOperation, "compact");
+    assert.equal(session.canSteer, false);
+    assert.equal(session.canAbort, false, "stop must stay disabled until app-server publishes a turn id");
+    await assert.rejects(
+      session.review({ type: "uncommittedChanges" }),
+      /compact is already running/,
+    );
+    await assert.rejects(session.prompt("do not race compaction"), /compact is running/);
+    process.notify("turn/started", {
+      threadId: "thr_commands",
+      turn: { id: "turn_compact", status: "inProgress" },
+    });
+    assert.equal(session.controlOperation, "compact", "control turns stay non-steerable after turn/started");
+    assert.equal(session.canSteer, false);
+    assert.equal(session.canAbort, true);
+    await assert.rejects(session.prompt("still do not steer compaction"), /compact is running/);
+    process.notify("item/completed", {
+      threadId: "thr_commands",
+      item: { type: "contextCompaction", id: "compact_item" },
+    });
+    process.notify("turn/completed", {
+      threadId: "thr_commands",
+      turn: { id: "turn_compact", status: "completed" },
+    });
+    await waitUntil(() => !session.isStreaming, "compaction lifecycle did not release its barrier");
+
+    await session.review({ type: "baseBranch", branch: "origin/main" });
+    assert.deepEqual(process.requests("review/start")[0]?.params, {
+      threadId: "thr_commands",
+      target: { type: "baseBranch", branch: "origin/main" },
+      delivery: "inline",
+    });
+    assert.equal(session.controlOperation, "review");
+    assert.equal(session.canSteer, false);
+    assert.equal(session.canAbort, true);
+    await assert.rejects(session.prompt("do not steer review"), /review is running/);
+    process.notify("item/completed", {
+      threadId: "thr_commands",
+      item: { type: "enteredReviewMode", id: "review_mode", review: "Review started" },
+    });
+    process.notify("turn/completed", {
+      threadId: "thr_commands",
+      turn: { id: "turn_review", status: "completed", items: [] },
+    });
+    await waitUntil(() => events.some((event) => event.type === "turn_end"), "review turn did not complete");
+    const lifecycleMessage = events.find((event) =>
+      event.type === "message"
+      && (event.message.content as Array<{ thinking?: unknown }> | undefined)?.[0]?.thinking === "Review started");
+    assert.ok(lifecycleMessage);
+    assert.equal(session.isStreaming, false);
+  } finally {
+    await session.dispose();
+  }
+});
+
+test("prompt preparation reserves the thread against compact and review", async () => {
+  const process = new FakeRpcProcess((request, fake) => {
+    if (request.method === "initialize") fake.respond(request, {});
+    else if (request.method === "thread/resume") {
+      fake.respond(request, {
+        thread: { id: "thr_prompt_reservation", status: { type: "idle" } },
+        initialTurnsPage: { data: [], nextCursor: null },
+      });
+    } else if (request.method === "turn/start") {
+      fake.respond(request, { turn: { id: "turn_prompt_reservation", status: "inProgress" } });
+      queueMicrotask(() => {
+        fake.notify("turn/completed", {
+          threadId: "thr_prompt_reservation",
+          turn: { id: "turn_prompt_reservation", status: "completed", items: [] },
+        });
+      });
+    }
+  });
+  const { spawnProcess } = fakeSpawner(() => process);
+  const session = new CodexSession({
+    cwd: "/tmp/project",
+    state: { threadId: "thr_prompt_reservation" },
+    spawnProcess,
+  });
+  let releaseInput!: () => void;
+  let inputStarted!: () => void;
+  const inputGate = new Promise<void>((resolve) => { releaseInput = resolve; });
+  const started = new Promise<void>((resolve) => { inputStarted = resolve; });
+
+  try {
+    await session.connect();
+    (session as unknown as {
+      createInput: () => Promise<{ input: []; cleanup: () => Promise<void> }>;
+    }).createInput = async () => {
+      inputStarted();
+      await inputGate;
+      return { input: [], cleanup: async () => {} };
+    };
+
+    const prompt = session.prompt("image prompt under preparation");
+    await started;
+    await assert.rejects(session.compact(), /pending Codex prompt/);
+    await assert.rejects(session.review({ type: "uncommittedChanges" }), /pending Codex prompt/);
+    assert.equal(process.requests("thread/compact/start").length, 0);
+    assert.equal(process.requests("review/start").length, 0);
+
+    releaseInput();
+    await prompt;
+    assert.equal(process.requests("turn/start").length, 1);
+  } finally {
+    releaseInput();
+    await session.dispose();
+  }
+});
+
 test("resuming and starting a turn do not overwrite native thread runtime policy", async () => {
   const process = new FakeRpcProcess((request, fake) => {
     if (request.method === "initialize") fake.respond(request, {});
@@ -643,6 +783,7 @@ test("resume restores only inProgress tools from the active turn", async () => {
             id: "turn_active",
             status: "inProgress",
             items: [
+              { id: "review_mode", type: "enteredReviewMode", review: "Reviewing changes" },
               { id: "tool_live", type: "commandExecution", command: "npm test", status: "inProgress" },
               { id: "tool_done", type: "commandExecution", command: "pwd", status: "completed", aggregatedOutput: "/tmp" },
               { id: "tool_failed", type: "commandExecution", command: "false", status: "failed", aggregatedOutput: "failed" },
@@ -666,6 +807,9 @@ test("resume restores only inProgress tools from the active turn", async () => {
   try {
     await session.connect();
     assert.deepEqual(session.activeTools.map((tool) => tool.toolCallId), ["tool_live"]);
+    assert.equal(session.controlOperation, "review");
+    assert.equal(session.canSteer, false, "a resumed review turn must not accept turn/steer");
+    assert.equal(session.canAbort, true);
     const history = events.find((event) => event.type === "history");
     assert.ok(history && history.type === "history");
     assert.deepEqual(history.activeTools.map((tool) => tool.toolCallId), ["tool_live"]);
@@ -1458,10 +1602,18 @@ test("writer-conflicted threads attach read-only and upgrade when the writer rel
       [{ toolCallId: "exec_live", toolName: "bash", args: { command: "watch me", cwd: undefined } }],
     );
     await assert.rejects(session.prompt("nope"), /只读浏览/);
+    process.sendServerRequest("observer-approval", "item/commandExecution/requestApproval", {
+      threadId: "thr_busy",
+      turnId: "turn_live",
+      itemId: "exec_live",
+      command: "echo must-stay-with-writer",
+    });
+    await nextTask();
+    assert.equal(session.pendingInteractions.length, 0, "observer must not claim the writer's approval");
 
     // Writer releases on the next poll tick (~2s): the session upgrades and
     // becomes writable without any reconnect.
-    await waitUntil(() => session.observerMode === false, "observer did not upgrade after writer release");
+    await waitUntil(() => session.observerMode === false, "observer did not upgrade after writer release", 4_500);
     const resetHistories = events.filter((event) => event.type === "history" && event.reset === true);
     assert.equal(resetHistories.length, 1, "the upgrade must re-baseline the transcript exactly once");
     const prompt = session.prompt("now mine");

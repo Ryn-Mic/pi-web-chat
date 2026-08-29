@@ -20,6 +20,14 @@ interface PendingImage extends UIImageAttachment {
   previewUrl: string;
 }
 
+const CODEX_OBSERVER_COMMANDS = new Set(["settings", "new", "resume", "copy", "diff", "status", "session"]);
+
+function isObserverCommand(text: string, hasImages: boolean): boolean {
+  if (hasImages) return false;
+  const match = /^\/([^\s]+)(?:\s|$)/.exec(text.trim());
+  return !!match?.[1] && CODEX_OBSERVER_COMMANDS.has(match[1]);
+}
+
 /** 12345 → "12.3k", 1234567 → "1.2M" */
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -169,6 +177,7 @@ export function Composer({
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [debouncedMentionQuery, setDebouncedMentionQuery] = useState("");
   const [modelOpenToken, setModelOpenToken] = useState(0);
+  const [reasoningOpenToken, setReasoningOpenToken] = useState(0);
   const [forkOpen, setForkOpen] = useState(false);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -200,20 +209,33 @@ export function Composer({
   // Read-only observation of a Codex session owned by another client: the
   // user can watch it but cannot prompt, steer or abort.
   const codexObserver = snapshot?.agent === "codex" && snapshot?.codex?.observer === true;
+  const observerCommand = codexObserver && isObserverCommand(text, images.length > 0);
+  const observerLocked = codexObserver && !observerCommand;
+  const codexControlOperation = snapshot?.agent === "codex" ? snapshot.codex?.controlOperation : undefined;
   const codexCanSteer =
-    codexRunning
+    !codexObserver
+    && codexRunning
+    && (snapshot?.codex?.canSteer ?? codexControlOperation === undefined)
     && (promptStatus === "idle" || promptStatus === "running");
+  const codexCanAbort =
+    !codexObserver
+    && codexRunning
+    && (snapshot?.codex?.canAbort ?? codexControlOperation === undefined);
   // The steer-send button only appears while a Codex turn is running when the
   // user is actually composing a steering message; an empty cleared input must
   // leave a single stop button (matching the pi look) instead of a duplicate
   // round send button.
   const canSubmit = !(processingImages || (!text.trim() && images.length === 0));
   const remoteActionMode: "pending" | "stop" | "send" =
-    codexObserver || ((!running && promptInFlight) || (codexRunning && !codexCanSteer))
+    observerLocked
       ? "pending"
-      : running
-        ? "stop"
-        : "send";
+      : observerCommand
+        ? "send"
+        : ((!running && promptInFlight) || (codexRunning && !codexCanSteer && !codexCanAbort))
+          ? "pending"
+          : running
+            ? "stop"
+            : "send";
   const remoteActionDisabled =
     remoteActionMode === "pending" || (remoteActionMode === "send" && !canSubmit);
 
@@ -278,6 +300,9 @@ export function Composer({
     if (!commandIntent) return;
     if (commandIntent.action === "open_model") {
       setModelOpenToken((token) => token + 1);
+      chatClient.consumeCommandIntent();
+    } else if (commandIntent.action === "open_reasoning") {
+      setReasoningOpenToken((token) => token + 1);
       chatClient.consumeCommandIntent();
     } else if (commandIntent.action === "open_fork") {
       setForkOpen(true);
@@ -374,9 +399,9 @@ export function Composer({
   const send = () => {
     const trimmed = text.trim();
     if (
-      codexObserver
+      observerLocked
       || (!trimmed && images.length === 0)
-      || (promptInFlight && !codexCanSteer)
+      || (!observerCommand && promptInFlight && !codexCanSteer)
       || processingImages
     ) return;
 
@@ -429,6 +454,7 @@ export function Composer({
             matches={matchingCommands}
             activeIndex={Math.min(activeCommandIndex, Math.max(0, matchingCommands.length - 1))}
             onSelect={(command) => completeCommand(command.name, command.argumentHint)}
+            agent={snapshot?.agent}
           />
         )}
         {mentionMode && (
@@ -608,10 +634,12 @@ export function Composer({
                 <path d="M12 5v14M5 12h14" strokeLinecap="round" />
               </svg>}
             </button>
-            <ModelMenu current={snapshot?.model ?? null} openToken={modelOpenToken} />
+            <ModelMenu current={snapshot?.model ?? null} openToken={modelOpenToken} disabled={codexObserver} />
             <ThinkingMenu
               current={snapshot?.thinkingLevel ?? "off"}
               levels={snapshot?.thinkingLevels ?? ["off"]}
+              openToken={reasoningOpenToken}
+              disabled={codexObserver}
             />
             <div className="flex-1" />
             <div
@@ -645,20 +673,20 @@ export function Composer({
               aria-label={
                 remoteActionMode === "stop"
                   ? t("abort")
-                  : codexObserver
+                  : observerLocked
                     ? t("codexObserverTitle")
                     : t("send")
               }
-              aria-busy={remoteActionMode === "pending" && !codexObserver}
+              aria-busy={remoteActionMode === "pending" && !observerLocked}
               title={
-                codexObserver
+                observerLocked
                   ? t("codexObserverHint")
                   : remoteActionMode === "stop"
                     ? t("abort")
                     : t("send")
               }
               className={`flex size-8 shrink-0 items-center justify-center rounded-full transition-opacity disabled:cursor-wait ${
-                codexObserver
+                observerLocked
                   ? "bg-canvas text-faint ring-1 ring-line/70"
                   : remoteActionMode === "stop"
                     ? "bg-ink text-canvas hover:opacity-85"
@@ -674,7 +702,7 @@ export function Composer({
               <RemoteActionIcon
                 mode={remoteActionMode}
                 size={19}
-                className={codexObserver ? "text-faint" : remoteActionMode === "stop" ? "text-canvas" : "text-accent-ink"}
+                className={observerLocked ? "text-faint" : remoteActionMode === "stop" ? "text-canvas" : "text-accent-ink"}
               />
             </button>
             {codexRunning && codexCanSteer && canSubmit && (

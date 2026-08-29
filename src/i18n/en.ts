@@ -152,6 +152,7 @@ export type Messages = {
   scopeTemporary: string;
   tools: string;
   commands: string;
+  commandSourceCodex: string;
   commandSourceBuiltin: string;
   commandSourceExtension: string;
   commandSourcePrompt: string;
@@ -421,6 +422,7 @@ export const en: Messages = {
   scopeTemporary: "Temporary",
   tools: "Tools",
   commands: "Commands",
+  commandSourceCodex: "Codex",
   commandSourceBuiltin: "Built-in",
   commandSourceExtension: "Extension",
   commandSourcePrompt: "Prompt",

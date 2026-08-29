@@ -150,6 +150,30 @@ pi-web-chat 3141 restart
 - **个性化**：系统/浅色/深色主题、pi/Codex 独立状态动效、自定义模型与供应商。
 - **PWA**：可安装到桌面或手机，带自动更新提示；API 与 WebSocket 不做离线缓存。
 
+## 聊天输入框中的 `/` 命令
+
+在输入框键入 `/` 会按当前会话的 Agent 展示命令面板。可使用上下方向键选择、`Tab` 补全、`Esc` 关闭，也可以直接点击或触摸命令；补全后按发送键执行。切换 Pi/Codex 会话时，目录会随连接刷新，不会把另一种 Agent 的命令带入当前会话。
+
+- **Pi 会话**：保留 Web 内置命令，并动态加入当前 Pi runtime 加载的 extension command、prompt template 与 skill。
+- **Codex 会话**：只展示 Web 明确实现的命令子集，不把终端显示、退出、删除、账号、插件或其他 TUI/宿主专属命令伪装成可用命令。
+
+> 升级服务后，已经打开或安装的 PWA 必须在出现版本更新提示时刷新，再使用新版斜杠命令。旧页面可以连接新版服务，但不承诺识别新增的界面动作或请求关联语义；斜杠命令的支持边界以页面与服务端版本一致为准。
+
+Codex 当前适配：
+
+| 命令 | Web 行为 |
+| --- | --- |
+| `/settings`、`/new`、`/resume` | 打开对应 Web 设置或会话界面 |
+| `/model [model]` | 无参数打开模型选择；也可设置 `model` 或 `codex/model` |
+| `/reasoning [level]` | 无参数打开推理档位；带参数时只接受当前模型支持的档位 |
+| `/fork`、`/copy`、`/diff` | 打开原生线程分叉、复制最后回复或 Git diff 工作区 |
+| `/rename <name>` | 重命名 Codex 草稿或原生线程；兼容旧别名 `/name` |
+| `/status` | 显示 thread、模型、推理档位、上下文、传输、cwd 与运行/observer 状态；兼容旧别名 `/session` |
+| `/compact` | 对已存在且空闲的原生 Codex thread 发起 context compaction |
+| `/review` | 默认审查未提交改动；支持 `--base <branch>`、`--commit <sha>` 或自定义审查说明 |
+
+`/compact` 与 `/review` 不会为了执行控制命令创建空白 Codex thread。请先在草稿中发送一条真实消息；运行中的任务需先停止，observer 会话需等待取得写权限。只读 observer 仅开放 `settings`、`new`、`resume`、`copy`、`diff` 与 `status`（兼容 `/session` 别名），不能通过命令、工具栏或直接协议消息修改模型/推理档位、回答审批或启动原生控制操作。这两个命令还要求本机 Codex app-server 支持对应 RPC；旧版不支持时会返回明确错误。未知 Codex 命令会明确报错，不会静默作为自然语言 prompt 发给模型。
+
 ## 常用命令
 
 ```bash

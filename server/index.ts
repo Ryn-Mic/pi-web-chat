@@ -38,6 +38,7 @@ import type {
   UIModelDiscoveryRequest,
   UIExtensionInfo,
   UICommandInfo,
+  UIClientAction,
   UIExtensionUIRequest,
   UISessionInfo,
   UISnapshot,
@@ -93,6 +94,7 @@ import {
   type CodexThreadInfo,
   type CodexTransportMode,
 } from "./codex.ts";
+import { CODEX_COMMANDS, parseCodexReviewTarget } from "./codex-commands.ts";
 import {
   forkCodexConnection,
   nativeCodexSessionId,
@@ -249,6 +251,7 @@ const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionMan
 // ---------------------------------------------------------------------------
 
 type SequencedServerEvent = Extract<ServerEvent, { seq: number }>;
+type CommandTerminalEvent = Extract<ServerEvent, { type: "command_result" | "client_action" | "error" }>;
 type SessionEventPayload = SequencedServerEvent extends infer Event
   ? Event extends SequencedServerEvent
     ? Omit<Event, "seq">
@@ -257,6 +260,8 @@ type SessionEventPayload = SequencedServerEvent extends infer Event
 
 interface SessionEntry {
   id: string;
+  /** Browser-generated identity that keeps an unpublished draft stable across reconnects. */
+  draftConnectionId?: string;
   agent: AgentKind;
   runtime: Awaited<ReturnType<typeof createAgentSessionRuntime>>;
   /** Native Codex thread controller; Pi runtime is compatibility-only and in-memory for native sessions. */
@@ -289,6 +294,12 @@ interface SessionEntry {
   extensionUIClient?: WebSocket;
   /** Recently accepted browser prompt IDs, used to deduplicate reconnect replays. */
   receivedPromptIds: Map<string, number>;
+  /** Web built-ins retain their terminal event so reconnect replays do not repeat side effects. */
+  commandReceipts: Map<string, {
+    at: number;
+    terminal?: CommandTerminalEvent;
+    waiters: Set<WebSocket>;
+  }>;
   pendingExtensionUI: Map<string, (response: { cancelled?: boolean; value?: string; confirmed?: boolean }) => void>;
   /** Revision and full value used as the base for suffix snapshot updates. */
   snapshotRevision: number;
@@ -306,6 +317,8 @@ interface SessionEntry {
 
 const entries = new Map<string, SessionEntry>();
 const pending = new Map<string, Promise<SessionEntry>>();
+const pendingDrafts = new Map<string, Promise<SessionEntry>>();
+const draftEntries = new Map<string, SessionEntry>();
 const wsEntry = new Map<WebSocket, SessionEntry>();
 /** Serializes later commands behind a native fork so they use the new binding. */
 const codexForksInFlight = new WeakMap<WebSocket, Promise<unknown>>();
@@ -511,6 +524,12 @@ function parseAgentKind(value: string | null): AgentKind | undefined {
   return value === "pi" || value === "codex" ? value : undefined;
 }
 
+function parseDraftConnectionId(value: string | null): string | undefined {
+  return value && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+    ? value.toLowerCase()
+    : undefined;
+}
+
 /** Rebuild the browser's fixed tail window from the runtime's current leaf. */
 function refreshEntryFileState(entry: SessionEntry) {
   entry.externalDecoder = new AppendedJsonlDecoder();
@@ -562,6 +581,7 @@ async function createEntry(
   id: string | null,
   cwd?: string,
   requestedAgent?: AgentKind,
+  draftConnectionId?: string,
 ): Promise<SessionEntry> {
   const nativeThreadId = nativeCodexThreadId(id);
   const nativeThread = nativeThreadId
@@ -618,6 +638,7 @@ async function createEntry(
       : undefined;
   entry = {
     id: canonicalId,
+    ...(draftConnectionId ? { draftConnectionId } : {}),
     agent,
     runtime,
     codex,
@@ -631,6 +652,7 @@ async function createEntry(
     // A null connect is a blank draft.
     published: id !== null,
     receivedPromptIds: new Map(),
+    commandReceipts: new Map(),
     pendingExtensionUI: new Map(),
     snapshotRevision: 0,
     snapshotMessageOffset: 0,
@@ -644,6 +666,7 @@ async function createEntry(
   };
   refreshEntryFileState(entry);
   entries.set(entry.id, entry);
+  if (draftConnectionId) draftEntries.set(draftConnectionId, entry);
   if (entry.codex && (nativeThreadId || path)) {
     await Promise.all([
       entry.codex.connect(),
@@ -666,7 +689,22 @@ async function acquireEntry(
   id: string | null,
   cwd?: string,
   requestedAgent?: AgentKind,
+  draftConnectionId?: string,
 ): Promise<SessionEntry> {
+  if (!id && draftConnectionId) {
+    const draft = draftEntries.get(draftConnectionId);
+    if (draft && entries.get(draft.id) === draft) {
+      if (draft.agent === "codex" && draft.published) await draft.codex?.connect();
+      return draft;
+    }
+    if (draft) draftEntries.delete(draftConnectionId);
+    const inflightDraft = pendingDrafts.get(draftConnectionId);
+    if (inflightDraft) return inflightDraft;
+    const created = createEntry(null, cwd, requestedAgent, draftConnectionId)
+      .finally(() => pendingDrafts.delete(draftConnectionId));
+    pendingDrafts.set(draftConnectionId, created);
+    return created;
+  }
   if (!id) return createEntry(null, cwd, requestedAgent);
   const hit = entries.get(id);
   if (hit) {
@@ -687,6 +725,9 @@ setInterval(() => {
     if (entry.clients.size > 0 || entryIsStreaming(entry)) continue;
     if (now - entry.lastActive < IDLE_TTL_MS) continue;
     entries.delete(entry.id);
+    if (entry.draftConnectionId && draftEntries.get(entry.draftConnectionId) === entry) {
+      draftEntries.delete(entry.draftConnectionId);
+    }
     entry.unsubscribe?.();
     void entry.codex?.dispose().catch(() => {});
     void entry.runtime.dispose().catch(() => {});
@@ -980,6 +1021,9 @@ function buildSnapshot(entry: SessionEntry): UISnapshot {
             threadId: codex?.currentThreadId,
             transport: codex?.transport ?? codexAppServer.activeTransport,
             ...(entry.codex?.observerMode === true ? { observer: true } : {}),
+            ...(codex?.controlOperation ? { controlOperation: codex.controlOperation } : {}),
+            canSteer: codex?.canSteer ?? false,
+            canAbort: codex?.canAbort ?? false,
             ...(codexRemoteStatusCache?.status.status
               ? { remoteControl: codexRemoteStatusCache.status.status }
               : {}),
@@ -1043,25 +1087,21 @@ const BUILTIN_COMMANDS: UICommandInfo[] = [
   { name: "session", description: "Show current session statistics", source: "builtin" },
   { name: "reload", description: "Reload extensions, skills, prompts, and themes", source: "builtin" },
 ];
-const CODEX_COMMANDS = BUILTIN_COMMANDS
-  .filter((command) =>
-    ["settings", "model", "new", "resume", "fork", "copy", "name", "session"].includes(command.name),
-  )
-  .map((command) =>
-    command.name === "fork"
-      ? { ...command, description: "Fork the current native Codex thread" }
-      : command,
-  );
+const BUILTIN_COMMAND_NAMES = new Set(BUILTIN_COMMANDS.map((command) => command.name));
+const CODEX_OBSERVER_COMMAND_NAMES = new Set(["settings", "new", "resume", "copy", "diff", "status", "session"]);
 
 function buildCommandCatalog(entry: SessionEntry): UICommandInfo[] {
-  if (entry.agent === "codex") return [...CODEX_COMMANDS];
+  if (entry.agent === "codex") {
+    return entry.codex?.observerMode
+      ? CODEX_COMMANDS.filter((command) => CODEX_OBSERVER_COMMAND_NAMES.has(command.name))
+      : [...CODEX_COMMANDS];
+  }
   const session = entry.runtime.session;
-  const builtinNames = new Set(BUILTIN_COMMANDS.map((command) => command.name));
   const commands: UICommandInfo[] = [...BUILTIN_COMMANDS];
 
   for (const command of session.extensionRunner.getRegisteredCommands()) {
     // Interactive mode reserves the un-suffixed built-in names too.
-    if (builtinNames.has(command.invocationName)) continue;
+    if (BUILTIN_COMMAND_NAMES.has(command.invocationName)) continue;
     commands.push({
       name: command.invocationName,
       description: command.description,
@@ -1070,7 +1110,7 @@ function buildCommandCatalog(entry: SessionEntry): UICommandInfo[] {
     });
   }
   for (const template of session.promptTemplates) {
-    if (builtinNames.has(template.name)) continue;
+    if (BUILTIN_COMMAND_NAMES.has(template.name)) continue;
     commands.push({
       name: template.name,
       description: template.description,
@@ -1134,6 +1174,7 @@ function handleCodexEvent(entry: SessionEntry, event: CodexSessionEvent): void {
       // update that only changes cwd still has to refresh file/Git authority in
       // every connected browser.
       if (changed || cwdChanged) broadcastSnapshot(entry);
+      sendCommandCatalog(entry);
       break;
     }
     case "turn_start":
@@ -1141,6 +1182,7 @@ function handleCodexEvent(entry: SessionEntry, event: CodexSessionEvent): void {
         entry.codexAgentStarted = true;
         broadcast({ type: "agent_start" });
       }
+      broadcastSnapshot(entry);
       break;
     case "text_delta":
       broadcast({ type: "delta", kind: "text", delta: event.delta });
@@ -1254,42 +1296,156 @@ function parseSlashCommand(text: string): { name: string; args: string } | null 
   return { name, args: firstSpace === -1 ? "" : text.slice(firstSpace).trim() };
 }
 
+const COMMAND_RECEIPT_TTL_MS = 5 * 60_000;
+const MAX_COMPLETED_COMMAND_RECEIPTS = 256;
+const MAX_IN_FLIGHT_COMMAND_RECEIPTS = 256;
+
+function pruneCommandReceipts(entry: SessionEntry, now = Date.now()): void {
+  const cutoff = now - COMMAND_RECEIPT_TTL_MS;
+  const completed = [...entry.commandReceipts]
+    .filter(([, receipt]) => receipt.terminal !== undefined)
+    .sort((left, right) => left[1].at - right[1].at);
+  for (const [id, receipt] of completed) {
+    if (receipt.at < cutoff) entry.commandReceipts.delete(id);
+  }
+  const retainedCompleted = completed.filter(([id]) => entry.commandReceipts.has(id));
+  for (const [id] of retainedCompleted.slice(0, -MAX_COMPLETED_COMMAND_RECEIPTS)) {
+    entry.commandReceipts.delete(id);
+  }
+}
+
+/** Return true when this request is already running or completed. */
+function replayOrWaitForCommand(entry: SessionEntry, ws: WebSocket, requestId?: string): boolean {
+  if (!requestId) return false;
+  pruneCommandReceipts(entry);
+  const receipt = entry.commandReceipts.get(requestId);
+  if (!receipt) {
+    const inFlightCount = [...entry.commandReceipts.values()]
+      .filter((candidate) => candidate.terminal === undefined).length;
+    if (inFlightCount >= MAX_IN_FLIGHT_COMMAND_RECEIPTS) {
+      const terminal: CommandTerminalEvent = {
+        type: "error",
+        message: "Too many Web commands are still running; wait for one to finish.",
+        requestId,
+      };
+      entry.commandReceipts.set(requestId, { at: Date.now(), terminal, waiters: new Set() });
+      sendTo(ws, terminal);
+      pruneCommandReceipts(entry);
+      return true;
+    }
+    entry.commandReceipts.set(requestId, { at: Date.now(), waiters: new Set() });
+    return false;
+  }
+  if (receipt.terminal) sendTo(ws, receipt.terminal);
+  else receipt.waiters.add(ws);
+  return true;
+}
+
+function finishCommand(entry: SessionEntry, ws: WebSocket, terminal: CommandTerminalEvent): void {
+  const requestId = terminal.requestId;
+  if (!requestId) {
+    sendTo(ws, terminal);
+    return;
+  }
+  const receipt = entry.commandReceipts.get(requestId)
+    ?? { at: Date.now(), waiters: new Set<WebSocket>() };
+  receipt.terminal = terminal;
+  receipt.at = Date.now();
+  entry.commandReceipts.set(requestId, receipt);
+  const targets = new Set([ws, ...receipt.waiters]);
+  receipt.waiters.clear();
+  for (const target of targets) sendTo(target, terminal);
+  pruneCommandReceipts(entry, receipt.at);
+}
+
+function commandResponder(entry: SessionEntry, ws: WebSocket, requestId?: string) {
+  return {
+    result(message: string) {
+      finishCommand(entry, ws, {
+        type: "command_result",
+        message,
+        ...(requestId ? { requestId } : {}),
+      });
+    },
+    action(action: UIClientAction) {
+      finishCommand(entry, ws, {
+        type: "client_action",
+        action,
+        ...(requestId ? { requestId } : {}),
+      });
+    },
+    error(message: string) {
+      finishCommand(entry, ws, {
+        type: "error",
+        message,
+        ...(requestId ? { requestId } : {}),
+      });
+    },
+  };
+}
+
 async function handleCodexBuiltinCommand(
   parsed: { name: string; args: string },
   entry: SessionEntry,
   ws: WebSocket,
+  requestId?: string,
 ): Promise<boolean> {
   const codex = entry.codex;
   const session = entry.runtime.session;
+  const respond = commandResponder(entry, ws, requestId);
+  if (codex?.observerMode && !CODEX_OBSERVER_COMMAND_NAMES.has(parsed.name)) {
+    respond.error(`/${parsed.name} is unavailable while this Codex thread is read-only.`);
+    return true;
+  }
   switch (parsed.name) {
     case "settings":
-      sendTo(ws, { type: "client_action", action: { action: "open_settings" } });
+      respond.action({ action: "open_settings" });
       return true;
     case "model": {
       if (!parsed.args) {
-        sendTo(ws, { type: "client_action", action: { action: "open_model" } });
+        respond.action({ action: "open_model" });
         return true;
       }
       const slash = parsed.args.indexOf("/");
       const model = slash >= 0 ? parsed.args.slice(slash + 1).trim() : parsed.args.trim();
       if (!model || (slash >= 0 && parsed.args.slice(0, slash).trim() !== "codex")) {
-        sendTo(ws, { type: "error", message: "Use /model codex/<model>." });
+        respond.error("Use /model codex/<model>.");
         return true;
       }
       codex?.setModel(model);
       appendCodexState(entry, codexStateForEntry(entry));
       broadcastSnapshot(entry);
-      sendTo(ws, { type: "command_result", message: `Codex model set to ${model}.` });
+      respond.result(`Codex model set to ${model}.`);
+      return true;
+    }
+    case "reasoning": {
+      if (!parsed.args) {
+        respond.action({ action: "open_reasoning" });
+        return true;
+      }
+      const level = parsed.args.trim().toLowerCase() as UIThinkingLevel;
+      const supported = buildSnapshot(entry).thinkingLevels;
+      if (!supported.includes(level)) {
+        respond.error(`Unsupported reasoning level: ${parsed.args}. Available: ${supported.join(", ")}.`);
+        return true;
+      }
+      codex?.setEffort(codexEffortForLevel(level));
+      appendCodexState(entry, codexStateForEntry(entry));
+      broadcastSnapshot(entry);
+      respond.result(`Codex reasoning effort set to ${level}.`);
       return true;
     }
     case "new":
-      sendTo(ws, { type: "client_action", action: { action: "new_session" } });
+      respond.action({ action: "new_session", agent: "codex" });
       return true;
     case "resume":
-      sendTo(ws, { type: "client_action", action: { action: "open_sessions" } });
+      respond.action({ action: "open_sessions" });
       return true;
     case "fork":
-      sendTo(ws, { type: "client_action", action: { action: "open_fork" } });
+      respond.action({ action: "open_fork" });
+      return true;
+    case "diff":
+      respond.action({ action: "open_git" });
       return true;
     case "copy": {
       const text = codex?.lastAssistantText || [...serializeMessages(entryMessages(entry))]
@@ -1299,15 +1455,16 @@ async function handleCodexBuiltinCommand(
         .map((block) => block.text)
         .join("\n");
       if (!text) {
-        sendTo(ws, { type: "error", message: "There is no assistant message to copy." });
+        respond.error("There is no assistant message to copy.");
         return true;
       }
-      sendTo(ws, { type: "client_action", action: { action: "copy_text", text } });
+      respond.action({ action: "copy_text", text });
       return true;
     }
+    case "rename":
     case "name":
       if (!parsed.args) {
-        sendTo(ws, { type: "error", message: "Use /name <name>." });
+        respond.error(`Use /${parsed.name} <name>.`);
         return true;
       }
       if (!entry.published && !codex?.currentThreadId) {
@@ -1321,8 +1478,36 @@ async function handleCodexBuiltinCommand(
       }
       if (entry.published && !entry.codexNative) session.setSessionName(parsed.args);
       broadcastSnapshot(entry);
-      sendTo(ws, { type: "command_result", message: "Session name updated." });
+      respond.result("Codex thread name updated.");
       return true;
+    case "status": {
+      const snapshot = buildSnapshot(entry);
+      const context = snapshot.context;
+      const contextLabel = context?.tokens != null && context.contextWindow != null
+        ? `${context.tokens}/${context.contextWindow} tokens`
+        : context?.tokens != null
+          ? `${context.tokens} tokens`
+        : context?.contextWindow
+          ? `unknown/${context.contextWindow} tokens`
+          : "unavailable";
+      const state = codex?.observerMode
+        ? "observer"
+        : entryIsStreaming(entry)
+          ? "running"
+          : "idle";
+      respond.result(
+        [
+          `Codex status: ${state}`,
+          `thread ${codex?.currentThreadId ?? "draft"}`,
+          `model ${snapshot.model?.id ?? "default"}`,
+          `reasoning ${snapshot.thinkingLevel}`,
+          `context ${contextLabel}`,
+          `transport ${codex?.transport ?? codexAppServer.activeTransport}`,
+          `cwd ${snapshot.cwd ?? entry.runtime.cwd}`,
+        ].join(" · "),
+      );
+      return true;
+    }
     case "session": {
       const messages = entryMessages(entry) as Array<{ role?: unknown; content?: unknown }>;
       const userMessages = messages.filter((message) => message.role === "user").length;
@@ -1330,14 +1515,41 @@ async function handleCodexBuiltinCommand(
       const toolCalls = messages.filter((message) =>
         Array.isArray(message.content) && message.content.some((block) => isRecord(block) && block.type === "toolCall"),
       ).length;
-      sendTo(ws, {
-        type: "command_result",
-        message: `Codex session: ${userMessages} user messages, ${assistantMessages} assistant messages, ${toolCalls} tool calls.`,
-      });
+      respond.result(`Codex session: ${userMessages} user messages, ${assistantMessages} assistant messages, ${toolCalls} tool calls.`);
+      return true;
+    }
+    case "compact": {
+      if (parsed.args) {
+        respond.error("Use /compact without arguments in a Codex session.");
+        return true;
+      }
+      const threadId = codex?.currentThreadId;
+      if (!codex || !entry.published || !threadId || entry.id !== nativeCodexSessionId(threadId)) {
+        respond.error("Send a message before using /compact.");
+        return true;
+      }
+      await codex.compact();
+      broadcastSnapshot(entry);
+      respond.result("Codex context compaction started.");
+      return true;
+    }
+    case "review": {
+      const parsedTarget = parseCodexReviewTarget(parsed.args);
+      if (!parsedTarget.ok) {
+        respond.error(parsedTarget.error);
+        return true;
+      }
+      const threadId = codex?.currentThreadId;
+      if (!codex || !entry.published || !threadId || entry.id !== nativeCodexSessionId(threadId)) {
+        respond.error("Send a message before using /review.");
+        return true;
+      }
+      await codex.review(parsedTarget.target);
+      respond.result("Codex review started.");
       return true;
     }
     default:
-      sendTo(ws, { type: "error", message: `/${parsed.name} is not available for Codex sessions.` });
+      respond.error(`/${parsed.name} is not available for Codex sessions.`);
       return true;
   }
 }
@@ -1346,81 +1558,80 @@ async function handleBuiltinCommand(
   parsed: { name: string; args: string },
   entry: SessionEntry,
   ws: WebSocket,
+  requestId?: string,
 ): Promise<boolean> {
-  if (entry.agent === "codex") return handleCodexBuiltinCommand(parsed, entry, ws);
+  if (entry.agent === "codex") return handleCodexBuiltinCommand(parsed, entry, ws, requestId);
   const session = entry.runtime.session;
+  const respond = commandResponder(entry, ws, requestId);
   switch (parsed.name) {
     case "settings":
-      sendTo(ws, { type: "client_action", action: { action: "open_settings" } });
+      respond.action({ action: "open_settings" });
       return true;
     case "model": {
       if (!parsed.args) {
-        sendTo(ws, { type: "client_action", action: { action: "open_model" } });
+        respond.action({ action: "open_model" });
         return true;
       }
       const slash = parsed.args.indexOf("/");
       if (slash <= 0 || slash === parsed.args.length - 1) {
-        sendTo(ws, { type: "error", message: "Use /model <provider/model>." });
+        respond.error("Use /model <provider/model>.");
         return true;
       }
       const provider = parsed.args.slice(0, slash);
       const id = parsed.args.slice(slash + 1);
       const model = modelRuntime.getModel(provider, id);
       if (!model) {
-        sendTo(ws, { type: "error", message: `Model not found: ${provider}/${id}` });
+        respond.error(`Model not found: ${provider}/${id}`);
         return true;
       }
       await session.setModel(model);
       broadcastSnapshot(entry);
-      sendTo(ws, { type: "command_result", message: `Model set to ${model.name ?? model.id}.` });
+      respond.result(`Model set to ${model.name ?? model.id}.`);
       return true;
     }
     case "new":
-      sendTo(ws, { type: "client_action", action: { action: "new_session" } });
+      respond.action({ action: "new_session", agent: "pi" });
       return true;
     case "resume":
-      sendTo(ws, { type: "client_action", action: { action: "open_sessions" } });
+      respond.action({ action: "open_sessions" });
       return true;
     case "fork":
-      sendTo(ws, { type: "client_action", action: { action: "open_fork" } });
+      respond.action({ action: "open_fork" });
       return true;
     case "copy": {
       const text = session.getLastAssistantText();
       if (!text) {
-        sendTo(ws, { type: "error", message: "There is no assistant message to copy." });
+        respond.error("There is no assistant message to copy.");
         return true;
       }
-      sendTo(ws, { type: "client_action", action: { action: "copy_text", text } });
+      respond.action({ action: "copy_text", text });
       return true;
     }
     case "compact":
       await session.compact(parsed.args || undefined);
       broadcastSnapshot(entry);
-      sendTo(ws, { type: "command_result", message: "Context compacted." });
+      respond.result("Context compacted.");
       return true;
     case "name":
       if (!parsed.args) {
-        sendTo(ws, { type: "error", message: "Use /name <name>." });
+        respond.error("Use /name <name>.");
         return true;
       }
       session.setSessionName(parsed.args);
       broadcastSnapshot(entry);
-      sendTo(ws, { type: "command_result", message: "Session name updated." });
+      respond.result("Session name updated.");
       return true;
     case "session": {
       const stats = session.getSessionStats();
       const name = session.sessionName ? ` (${session.sessionName})` : "";
-      sendTo(ws, {
-        type: "command_result",
-        message: `Session${name}: ${stats.userMessages} user messages, ${stats.assistantMessages} assistant messages, ${stats.toolCalls} tool calls.`,
-      });
+      respond.result(`Session${name}: ${stats.userMessages} user messages, ${stats.assistantMessages} assistant messages, ${stats.toolCalls} tool calls.`);
       return true;
     }
     case "reload":
       await session.reload();
       broadcastSnapshot(entry);
       sendCommandCatalog(entry);
-      sendTo(ws, { type: "command_result", message: "Resources reloaded." });
+      respond.result("Resources reloaded.");
       return true;
     default:
       return false;
@@ -1543,13 +1754,24 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
         return;
       }
       const slashCommand = parseSlashCommand(text);
+      const webBuiltin = !!slashCommand && (
+        entry.agent === "codex" || BUILTIN_COMMAND_NAMES.has(slashCommand.name)
+      );
+      if (webBuiltin && replayOrWaitForCommand(entry, ws, cmd.requestId)) return;
       // Codex slash commands are Web-local control operations. Handle them
       // before connecting a blank draft so opening settings, choosing a model,
       // naming the future task, etc. cannot create an empty native thread.
-      if (slashCommand && entry.agent === "codex" && (await handleBuiltinCommand(slashCommand, entry, ws))) {
+      if (slashCommand && entry.agent === "codex") {
+        try {
+          await handleBuiltinCommand(slashCommand, entry, ws, cmd.requestId);
+        } catch (error) {
+          commandResponder(entry, ws, cmd.requestId).error(
+            String(error instanceof Error ? error.message : error),
+          );
+        }
         return;
       }
-      if (cmd.requestId && !rememberReceivedPrompt(entry, cmd.requestId)) {
+      if (!webBuiltin && cmd.requestId && !rememberReceivedPrompt(entry, cmd.requestId)) {
         sendTo(ws, { type: "prompt_received", requestId: cmd.requestId });
         return;
       }
@@ -1590,7 +1812,14 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
       } else if (!entry.published) {
         publishEntry(entry, ws);
       }
-      if (slashCommand && (await handleBuiltinCommand(slashCommand, entry, ws))) {
+      if (slashCommand && webBuiltin) {
+        try {
+          await handleBuiltinCommand(slashCommand, entry, ws, cmd.requestId);
+        } catch (error) {
+          commandResponder(entry, ws, cmd.requestId).error(
+            String(error instanceof Error ? error.message : error),
+          );
+        }
         return;
       }
       entry.extensionUIClient = ws;
@@ -1648,6 +1877,10 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
       break;
     case "set_model": {
       if (entry.agent === "codex") {
+        if (entry.codex?.observerMode) {
+          sendTo(ws, { type: "error", message: "Model selection is unavailable while this Codex thread is read-only." });
+          return;
+        }
         if (cmd.provider !== "codex") {
           sendTo(ws, { type: "error", message: "Codex sessions only accept codex/<model>." });
           return;
@@ -1668,6 +1901,10 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
     }
     case "set_thinking_level":
       if (entry.agent === "codex") {
+        if (entry.codex?.observerMode) {
+          sendTo(ws, { type: "error", message: "Reasoning selection is unavailable while this Codex thread is read-only." });
+          return;
+        }
         entry.codex?.setEffort(codexEffortForLevel(cmd.level));
         appendCodexState(entry, codexStateForEntry(entry));
       } else {
@@ -1740,6 +1977,10 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
       sendCommandCatalog(entry, ws);
       break;
     case "codex_interaction_response":
+      if (entry.agent === "codex" && entry.codex?.observerMode) {
+        sendTo(ws, { type: "error", message: "Codex requests cannot be answered from read-only observer mode." });
+        break;
+      }
       if (entry.agent !== "codex" || !entry.codex?.respondToInteraction(cmd.response)) {
         sendTo(ws, { type: "error", message: "This Codex request is no longer pending." });
       }
@@ -3012,6 +3253,7 @@ wss.on("connection", (ws, req) => {
   const requested = query.get("session");
   const cwd = query.get("cwd") ?? undefined;
   const requestedAgent = parseAgentKind(query.get("agent"));
+  const requestedDraft = requested ? undefined : parseDraftConnectionId(query.get("draft"));
   const sinceValue = query.get("since");
   const parsedSince = sinceValue === null ? null : Number(sinceValue);
   const since =
@@ -3078,7 +3320,7 @@ wss.on("connection", (ws, req) => {
       }
     }
     const safeCwd = requested ? undefined : await authorizedSessionCwd(cwd);
-    return acquireEntry(requested, safeCwd, requestedAgent);
+    return acquireEntry(requested, safeCwd, requestedAgent, requestedDraft);
   };
 
   // Binding a session can fail transiently — most often a Codex thread whose
@@ -3157,6 +3399,7 @@ wss.on("connection", (ws, req) => {
         entry.extensionUIClient = undefined;
         for (const pending of entry.pendingExtensionUI.values()) pending({ cancelled: true });
       }
+      for (const receipt of entry.commandReceipts.values()) receipt.waiters.delete(ws);
       entry.clients.delete(ws);
       entry.lastActive = Date.now();
       wsEntry.delete(ws);
