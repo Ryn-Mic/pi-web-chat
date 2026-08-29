@@ -1,4 +1,10 @@
 {
+  "0.1.112": [
+    "npm 主包不再重复内嵌 File Viewer 的完整离线运行资产，压缩包体积由约 62.4 MiB 降至约 6.8 MiB，并消除整套离线资产树的双份下载与约 152 MiB 重复解压占用。",
+    "PDF、Office、CAD、3D、Typst、Draw.io 与归档等预览能力保持不变；服务端改为从固定版本的直接运行时依赖提供原有 /file-viewer/* 路径，开发模式与生产构建共用同一资产源。",
+    "构建期 File Viewer 组件与插件改为精确版本的开发依赖，避免用户安装已经进入前端 bundle 的无用渲染器依赖树或解析到不匹配的新版本资产。",
+    "构建与打包新增重复资产负向门禁，并将主包预算收紧为 10 MiB packed、30 MiB unpacked，防止后续版本静默恢复超大包。"
+  ],
   "0.1.111": [
     "聊天输入框的斜杠命令改为按 Agent 提供目录：Pi 保留内置、扩展、提示词与技能命令，Codex 新增独立分组并适配 reasoning、rename、status、diff、compact 与 review 等 Web 可执行命令。",
     "在本机 Codex app-server 支持对应 RPC 时，compact 与 review 直接调用原生线程方法；review 支持未提交改动、base 分支、commit 和自定义说明，空白草稿不会因此启动 Codex、创建影子 Pi 会话或提前绑定 URL。",

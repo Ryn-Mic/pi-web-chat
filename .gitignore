@@ -1,6 +1,5 @@
 node_modules/
 dist/
-public/file-viewer/
 *.log
 .DS_Store
 .env

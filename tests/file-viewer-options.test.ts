@@ -20,6 +20,13 @@ test("desktop options keep comfortable default and disable exfiltration operatio
     },
   });
   assert.deepEqual(options.archive, { entryActions: { download: false } });
+  assert.deepEqual(options.presentation, {
+    workerUrl: "/file-viewer/vendor/pptx/pptx.worker.js",
+    pptModuleUrl: "/file-viewer/vendor/ppt/index.mjs",
+    pptWorkerUrl: "/file-viewer/vendor/ppt/worker.mjs",
+    pptWasmUrl: "/file-viewer/vendor/ppt/ppt-native.wasm",
+    pptFontUrl: "/file-viewer/vendor/ppt/ppt-font-cjk.otf",
+  });
   assert.equal("fit" in options, false);
 });
 

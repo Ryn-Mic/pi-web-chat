@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import { fileViewerRenderers } from "@file-viewer/vite-plugin";
@@ -11,6 +11,49 @@ const pkg = JSON.parse(
 ) as { version: string };
 
 const DEV_SERVER_PORT = process.env.PI_WEB_DEV_PORT ?? "3141";
+const PACKAGED_PPT_FALLBACK_ID = "\0pi-web-chat:packaged-ppt-fallback";
+
+const fileViewerPackagedPptFallbackPlugin: Plugin = {
+  name: "file-viewer-packaged-ppt-fallback",
+  enforce: "pre",
+  resolveId(id, importer) {
+    if (id !== "@file-viewer/ppt" || !importer) return;
+    const normalizedImporter = importer.replaceAll("\\", "/");
+    if (
+      normalizedImporter.includes("/@file-viewer/renderer-presentation/") ||
+      normalizedImporter.includes("/@file-viewer+renderer-presentation@") ||
+      normalizedImporter.includes("/packages/renderers/presentation/")
+    ) {
+      return PACKAGED_PPT_FALLBACK_ID;
+    }
+  },
+  load(id) {
+    if (id !== PACKAGED_PPT_FALLBACK_ID) return;
+    return `
+export async function createPptViewer() {
+  throw new Error("Packaged PPT runtime URL was not initialized.")
+}
+`;
+  },
+};
+
+const removeLegacyFileViewerAssetsPlugin: Plugin = {
+  name: "remove-legacy-file-viewer-assets",
+  enforce: "pre",
+  configResolved(config) {
+    if (!config.publicDir) return;
+    const legacyAssetDir = resolve(config.publicDir, "file-viewer");
+    if (!existsSync(legacyAssetDir)) return;
+    const legacyManifest = resolve(legacyAssetDir, "flyfish-viewer-assets.json");
+    if (!existsSync(legacyManifest)) {
+      throw new Error(
+        `refusing to remove unrecognized public/file-viewer directory: ${legacyAssetDir}`,
+      );
+    }
+    rmSync(legacyAssetDir, { recursive: true, force: true });
+    console.log(`removed legacy copied File Viewer assets: ${legacyAssetDir}`);
+  },
+};
 
 const fileViewerInventoryPlugin: Plugin = {
   name: "file-viewer-build-inventory",
@@ -55,6 +98,7 @@ export default defineConfig({
           );
           const includesViewerRuntime = moduleIds.some(
             (id) =>
+              id === PACKAGED_PPT_FALLBACK_ID ||
               id.includes("/node_modules/@file-viewer/") ||
               id.includes("/node_modules/rtf.js/"),
           );
@@ -73,7 +117,13 @@ export default defineConfig({
     },
   },
   plugins: [
-    fileViewerRenderers({ copyAssets: true, inject: false }),
+    removeLegacyFileViewerAssetsPlugin,
+    // Binary PPT normally loads the version-matched ESM runtime from
+    // /file-viewer/vendor/ppt/. A scoped fallback stub prevents Rollup from
+    // embedding a second 16 MiB font/WASM payload while failing deterministically
+    // if a future caller forgets to configure the packaged runtime URL.
+    fileViewerPackagedPptFallbackPlugin,
+    fileViewerRenderers({ copyAssets: false, inject: false }),
     fileViewerInventoryPlugin,
     react(),
     tailwindcss(),
@@ -128,6 +178,7 @@ export default defineConfig({
       // Change the dev server port with PI_WEB_DEV_PORT (default 3141)
       "/api": `http://localhost:${DEV_SERVER_PORT}`,
       "/ws": { target: `ws://localhost:${DEV_SERVER_PORT}`, ws: true },
+      "/file-viewer": `http://localhost:${DEV_SERVER_PORT}`,
     },
   },
 });

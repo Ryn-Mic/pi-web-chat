@@ -9,6 +9,8 @@ const FILE_VIEWER_LOCALES: Record<Locale, ViewerOptions["locale"]> = {
   ko: "en-US",
 };
 
+const FILE_VIEWER_ASSET_BASE_URL = "/file-viewer/";
+
 export function createFileViewerOptions({
   mobile,
   theme,
@@ -36,5 +38,12 @@ export function createFileViewerOptions({
       },
     },
     archive: { entryActions: { download: false } },
+    presentation: {
+      workerUrl: `${FILE_VIEWER_ASSET_BASE_URL}vendor/pptx/pptx.worker.js`,
+      pptModuleUrl: `${FILE_VIEWER_ASSET_BASE_URL}vendor/ppt/index.mjs`,
+      pptWorkerUrl: `${FILE_VIEWER_ASSET_BASE_URL}vendor/ppt/worker.mjs`,
+      pptWasmUrl: `${FILE_VIEWER_ASSET_BASE_URL}vendor/ppt/ppt-native.wasm`,
+      pptFontUrl: `${FILE_VIEWER_ASSET_BASE_URL}vendor/ppt/ppt-font-cjk.otf`,
+    },
   };
 }
