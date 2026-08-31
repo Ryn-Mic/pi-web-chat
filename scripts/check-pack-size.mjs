@@ -2,8 +2,12 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-export const MAX_PACKED_BYTES = 150 * 1024 * 1024;
-export const MAX_UNPACKED_BYTES = 500 * 1024 * 1024;
+export const MAX_PACKED_BYTES = 10 * 1024 * 1024;
+export const MAX_UNPACKED_BYTES = 30 * 1024 * 1024;
+export const FORBIDDEN_PACK_PATHS = ["dist/public/file-viewer"];
+export const FORBIDDEN_BUILD_ONLY_FILES = [
+  "dist/public/.vite/file-viewer-inventory.json",
+];
 export const REQUIRED_RUNTIME_FILES = [
   "bin/pi-web-chat.mjs",
   "dist/cli.js",
@@ -30,6 +34,27 @@ export function assertRequiredPackFiles(files) {
   }
 }
 
+export function assertPackExcludesCopiedFileViewerAssets(files) {
+  const copied = (files ?? [])
+    .map((file) => file?.path)
+    .filter(
+      (path) =>
+        typeof path === "string" &&
+        FORBIDDEN_PACK_PATHS.some((root) => path === root || path.startsWith(`${root}/`)),
+    );
+  if (copied.length > 0) {
+    throw new Error(`npm package duplicates File Viewer dependency assets: ${copied[0]}`);
+  }
+}
+
+export function assertPackExcludesBuildOnlyFiles(files) {
+  const names = new Set((files ?? []).map((file) => file?.path).filter(Boolean));
+  const included = FORBIDDEN_BUILD_ONLY_FILES.filter((file) => names.has(file));
+  if (included.length > 0) {
+    throw new Error(`npm package includes build-only files: ${included.join(", ")}`);
+  }
+}
+
 function mib(bytes) {
   return (bytes / 1024 / 1024).toFixed(2);
 }
@@ -51,8 +76,10 @@ export function main() {
   if (!result || typeof result.size !== "number" || typeof result.unpackedSize !== "number") {
     throw new Error("npm pack returned invalid size metadata");
   }
-  assertPackSizeWithinLimits(result);
+  assertPackExcludesCopiedFileViewerAssets(result.files);
+  assertPackExcludesBuildOnlyFiles(result.files);
   assertRequiredPackFiles(result.files);
+  assertPackSizeWithinLimits(result);
   console.log(
     `package size: ${mib(result.size)} MiB packed, ${mib(result.unpackedSize)} MiB unpacked, ${result.entryCount ?? result.files?.length ?? 0} files`,
   );

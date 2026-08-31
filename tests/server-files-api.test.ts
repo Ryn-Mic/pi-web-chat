@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { request } from "node:http";
 import {
   chmodSync,
   closeSync,
-  existsSync,
   ftruncateSync,
   mkdirSync,
   mkdtempSync,
@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { afterEach, test } from "node:test";
 
 let child: ChildProcessWithoutNullStreams | undefined;
@@ -66,6 +66,30 @@ async function getJson(baseUrl: string, path: string, token: string): Promise<{ 
   const res = await fetch(`${baseUrl}${path}${path.includes("?") ? "&" : "?"}token=${token}`);
   const text = await res.text();
   return { status: res.status, body: text ? JSON.parse(text) : null };
+}
+
+async function rawRequestStatus(
+  baseUrl: string,
+  path: string,
+  method = "GET",
+): Promise<number> {
+  const target = new URL(baseUrl);
+  return await new Promise<number>((resolve, reject) => {
+    const req = request(
+      {
+        hostname: target.hostname,
+        port: target.port,
+        method,
+        path,
+      },
+      (res) => {
+        res.resume();
+        res.once("end", () => resolve(res.statusCode ?? 0));
+      },
+    );
+    req.once("error", reject);
+    req.end();
+  });
 }
 
 async function stopChild(): Promise<void> {
@@ -215,20 +239,63 @@ test("file APIs require a session token, authorize known cwd, and reject unsafe 
   const malformedPercent = await fetch(`${baseUrl}/file-viewer/%`);
   assert.equal(malformedPercent.status, 400);
 
-  const distDir = resolve(process.cwd(), "dist", "public");
-  if (existsSync(distDir)) {
-    const viewerDir = join(distDir, "file-viewer");
-    mkdirSync(viewerDir, { recursive: true });
-    const percentFile = join(viewerDir, "%");
-    writeFileSync(percentFile, "ok");
-    try {
-      const percentFileRes = await fetch(`${baseUrl}/file-viewer/%25`);
-      assert.equal(percentFileRes.status, 200);
-      assert.equal(await percentFileRes.text(), "ok");
-    } finally {
-      rmSync(percentFile, { force: true });
-    }
-  }
+  const viewerManifestHead = await fetch(`${baseUrl}/file-viewer/flyfish-viewer-assets.json`, {
+    method: "HEAD",
+  });
+  assert.equal(viewerManifestHead.status, 200);
+  assert.equal(viewerManifestHead.headers.get("content-type"), "application/json");
+  assert.equal(
+    viewerManifestHead.headers.get("cache-control"),
+    "public, max-age=3600, must-revalidate",
+  );
+  assert.ok(Number(viewerManifestHead.headers.get("content-length")) > 0);
+
+  const viewerManifest = await fetch(`${baseUrl}/file-viewer/flyfish-viewer-assets.json`);
+  assert.equal(viewerManifest.status, 200);
+  const viewerManifestBody = (await viewerManifest.json()) as { schemaVersion?: number };
+  assert.equal(typeof viewerManifestBody.schemaVersion, "number");
+
+  const percentFileRes = await fetch(`${baseUrl}/file-viewer/%25`);
+  assert.equal(percentFileRes.status, 404);
+
+  const viewerRoot = await fetch(`${baseUrl}/file-viewer`);
+  assert.equal(viewerRoot.status, 404);
+  assert.notEqual(await viewerRoot.text(), "fallback");
+
+  const viewerPost = await fetch(`${baseUrl}/file-viewer/flyfish-viewer-assets.json`, {
+    method: "POST",
+  });
+  assert.equal(viewerPost.status, 405);
+  assert.equal(viewerPost.headers.get("allow"), "GET, HEAD");
+
+  assert.equal(await rawRequestStatus(baseUrl, "/file-viewer/%00asset"), 400);
+  assert.equal(await rawRequestStatus(baseUrl, "/file-viewer%2f%00asset"), 400);
+  assert.equal(
+    await rawRequestStatus(baseUrl, "/file-viewer%2fflyfish-viewer-assets.json", "POST"),
+    405,
+  );
+
+  const escapedViewerAsset = await fetch(
+    `${baseUrl}/file-viewer/%2e%2e%2fpackage.json`,
+  );
+  assert.equal(escapedViewerAsset.status, 403);
+  assert.equal(await rawRequestStatus(baseUrl, "/file-viewer/../package.json"), 403);
+  assert.equal(await rawRequestStatus(baseUrl, "/file-viewer/%2e%2e/package.json"), 403);
+  assert.equal(await rawRequestStatus(baseUrl, "/file-viewer/../api/health"), 403);
+  assert.equal(await rawRequestStatus(baseUrl, "/file-viewer/%2e%2e/api/health"), 403);
+  assert.equal(await rawRequestStatus(baseUrl, "/%66ile-viewer/%2e%2e/api/health"), 403);
+  assert.equal(
+    await rawRequestStatus(baseUrl, `${baseUrl}/file-viewer/%2e%2e/api/health`),
+    403,
+  );
+  assert.equal(await rawRequestStatus(baseUrl, "/file-viewer\\..\\api/health"), 403);
+  // Node may reject this malformed absolute-form target at the parser (400)
+  // or pass it to the application-level namespace guard (403).
+  assert.ok(
+    [400, 403].includes(
+      await rawRequestStatus(baseUrl, `${baseUrl}\\file-viewer\\..\\api/health`),
+    ),
+  );
 
   const missingViewerAsset = await fetch(`${baseUrl}/file-viewer/nope.wasm`);
   assert.equal(missingViewerAsset.status, 404);

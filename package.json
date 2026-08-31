@@ -1,6 +1,6 @@
 {
   "name": "@ryn-mic/web-chat",
-  "version": "0.1.111",
+  "version": "0.1.112",
   "description": "Mobile-friendly Web UI for pi and Codex coding agents",
   "type": "module",
   "license": "MIT",
@@ -62,8 +62,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.80.10",
-    "@file-viewer/core": "^2.2.8",
-    "@file-viewer/react-full": "^2.2.8",
+    "file-viewer-copy-assets": "2.2.8",
     "ignore": "^7.0.6",
     "morphicons": "^1.7.0",
     "qrcode": "^1.5.4",
@@ -90,7 +89,9 @@
   },
   "devDependencies": {
     "@base-ui-components/react": "^1.0.0-rc.0",
-    "@file-viewer/vite-plugin": "^2.2.8",
+    "@file-viewer/core": "2.2.8",
+    "@file-viewer/react-full": "2.2.8",
+    "@file-viewer/vite-plugin": "2.2.8",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.3.3",

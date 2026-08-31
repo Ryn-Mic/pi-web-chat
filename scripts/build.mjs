@@ -6,6 +6,7 @@
  *   dist/cli.js     — bundled standalone daemon CLI
  */
 import { execSync } from "node:child_process";
+import { createRequire } from "node:module";
 import {
   existsSync,
   mkdirSync,
@@ -22,6 +23,14 @@ import * as esbuild from "esbuild";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "dist");
 const publicDist = join(dist, "public");
+const require = createRequire(import.meta.url);
+const FILE_VIEWER_PACKAGES = [
+  "@file-viewer/core",
+  "@file-viewer/react-full",
+  "@file-viewer/vite-plugin",
+  "file-viewer-copy-assets",
+];
+const FILE_VIEWER_PACKAGED_PPT_FALLBACK_ID = "\0pi-web-chat:packaged-ppt-fallback";
 
 function failBuild(message) {
   console.error(`build failed: ${message}`);
@@ -45,33 +54,76 @@ function listFilesRecursive(dir) {
   return results;
 }
 
-function toPublicPath(filePath) {
-  return relative(publicDist, filePath).split(sep).join("/");
+function toRelativePath(rootDir, filePath) {
+  return relative(rootDir, filePath).split(sep).join("/");
+}
+
+function assertFileViewerPackageVersions() {
+  const projectManifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  const runtimeVersion = projectManifest.dependencies?.["file-viewer-copy-assets"];
+  if (typeof runtimeVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(runtimeVersion)) {
+    failBuild("file-viewer-copy-assets must be an exact direct runtime dependency");
+  }
+  for (const name of FILE_VIEWER_PACKAGES.filter((name) => name !== "file-viewer-copy-assets")) {
+    if (projectManifest.dependencies?.[name] !== undefined) {
+      failBuild(`${name} must not be a runtime dependency`);
+    }
+    if (projectManifest.devDependencies?.[name] !== runtimeVersion) {
+      failBuild(`${name} must be an exact ${runtimeVersion} devDependency`);
+    }
+  }
+  const declared = {
+    ...projectManifest.dependencies,
+    ...projectManifest.devDependencies,
+  };
+  const installedVersions = new Set();
+
+  for (const name of FILE_VIEWER_PACKAGES) {
+    const expected = declared[name];
+    if (typeof expected !== "string" || !/^\d+\.\d+\.\d+$/.test(expected)) {
+      failBuild(`${name} must use an exact version in package.json`);
+    }
+    const installedManifest = JSON.parse(
+      readFileSync(require.resolve(`${name}/package.json`), "utf8"),
+    );
+    if (installedManifest.version !== expected) {
+      failBuild(`${name} resolved to ${installedManifest.version}; expected ${expected}`);
+    }
+    installedVersions.add(installedManifest.version);
+  }
+
+  if (installedVersions.size !== 1) {
+    failBuild(
+      `File Viewer packages must share one version; found ${[...installedVersions].join(", ")}`,
+    );
+  }
+  console.log(`✓ File Viewer package versions aligned at ${[...installedVersions][0]}`);
 }
 
 function assertFileViewerAssets() {
-  const assetRoot = join(publicDist, "file-viewer");
+  const packageJson = require.resolve("file-viewer-copy-assets/package.json");
+  const assetRoot = join(dirname(packageJson), "viewer");
   if (!existsSync(assetRoot) || !statSync(assetRoot).isDirectory()) {
-    failBuild("dist/public/file-viewer missing");
+    failBuild("file-viewer-copy-assets/viewer missing");
   }
 
-  const files = listFilesRecursive(assetRoot).map(toPublicPath);
+  const files = listFilesRecursive(assetRoot).map((file) => toRelativePath(assetRoot, file));
   const requiredAssets = [
     {
       label: "PDF worker",
-      match: (file) => /^file-viewer\/vendor\/pdf\/pdf\.worker\.mjs$/.test(file),
+      match: (file) => /^vendor\/pdf\/pdf\.worker\.mjs$/.test(file),
     },
     {
       label: "Office worker",
-      match: (file) => /^file-viewer\/vendor\/(docx|pptx|xlsx)\/.*worker\.(js|mjs)$/.test(file),
+      match: (file) => /^vendor\/(docx|pptx|xlsx)\/.*worker\.(js|mjs)$/.test(file),
     },
     {
       label: "CAD WASM",
-      match: (file) => /^file-viewer\/wasm\/cad\/.*\.wasm$/.test(file),
+      match: (file) => /^wasm\/cad\/.*\.wasm$/.test(file),
     },
     {
       label: "generic WASM",
-      match: (file) => /^file-viewer\/(vendor|wasm)\/(?!cad\/).*\.wasm$/.test(file),
+      match: (file) => /^(vendor|wasm)\/(?!cad\/).*\.wasm$/.test(file),
     },
   ];
 
@@ -80,6 +132,37 @@ function assertFileViewerAssets() {
     if (!found) failBuild(`File Viewer representative asset missing: ${asset.label}`);
     console.log(`✓ File Viewer asset: ${asset.label} → ${found}`);
   }
+  return assetRoot;
+}
+
+function assertFileViewerAssetsNotCopied() {
+  const copiedAssetRoot = join(publicDist, "file-viewer");
+  if (existsSync(copiedAssetRoot)) {
+    failBuild("dist/public/file-viewer must not duplicate dependency assets");
+  }
+  console.log("✓ File Viewer dependency assets are not copied into dist");
+}
+
+function assertFileViewerRuntimeAssetsNotBundled(manifest) {
+  const duplicateManifestEntries = Object.keys(manifest).filter((key) =>
+    key.startsWith("node_modules/@file-viewer/ppt/"),
+  );
+  const duplicateFiles = listFilesRecursive(join(publicDist, "assets"))
+    .map((file) => toRelativePath(publicDist, file))
+    .filter((file) => /\/ppt-(?:font-cjk|native)-/.test(file));
+  const barePptFallbackFiles = listFilesRecursive(join(publicDist, "assets"))
+    .filter((file) => file.endsWith(".js"))
+    .filter((file) => /["']@file-viewer\/ppt["']/.test(readFileSync(file, "utf8")))
+    .map((file) => toRelativePath(publicDist, file));
+  const duplicates = [
+    ...duplicateManifestEntries,
+    ...duplicateFiles,
+    ...barePptFallbackFiles,
+  ];
+  if (duplicates.length > 0) {
+    failBuild(`File Viewer runtime assets were bundled twice: ${duplicates.join(", ")}`);
+  }
+  console.log("✓ File Viewer binary-PPT runtime is served only from its dependency payload");
 }
 
 function loadManifest() {
@@ -214,9 +297,31 @@ function assertFileViewerNotPrecached({ fullChunk, viewerChunks }) {
     failBuild("File Viewer runtime assets leaked into the service-worker precache");
   }
   const emittedViewerChunks = listFilesRecursive(join(publicDist, "assets"))
-    .map(toPublicPath)
+    .map((file) => toRelativePath(publicDist, file))
     .filter((file) => /^assets\/file-viewer-.*\.js$/.test(file));
-  const precachedViewerChunks = [...new Set([fullChunk, ...viewerChunks, ...emittedViewerChunks])]
+  const inventory = JSON.parse(
+    readFileSync(join(publicDist, ".vite", "file-viewer-inventory.json"), "utf8"),
+  );
+  // Inventory ownership catches a viewer chunk even if its output naming
+  // regresses and Workbox's file-viewer-* ignore would otherwise miss it.
+  const inventoryViewerChunks = inventory.chunks
+    .filter((chunk) => {
+      const includesHeadless = chunk.moduleIds.some((id) =>
+        id.includes("/node_modules/@file-viewer/core/dist/headless"),
+      );
+      return !includesHeadless && chunk.moduleIds.some(
+        (id) =>
+          id === FILE_VIEWER_PACKAGED_PPT_FALLBACK_ID ||
+          id.includes("/node_modules/@file-viewer/"),
+      );
+    })
+    .map((chunk) => chunk.file);
+  const precachedViewerChunks = [...new Set([
+    fullChunk,
+    ...viewerChunks,
+    ...emittedViewerChunks,
+    ...inventoryViewerChunks,
+  ])]
     .filter((file) => serviceWorker.includes(file));
   if (precachedViewerChunks.length > 0) {
     failBuild(
@@ -224,10 +329,10 @@ function assertFileViewerNotPrecached({ fullChunk, viewerChunks }) {
     );
   }
 
-  console.log("✓ File Viewer is lazy and excluded from service-worker precache");
+  console.log("✓ File Viewer-owned chunks are lazy and excluded from service-worker precache");
 }
 
-function assertThirdPartyNotices() {
+function assertThirdPartyNotices(assetRoot) {
   const rootLicenseDir = join(root, "third-party-licenses");
   const requiredRootFiles = [
     "Apache-2.0.txt",
@@ -253,7 +358,6 @@ function assertThirdPartyNotices() {
     console.log(`✓ root license file: third-party-licenses/${name}`);
   }
 
-  const assetRoot = join(publicDist, "file-viewer");
   const requiredAssetNotices = [
     "vendor/ppt/LICENSE",
     "vendor/ppt/NOTICE",
@@ -265,28 +369,39 @@ function assertThirdPartyNotices() {
   for (const rel of requiredAssetNotices) {
     const filePath = join(assetRoot, rel);
     if (!existsSync(filePath)) {
-      failBuild(`missing embedded asset notice: dist/public/file-viewer/${rel}`);
+      failBuild(`missing dependency asset notice: file-viewer-copy-assets/viewer/${rel}`);
     }
     const stats = statSync(filePath);
     if (!stats.isFile() || stats.size === 0) {
-      failBuild(`empty or invalid embedded asset notice: dist/public/file-viewer/${rel}`);
+      failBuild(`empty or invalid dependency asset notice: file-viewer-copy-assets/viewer/${rel}`);
     }
-    console.log(`✓ embedded asset notice: dist/public/file-viewer/${rel}`);
+    console.log(`✓ dependency asset notice: file-viewer-copy-assets/viewer/${rel}`);
   }
+}
+
+function removeBuildOnlyArtifacts() {
+  const inventoryPath = join(publicDist, ".vite", "file-viewer-inventory.json");
+  rmSync(inventoryPath, { force: true });
+  console.log("✓ removed build-only File Viewer module inventory");
 }
 
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
+assertFileViewerPackageVersions();
+
 console.log("▸ building frontend (vite)…");
 execSync("npx vite build", { cwd: root, stdio: "inherit" });
 
-assertFileViewerAssets();
+assertFileViewerAssetsNotCopied();
+const fileViewerAssetRoot = assertFileViewerAssets();
 const manifest = loadManifest();
+assertFileViewerRuntimeAssetsNotBundled(manifest);
 const viewerBuild = assertFileViewerLazy(manifest);
 assertFrameEntryIsolated(manifest);
 assertFileViewerNotPrecached(viewerBuild);
-assertThirdPartyNotices();
+assertThirdPartyNotices(fileViewerAssetRoot);
+removeBuildOnlyArtifacts();
 
 console.log("▸ bundling server (esbuild)…");
 await esbuild.build({

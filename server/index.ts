@@ -59,6 +59,12 @@ import {
 } from "./daemon-state.ts";
 import { selectReplayEvents } from "./event-replay.ts";
 import { handleDesktopFileContent, streamStaticFile } from "./file-content.ts";
+import {
+  FileViewerAssetPathEscapeError,
+  FILE_VIEWER_URL_PREFIX,
+  FILE_VIEWER_URL_ROOT,
+  resolveFileViewerAssetPath,
+} from "./file-viewer-assets.ts";
 import { listDir, PathEscapeError, searchFiles } from "./files.ts";
 import {
   handlePreviewContentRequest,
@@ -2607,10 +2613,98 @@ async function handleAuthRequest(
 }
 
 
+function rawPathnameFromRequestTarget(requestTarget: string): string {
+  const absoluteForm = /^[A-Za-z][A-Za-z\d+.-]*:\/\//.exec(requestTarget);
+  let pathStart = 0;
+  if (absoluteForm) {
+    const authorityStart = absoluteForm[0].length;
+    const slashIndex = requestTarget.indexOf("/", authorityStart);
+    const backslashIndex = requestTarget.indexOf("\\", authorityStart);
+    const queryIndex = requestTarget.indexOf("?", authorityStart);
+    const pathSeparators = [slashIndex, backslashIndex].filter((index) => index >= 0);
+    if (pathSeparators.length === 0) return "/";
+    const pathSeparator = Math.min(...pathSeparators);
+    if (queryIndex >= 0 && queryIndex < pathSeparator) return "/";
+    pathStart = pathSeparator;
+  }
+
+  const queryIndex = requestTarget.indexOf("?", pathStart);
+  const fragmentIndex = requestTarget.indexOf("#", pathStart);
+  const endCandidates = [queryIndex, fragmentIndex].filter((index) => index >= 0);
+  const pathEnd = endCandidates.length > 0 ? Math.min(...endCandidates) : requestTarget.length;
+  return requestTarget.slice(pathStart, pathEnd) || "/";
+}
+
 const httpServer = createServer(async (req, res) => {
-  const url = new URL(req.url ?? "/", "http://localhost");
+  const requestTarget = req.url ?? "/";
+  const rawPathname = rawPathnameFromRequestTarget(requestTarget);
+  const url = new URL(requestTarget, "http://localhost");
 
   try {
+    // Decode and dispatch the File Viewer namespace before WHATWG-normalized
+    // API routing. Otherwise /file-viewer/../api/* can become an alternate API
+    // path before the asset-root escape check sees the original request target.
+    let pathname: string;
+    try {
+      const decodedRawPathname = decodeURIComponent(rawPathname);
+      const slashNormalizedRawPathname = decodedRawPathname.replaceAll("\\", "/");
+      const rawTargetsFileViewer =
+        slashNormalizedRawPathname === FILE_VIEWER_URL_ROOT ||
+        slashNormalizedRawPathname.startsWith(FILE_VIEWER_URL_PREFIX);
+      if (rawTargetsFileViewer && decodedRawPathname !== slashNormalizedRawPathname) {
+        res.writeHead(403, { "content-type": "text/plain" });
+        res.end("Forbidden");
+        return;
+      }
+      pathname = rawTargetsFileViewer
+        ? slashNormalizedRawPathname
+        : decodeURIComponent(url.pathname);
+    } catch {
+      res.writeHead(400, { "content-type": "text/plain" });
+      res.end("Bad request");
+      return;
+    }
+
+    const isFileViewerRequest =
+      pathname === FILE_VIEWER_URL_ROOT || pathname.startsWith(FILE_VIEWER_URL_PREFIX);
+
+    if (isFileViewerRequest && pathname.includes("\0")) {
+      res.writeHead(400, { "content-type": "text/plain" });
+      res.end("Bad request");
+      return;
+    }
+
+    if (isFileViewerRequest && req.method !== "GET" && req.method !== "HEAD") {
+      res.writeHead(405, {
+        "content-type": "text/plain",
+        allow: "GET, HEAD",
+      });
+      res.end("Method not allowed");
+      return;
+    }
+
+    if (pathname === FILE_VIEWER_URL_ROOT) {
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("Not found");
+      return;
+    }
+
+    let viewerFilePath: string | null;
+    try {
+      viewerFilePath = resolveFileViewerAssetPath(pathname);
+    } catch (error) {
+      if (!(error instanceof FileViewerAssetPathEscapeError)) throw error;
+      res.writeHead(403, { "content-type": "text/plain" });
+      res.end("Forbidden");
+      return;
+    }
+    if (viewerFilePath !== null) {
+      streamStaticFile(req, res, viewerFilePath, {
+        cacheControl: "public, max-age=3600, must-revalidate",
+      });
+      return;
+    }
+
     // Lightweight readiness probe used by managed launchers before opening the browser.
     if (url.pathname === "/api/health") {
       res.writeHead(200, {
@@ -3146,39 +3240,13 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
-    // Validate static paths even when no production build is present. This keeps
-    // malformed request handling independent from whether dist/public exists.
-    let pathname: string;
-    try {
-      pathname = decodeURIComponent(url.pathname);
-    } catch {
-      res.writeHead(400, { "content-type": "text/plain" });
-      res.end("Bad request");
-      return;
-    }
-
-    // Static files (production build)
+    // Static application files (production build)
     if (existsSync(DIST_DIR)) {
-      const viewerPrefix = "/file-viewer/";
-      const isViewer = pathname.startsWith(viewerPrefix);
-
       const filePath = resolve(DIST_DIR, "." + pathname);
       const distRoot = resolve(DIST_DIR);
       if (filePath !== distRoot && !filePath.startsWith(distRoot + "/")) {
         res.writeHead(403, { "content-type": "text/plain" });
         res.end("Forbidden");
-        return;
-      }
-
-      if (isViewer) {
-        if (existsSync(filePath) && statSync(filePath).isFile()) {
-          streamStaticFile(req, res, filePath, {
-            cacheControl: "public, max-age=3600, must-revalidate",
-          });
-        } else {
-          res.writeHead(404, { "content-type": "text/plain" });
-          res.end("Not found");
-        }
         return;
       }
 
