@@ -14,19 +14,19 @@ import {
   defaultHost,
   defaultPort,
   describeServer,
+  installedPackageVersion,
   isLoopbackHost,
   managedRestartPortError,
   openBrowser,
   parseWebOptions,
-  readHost,
-  readPid,
-  readPort,
+  readManagedServerStatus,
   resolveLaunchTarget,
   rotateToken,
   startServer,
   stopServer,
   urlFor,
   waitForServerReady,
+  type ManagedServerStatus,
   type ParsedWebArgs,
 } from "./daemon-manager.ts";
 
@@ -172,6 +172,15 @@ function handleRotateToken(ctx?: {
   else console.log(message);
 }
 
+function daemonVersionWarning(status: ManagedServerStatus): string | null {
+  const installedVersion = installedPackageVersion();
+  if (status.version === null || status.version === installedVersion) return null;
+  return (
+    `version mismatch: running v${status.version}; installed v${installedVersion}\n` +
+    `restart: pi-web-chat ${status.port} restart`
+  );
+}
+
 function runDaemonAndExit(): void {
   const parsed = parseWebDaemonArgs();
   if ("error" in parsed) {
@@ -201,12 +210,16 @@ function runDaemonAndExit(): void {
   }
 
   if (action === "status") {
-    const pid = readPid();
-    if (pid === null) {
+    const status = readManagedServerStatus();
+    if (status === null) {
       console.log("pi-web-chat is not running");
       process.exit(1);
     }
-    console.log(`pi-web-chat running — ${describeServer(readPort(), readHost(), pid)}`);
+    console.log(
+      `pi-web-chat running — ${describeServer(status.port, status.host, status.pid)}`,
+    );
+    const warning = daemonVersionWarning(status);
+    if (warning !== null) console.log(warning);
     process.exit(0);
   }
 
@@ -303,14 +316,16 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (action === "status") {
-        const pid = readPid();
-        if (pid === null) {
+        const status = readManagedServerStatus();
+        if (status === null) {
           ctx.ui.notify("pi-web-chat is not running", "info");
           return;
         }
+        const warning = daemonVersionWarning(status);
         ctx.ui.notify(
-          `pi-web-chat running — ${describeServer(readPort(), readHost(), pid)}`,
-          "info",
+          `pi-web-chat running — ${describeServer(status.port, status.host, status.pid)}` +
+            (warning === null ? "" : `\n${warning}`),
+          warning === null ? "info" : "warning",
         );
         return;
       }

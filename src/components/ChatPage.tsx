@@ -115,6 +115,7 @@ export function ChatPage() {
     streamThinkingComplete,
     activeTools,
     updateAvailable,
+    serverRestartRequired,
     lastError,
     optimisticMessages,
     lastNotice,
@@ -341,45 +342,67 @@ export function ChatPage() {
               agent={snapshot?.agent ?? getAgentPreference() ?? "pi"}
               onPreviewFile={previewMessageFile}
             />
-            {updateAvailable && (
+            {(updateAvailable || serverRestartRequired) && (
               <div
                 role="status"
                 className="flex shrink-0 items-start gap-3 border-t border-line bg-card px-4 py-2.5"
               >
                 <div className="min-w-0 flex-1 text-xs text-muted">
-                  <p className="font-medium text-ink">
-                    {t("updateAvailable")}
-                    {updateVersion ? ` · v${updateVersion}` : ""}
-                  </p>
-                  {updateNotes.length > 0 && (
-                    <ul className="mt-1 list-disc space-y-0.5 pl-4">
-                      {updateNotes.map((note, index) => (
-                        <li key={`${updateVersion ?? "update"}-${index}`} className="break-words">
-                          {note}
-                        </li>
-                      ))}
-                    </ul>
+                  {serverRestartRequired ? (
+                    <>
+                      <p className="font-medium text-ink">{t("serverRestartRequired")}</p>
+                      <p className="mt-1 break-words">
+                        {t("serverRestartRequiredHint", {
+                          clientVersion: __APP_VERSION__,
+                          serverVersion: updateVersion ?? "unknown",
+                        })}
+                      </p>
+                      <code className="mt-1 block select-all break-all text-ink">
+                        pi-web-chat status
+                      </code>
+                    </>
+                  ) : (
+                    <>
+                      <p className="font-medium text-ink">
+                        {t("updateAvailable")}
+                        {updateVersion ? ` · v${updateVersion}` : ""}
+                      </p>
+                      {updateNotes.length > 0 && (
+                        <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                          {updateNotes.map((note, index) => (
+                            <li
+                              key={`${updateVersion ?? "update"}-${index}`}
+                              className="break-words"
+                            >
+                              {note}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </>
                   )}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    // Clear the PWA cache first, then reload → newest bundle guaranteed
-                    const reload = () => window.location.reload();
-                    if ("caches" in window) {
-                      caches
-                        .keys()
-                        .then((keys) => Promise.all(keys.map((k) => caches.delete(k))))
-                        .catch(() => {})
-                        .finally(reload);
-                    } else {
-                      reload();
-                    }
-                  }}
-                  className="shrink-0 rounded-lg bg-accent px-3 py-1 text-xs font-medium text-accent-ink transition-opacity hover:opacity-90"
-                >
-                  {t("reload")}
-                </button>
+                {updateAvailable && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Clear the PWA cache first, then reload → newest bundle guaranteed
+                      const reload = () => window.location.reload();
+                      if ("caches" in window) {
+                        caches
+                          .keys()
+                          .then((keys) => Promise.all(keys.map((k) => caches.delete(k))))
+                          .catch(() => {})
+                          .finally(reload);
+                      } else {
+                        reload();
+                      }
+                    }}
+                    className="shrink-0 rounded-lg bg-accent px-3 py-1 text-xs font-medium text-accent-ink transition-opacity hover:opacity-90"
+                  >
+                    {t("reload")}
+                  </button>
+                )}
               </div>
             )}
             {lastError && (
