@@ -28,9 +28,7 @@ function daemonDefaults(): Partial<StandaloneCliDependencies> {
   return {
     detectAgents: () => probes,
     version: () => "0.1.110",
-    readPid: () => null,
-    readPort: () => "3141",
-    readHost: () => "127.0.0.1",
+    readManagedServerStatus: () => null,
     describeServer: (port, host, pid) => `http://${host}:${port} (pid ${pid})`,
     resolveLaunchTarget: (parsed) => ({ port: parsed.port, host: parsed.host }),
     startServer: (port, host) => ({
@@ -54,7 +52,10 @@ function daemonDefaults(): Partial<StandaloneCliDependencies> {
 
 test("standalone CLI help and version do not touch daemon state", () => {
   let reads = 0;
-  const deps = { ...daemonDefaults(), readPid: () => (reads++, null) };
+  const deps = {
+    ...daemonDefaults(),
+    readManagedServerStatus: () => (reads++, null),
+  };
   const help = captureIO();
   const version = captureIO();
 
@@ -89,6 +90,40 @@ test("standalone status never starts a missing daemon", () => {
   assert.equal(runStandaloneCli(["status"], deps, captured.io), 1);
   assert.deepEqual(captured.out, ["pi-web-chat is not running"]);
   assert.equal(starts, 0);
+});
+
+test("standalone status identifies a stale running daemon and gives an explicit restart", () => {
+  const captured = captureIO();
+  const deps = {
+    ...daemonDefaults(),
+    version: () => "0.1.113",
+    readManagedServerStatus: () => ({
+      pid: 42,
+      port: "3242",
+      host: "127.0.0.1",
+      version: "0.1.112",
+    }),
+  };
+
+  assert.equal(runStandaloneCli(["status"], deps, captured.io), 0);
+  assert.match(captured.out.join("\n"), /running v0\.1\.112; installed v0\.1\.113/);
+  assert.match(captured.out.join("\n"), /pi-web-chat 3242 restart/);
+});
+
+test("standalone status stays concise when runtime and installed versions match", () => {
+  const captured = captureIO();
+  const deps = {
+    ...daemonDefaults(),
+    readManagedServerStatus: () => ({
+      pid: 42,
+      port: "3141",
+      host: "127.0.0.1",
+      version: "0.1.110",
+    }),
+  };
+
+  assert.equal(runStandaloneCli(["status"], deps, captured.io), 0);
+  assert.deepEqual(captured.out, ["pi-web-chat running — http://127.0.0.1:3141 (pid 42)"]);
 });
 
 test("standalone start uses shared daemon lifecycle and command-specific hints", () => {

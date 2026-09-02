@@ -286,7 +286,29 @@ type VerifiedManagedServer = {
   port: string;
   host: string;
   instanceId: string | null;
+  version: string | null;
 };
+
+export type ManagedServerStatus = Omit<VerifiedManagedServer, "instanceId">;
+
+export function installedPackageVersion(): string {
+  try {
+    const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
+      version?: unknown;
+    };
+    return typeof manifest.version === "string" && manifest.version.trim().length > 0
+      ? manifest.version
+      : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function healthVersion(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const version = (value as { version?: unknown }).version;
+  return typeof version === "string" && version.trim().length > 0 ? version : null;
+}
 
 function isAbsoluteServerEntry(entry: string): boolean {
   const normalized = entry.replaceAll("\\", "/");
@@ -430,18 +452,25 @@ function verifyManagedServer(): VerifiedManagedServer | null {
   } catch {
     /* health identity remains authoritative if pid recovery cannot persist */
   }
-  return { pid, port, host, instanceId };
+  return { pid, port, host, instanceId, version: healthVersion(health) };
 }
 
-export function readPid(): number | null {
+export function readManagedServerStatus(): ManagedServerStatus | null {
   const verified = verifyManagedServer();
-  if (verified !== null) return verified.pid;
+  if (verified !== null) {
+    const { pid, port, host, version } = verified;
+    return { pid, port, host, version };
+  }
 
   const storedPid = readStoredPid();
   if (hasManagedState() && storedPid !== null && processDefinitelyGone(storedPid)) {
     clearStateFilesIfOwnedBy(storedPid);
   }
   return null;
+}
+
+export function readPid(): number | null {
+  return readManagedServerStatus()?.pid ?? null;
 }
 
 export function startServer(port: string, host: string, token?: string): StartResult {

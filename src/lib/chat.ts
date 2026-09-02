@@ -33,6 +33,7 @@ import {
   type WorkspaceConnectOptions,
   type WorkspaceTab,
 } from "./session-workspace";
+import { deriveVersionNotice } from "./version";
 
 export interface ActiveTool {
   toolCallId: string;
@@ -103,11 +104,13 @@ export interface ChatState {
   injectText: { text: string; mode: "replace" | "insert" } | null;
   /** Incremented to focus the composer textarea */
   focusToken: number;
-  /** Server version differs from the client build → prompt a reload */
+  /** Server is newer than the client build → prompt a reload. */
   updateAvailable: boolean;
-  /** Version advertised by the server when an update is available. */
+  /** Client assets are newer than the running server → prompt a daemon restart. */
+  serverRestartRequired: boolean;
+  /** Version advertised by the server when either version notice is active. */
   updateVersion: string | null;
-  /** User-facing descriptions for the advertised server version. */
+  /** User-facing descriptions for a newer advertised server version. */
   updateNotes: string[];
   /** Error event from the server (failed prompt etc.) — shown as a banner */
   lastError: string | null;
@@ -147,6 +150,7 @@ function createInitialState(): ChatState {
     injectText: null,
     focusToken: 0,
     updateAvailable: false,
+    serverRestartRequired: false,
     updateVersion: null,
     updateNotes: [],
     lastError: null,
@@ -970,14 +974,10 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     if (event.type !== "delta") this.flushStreamBuffer();
     switch (event.type) {
       case "hello":
-        // Show an update banner when the server version differs from the client build
+        // npm may replace public assets while an older daemon is still alive. Keep
+        // that downgrade direction separate so old notes are never presented as new.
         if (typeof event.version === "string") {
-          const updateAvailable = event.version !== __APP_VERSION__;
-          this.update({
-            updateAvailable,
-            updateVersion: updateAvailable ? event.version : null,
-            updateNotes: updateAvailable ? (event.updateNotes ?? []) : [],
-          });
+          this.update(deriveVersionNotice(__APP_VERSION__, event.version, event.updateNotes));
         }
         break;
       case "session_bound":

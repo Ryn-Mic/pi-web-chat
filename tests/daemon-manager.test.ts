@@ -237,6 +237,20 @@ test("new manager can query and stop a verified pre-instance daemon", async () =
       runManager(stateDir, "process.stdout.write(String(manager.readPid()));"),
       String(child.pid),
     );
+    assert.deepEqual(
+      JSON.parse(
+        runManager(
+          stateDir,
+          "process.stdout.write(JSON.stringify(manager.readManagedServerStatus()));",
+        ),
+      ),
+      {
+        pid: child.pid,
+        port: String(port),
+        host: "127.0.0.1",
+        version: "0.1.109",
+      },
+    );
     writeFileSync(join(stateDir, "pi-web-chat.instance"), "corrupt\n", "utf8");
     assert.equal(
       runManager(stateDir, "process.stdout.write(String(manager.readPid()));"),

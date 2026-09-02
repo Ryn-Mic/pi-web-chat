@@ -190,6 +190,9 @@ export const zh: Messages = {
   emptyPrompt: "有什么可以帮您？",
   messageAnchors: "跳转到消息",
   updateAvailable: "有新版本可用",
+  serverRestartRequired: "需要重启 Web Chat 服务",
+  serverRestartRequiredHint:
+    "已加载 v{clientVersion} 前端资源，但运行中的服务仍是 v{serverVersion}。请先确认本地端口，再使用该显式端口重启托管服务。",
   reload: "刷新",
   dismiss: "关闭",
   attachedImage: "附件图片",

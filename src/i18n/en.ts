@@ -199,6 +199,8 @@ export type Messages = {
   attachedImage: string;
   messageAnchors: string;
   updateAvailable: string;
+  serverRestartRequired: string;
+  serverRestartRequiredHint: string;
   dismiss: string;
   reload: string;
   imagePlaceholder: string;
@@ -466,6 +468,9 @@ export const en: Messages = {
   emptyPrompt: "How can I help?",
   messageAnchors: "Jump to message",
   updateAvailable: "A new version is available",
+  serverRestartRequired: "Web Chat server restart required",
+  serverRestartRequiredHint:
+    "The v{clientVersion} web assets are loaded, but the running server is still v{serverVersion}. Check its local port, then restart the managed server with that explicit port.",
   reload: "Reload",
   dismiss: "Dismiss",
   attachedImage: "Attached image",

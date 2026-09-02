@@ -191,6 +191,9 @@ export const ja: Messages = {
   emptyPrompt: "何をお手伝いしましょうか？",
   messageAnchors: "メッセージへ移動",
   updateAvailable: "新しいバージョンがあります",
+  serverRestartRequired: "Web Chat サーバーの再起動が必要です",
+  serverRestartRequiredHint:
+    "v{clientVersion} の Web アセットは読み込まれていますが、実行中のサーバーはまだ v{serverVersion} です。ローカルポートを確認し、そのポートを明示して管理サーバーを再起動してください。",
   reload: "再読み込み",
   dismiss: "閉じる",
   attachedImage: "添付画像",

@@ -191,6 +191,9 @@ export const ko: Messages = {
   emptyPrompt: "무엇을 도와드릴까요?",
   messageAnchors: "메시지로 이동",
   updateAvailable: "새 버전이 있습니다",
+  serverRestartRequired: "Web Chat 서버를 다시 시작해야 합니다",
+  serverRestartRequiredHint:
+    "v{clientVersion} 웹 자산은 로드되었지만 실행 중인 서버는 아직 v{serverVersion}입니다. 로컬 포트를 확인한 뒤 해당 포트를 명시해 관리 서버를 다시 시작하세요.",
   reload: "새로고침",
   dismiss: "닫기",
   attachedImage: "첨부 이미지",

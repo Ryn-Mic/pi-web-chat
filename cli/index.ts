@@ -1,17 +1,13 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   DEFAULT_PORT,
   LOG_FILE,
   TOKEN_FILE,
   describeServer,
+  installedPackageVersion,
   isLoopbackHost,
   openBrowser,
   parseWebOptions,
-  readHost,
-  readPid,
-  readPort,
+  readManagedServerStatus,
   resolveLaunchTarget,
   rotateToken,
   startServer,
@@ -19,6 +15,7 @@ import {
   urlFor,
   waitForServerReady,
   type ParsedWebArgs,
+  type ManagedServerStatus,
   type StartResult,
   type StopResult,
 } from "../extensions/daemon-manager.ts";
@@ -36,9 +33,7 @@ export type CliIO = {
 export type StandaloneCliDependencies = {
   detectAgents(): AgentCommandProbe[];
   parseOptions(tokens: string[]): ParsedWebArgs | { error: string };
-  readPid(): number | null;
-  readPort(): string;
-  readHost(): string;
+  readManagedServerStatus(): ManagedServerStatus | null;
   describeServer(port: string, host: string, pid: number): string;
   resolveLaunchTarget(parsed: ParsedWebArgs): { port: string; host: string };
   startServer(port: string, host: string, token?: string): StartResult;
@@ -63,24 +58,10 @@ const defaultIO: CliIO = {
   error: (line) => console.error(line),
 };
 
-function packageVersion(): string {
-  try {
-    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
-      version?: string;
-    };
-    return manifest.version || "unknown";
-  } catch {
-    return "unknown";
-  }
-}
-
 const defaults: StandaloneCliDependencies = {
   detectAgents: () => detectLocalAgentCommands(),
   parseOptions: parseWebOptions,
-  readPid,
-  readPort,
-  readHost,
+  readManagedServerStatus,
   describeServer,
   resolveLaunchTarget,
   startServer,
@@ -92,7 +73,7 @@ const defaults: StandaloneCliDependencies = {
   openBrowser: (url) => {
     if (process.env.PI_WEB_NO_OPEN !== "1") openBrowser(url);
   },
-  version: packageVersion,
+  version: installedPackageVersion,
   logFile: LOG_FILE,
   tokenFile: TOKEN_FILE,
 };
@@ -219,14 +200,21 @@ export function runStandaloneCli(
   }
 
   if (parsed.action === "status") {
-    const pid = deps.readPid();
-    if (pid === null) {
+    const status = deps.readManagedServerStatus();
+    if (status === null) {
       io.out("pi-web-chat is not running");
       return 1;
     }
     io.out(
-      `pi-web-chat running — ${deps.describeServer(deps.readPort(), deps.readHost(), pid)}`,
+      `pi-web-chat running — ${deps.describeServer(status.port, status.host, status.pid)}`,
     );
+    const installedVersion = deps.version();
+    if (status.version !== null && status.version !== installedVersion) {
+      io.out(
+        `  version mismatch: running v${status.version}; installed v${installedVersion}`,
+      );
+      io.out(`  restart: pi-web-chat ${status.port} restart`);
+    }
     return 0;
   }
 
