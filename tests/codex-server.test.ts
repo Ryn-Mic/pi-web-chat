@@ -240,6 +240,7 @@ lines.on("line", (line) => {
       PI_WEB_2FA: "off",
       PI_WEB_CODEX_BIN: fakeCodex,
       PI_WEB_CODEX_TRANSPORT: "proxy",
+      PI_WEB_CODEX_STARTED_MARKER: startedMarker,
       FAKE_CODEX_STARTED: startedMarker,
       FAKE_CODEX_REQUESTS: requestLog,
       FAKE_PROJECT: project,

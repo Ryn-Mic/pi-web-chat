@@ -19,9 +19,15 @@ import { AgentEyes } from "./AgentEyes";
 import { AgentIcon } from "./AgentIcon";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { SettingsMenu } from "./SettingsMenu";
+import { DIALOG_BACKDROP_CLASS } from "./ui";
 import {
+  ConfirmActionIcon,
+  DeleteActionIcon,
+  DismissActionIcon,
   FolderTreeIcon,
   NewSessionIcon,
+  RenameActionIcon,
+  SearchFieldIcon,
   SidebarToggleIcon,
   TreeChevronIcon,
 } from "./MorphIcons";
@@ -32,16 +38,6 @@ function formatDate(iso: string, locale: string) {
     d.toLocaleDateString(locale, { month: "short", day: "numeric" }) +
     " " +
     d.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })
-  );
-}
-
-/** Sidebar toggle icon (Claude/ChatGPT desktop-style panel icon) */
-function SidebarPanelIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-[18px] fill-none stroke-current stroke-[1.8]">
-      <rect x="3" y="4" width="18" height="16" rx="3" />
-      <path d="M9.5 4v16" />
-    </svg>
   );
 }
 
@@ -208,9 +204,7 @@ function SessionRow({
             className="flex size-6 items-center justify-center rounded-md text-red-500 transition-colors hover:bg-red-500/10 disabled:cursor-wait disabled:opacity-60"
           >
             {saving ? <LoadingIndicator label={t("loading")} size="sm" /> : (
-              <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2">
-                <path d="m5 12 4 4L19 6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              <ConfirmActionIcon />
             )}
           </button>
           <button
@@ -220,9 +214,7 @@ function SessionRow({
             aria-label={t("cancel")}
             className="flex size-6 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink"
           >
-            <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2">
-              <path d="M18 6 6 18M6 6l12 12" strokeLinecap="round" />
-            </svg>
+            <DismissActionIcon />
           </button>
         </span>
       ) : (
@@ -241,13 +233,7 @@ function SessionRow({
             aria-label={t("renameSession")}
             className="flex size-6 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink"
           >
-            <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-[1.8]">
-              <path
-                d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
+            <RenameActionIcon />
           </button>
           <button
             type="button"
@@ -256,13 +242,7 @@ function SessionRow({
             aria-label={t("deleteSession")}
             className="flex size-6 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-red-500"
           >
-            <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-[1.8]">
-              <path
-                d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M10 11v6M14 11v6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
+            <DeleteActionIcon />
           </button>
         </span>
       )}
@@ -497,14 +477,7 @@ function SessionsPanel({
 
       <div className="px-3 pb-2">
         <div className="relative flex items-center">
-          <svg
-            viewBox="0 0 24 24"
-            className="pointer-events-none absolute left-2.5 size-3.5 fill-none stroke-current stroke-2 text-faint"
-            aria-hidden
-          >
-            <circle cx="11" cy="11" r="7" />
-            <path d="m21 21-4.35-4.35" strokeLinecap="round" />
-          </svg>
+          <SearchFieldIcon className="pointer-events-none absolute left-2.5 text-faint" />
           <input
             type="text"
             value={searchQuery}
@@ -623,11 +596,11 @@ export function SessionsDrawer({
         }`}
         aria-label={t("sessionList")}
       >
-        <SidebarPanelIcon />
+        <SidebarToggleIcon size={18} />
       </Dialog.Trigger>
       {!instantHide && (
         <Dialog.Portal>
-          <Dialog.Backdrop className="fixed inset-0 bg-black/40 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
+          <Dialog.Backdrop className={DIALOG_BACKDROP_CLASS} />
           <Dialog.Popup className="fixed inset-y-0 left-0 flex w-[82vw] max-w-xs flex-col bg-sidebar shadow-2xl outline-none transition-transform data-[starting-style]:-translate-x-full data-[ending-style]:-translate-x-full">
             <SessionsPanel
               currentSessionFile={currentSessionFile}

@@ -3,6 +3,7 @@ import type { UIExtensionInfo } from "../../shared/protocol";
 import { useExtensions } from "../lib/api";
 import { useT } from "../lib/i18n";
 import { LoadingIndicator } from "./LoadingIndicator";
+import { DIALOG_BACKDROP_CLASS, DIALOG_POPUP_CLASS } from "./ui";
 
 function DetailRow({ label, items }: { label: string; items: string[] }) {
   if (items.length === 0) return null;
@@ -44,8 +45,8 @@ export function ExtensionsDialog({
       }}
     >
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 bg-black/40 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
-        <Dialog.Popup className="fixed top-1/2 left-1/2 flex max-h-[75vh] w-[90vw] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-line bg-card shadow-xl outline-none">
+        <Dialog.Backdrop className={DIALOG_BACKDROP_CLASS} />
+        <Dialog.Popup className={DIALOG_POPUP_CLASS}>
           <div className="border-b border-line px-4 py-3">
             <Dialog.Title className="text-sm font-semibold">{t("activeExtensions")}</Dialog.Title>
             <Dialog.Description className="mt-0.5 text-xs text-faint">

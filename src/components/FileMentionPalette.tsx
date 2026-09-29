@@ -1,9 +1,9 @@
 import type { UIFileMatch } from "../../shared/protocol";
 import { useT } from "../lib/i18n";
 import { LoadingIndicator } from "./LoadingIndicator";
+import { PALETTE_POPUP_CLASS } from "./ui";
 
-const POPUP_CLASS =
-  "absolute right-0 bottom-[calc(100%+0.5rem)] left-0 z-20 rounded-lg border border-line bg-card shadow-lg";
+const POPUP_CLASS = PALETTE_POPUP_CLASS;
 
 export function FileMentionPalette({
   matches,

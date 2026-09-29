@@ -14,6 +14,7 @@ import {
 import { useT } from "../lib/i18n";
 import { GitWorkspacePanel } from "./GitWorkspacePanel";
 import { LoadingIndicator } from "./LoadingIndicator";
+import { DIALOG_BACKDROP_CLASS } from "./ui";
 import {
   FolderTreeIcon,
   RefreshActionIcon,
@@ -519,7 +520,7 @@ export function FilesDrawer({
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 bg-black/40 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
+        <Dialog.Backdrop className={DIALOG_BACKDROP_CLASS} />
         <Dialog.Popup className="fixed inset-y-0 right-0 flex w-[82vw] max-w-xs flex-col bg-sidebar shadow-2xl outline-none transition-transform data-[starting-style]:translate-x-full data-[ending-style]:translate-x-full">
           <Dialog.Title className="sr-only">{t("workspace")}</Dialog.Title>
           <div className="flex shrink-0 items-center gap-1 border-b border-line px-2 pt-[calc(0.5rem+env(safe-area-inset-top))] pb-1.5">

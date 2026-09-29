@@ -151,6 +151,14 @@ const CODEX_TRANSPORT: CodexTransportMode =
       ? "standalone"
       : "auto";
 const CODEX_METADATA_TYPE = "pi-web-chat.codex";
+// PI_WEB_PROFILE=1 prints createEntry stage timings to stderr so slow session
+// opens can be attributed without a debugger. Off in production by default.
+const PROFILE = process.env.PI_WEB_PROFILE?.trim() === "1";
+const profile = PROFILE
+  ? (label: string, ms: number) => {
+      process.stderr.write(`[profile] createEntry ${label}: ${ms.toFixed(1)}ms\n`);
+    }
+  : undefined;
 const sessionSummaryIndex = new SessionSummaryIndex(join(getAgentDir(), "sessions"));
 const codexAppServer = new CodexAppServerClient({
   cwd: AGENT_CWD,
@@ -159,6 +167,7 @@ const codexAppServer = new CodexAppServerClient({
 });
 let codexModelsCache: { at: number; models: CodexModelInfo[] } | null = null;
 let codexThreadsCache: { at: number; threads: CodexThreadInfo[] } | null = null;
+let codexThreadsRefresh: Promise<CodexThreadInfo[]> | null = null;
 let codexRemoteStatusCache: { at: number; status: CodexRemoteStatus } | null = null;
 
 /** Daemon state file dir (shared by the npm CLI and legacy Pi extension). */
@@ -331,6 +340,10 @@ const codexForksInFlight = new WeakMap<WebSocket, Promise<unknown>>();
 /** Grace period before idle session runtimes are cleaned up */
 const IDLE_TTL_MS = 15 * 60_000;
 const CODEX_CATALOG_TTL_MS = 15_000;
+// thread/list with useStateDbOnly=false rescans every Codex rollout file. On a
+// long-lived ~/.codex that single RPC can take seconds, so the thread catalog
+// uses stale-while-revalidate instead of blocking the sessions API.
+const CODEX_THREADS_TTL_MS = 60_000;
 
 async function codexModels(): Promise<CodexModelInfo[]> {
   if (codexModelsCache && Date.now() - codexModelsCache.at < CODEX_CATALOG_TTL_MS) {
@@ -341,13 +354,65 @@ async function codexModels(): Promise<CodexModelInfo[]> {
   return models;
 }
 
-async function codexThreads(): Promise<CodexThreadInfo[]> {
-  if (codexThreadsCache && Date.now() - codexThreadsCache.at < CODEX_CATALOG_TTL_MS) {
-    return codexThreadsCache.threads;
+/** In-flight thread/list refresh shared by cold calls and revalidation. */
+function refreshCodexThreads(): Promise<CodexThreadInfo[]> {
+  if (!codexThreadsRefresh) {
+    codexThreadsRefresh = codexAppServer.listThreads()
+      .then((threads) => {
+        codexThreadsCache = { at: Date.now(), threads };
+        return threads;
+      })
+      .finally(() => {
+        codexThreadsRefresh = null;
+      });
   }
-  const threads = await codexAppServer.listThreads();
-  codexThreadsCache = { at: Date.now(), threads };
-  return threads;
+  return codexThreadsRefresh;
+}
+
+/**
+ * Serve the cached catalog immediately; refresh it in the background once it
+ * is older than the TTL. Only the very first call after startup blocks (and
+ * startup pre-warms even that away in practice).
+ */
+async function codexThreads(): Promise<CodexThreadInfo[]> {
+  const cached = codexThreadsCache;
+  if (cached && Date.now() - cached.at < CODEX_THREADS_TTL_MS) {
+    return cached.threads;
+  }
+  if (cached) {
+    void refreshCodexThreads().catch(() => {});
+    return cached.threads;
+  }
+  return refreshCodexThreads().catch(() => []);
+}
+
+/** Mark the catalog stale but keep serving it until the refresh lands. */
+function invalidateCodexThreads(): void {
+  if (codexThreadsCache) codexThreadsCache.at = 0;
+}
+
+/** Apply a known thread mutation to the cache without any list round trip. */
+function upsertCachedCodexThread(thread: CodexThreadInfo): void {
+  const cached = codexThreadsCache;
+  if (!cached) return;
+  // Keep an already-applied display name if the fresh read predates a rename.
+  const existing = cached.threads.find((candidate) => candidate.id === thread.id);
+  const merged = thread.name || !existing?.name ? thread : { ...thread, name: existing.name };
+  cached.threads = [merged, ...cached.threads.filter((candidate) => candidate.id !== thread.id)];
+}
+
+function renameCachedCodexThread(threadId: string, name: string): void {
+  const cached = codexThreadsCache;
+  if (!cached) return;
+  cached.threads = cached.threads.map((thread) =>
+    thread.id === threadId ? { ...thread, name } : thread,
+  );
+}
+
+function dropCachedCodexThread(threadId: string): void {
+  const cached = codexThreadsCache;
+  if (!cached) return;
+  cached.threads = cached.threads.filter((thread) => thread.id !== threadId);
 }
 
 async function codexRemoteStatus(): Promise<CodexRemoteStatus | undefined> {
@@ -589,6 +654,7 @@ async function createEntry(
   requestedAgent?: AgentKind,
   draftConnectionId?: string,
 ): Promise<SessionEntry> {
+  const profileT0 = PROFILE ? performance.now() : 0;
   const nativeThreadId = nativeCodexThreadId(id);
   const nativeThread = nativeThreadId
     ? await codexAppServer.readThread(nativeThreadId).catch(() => undefined)
@@ -600,6 +666,7 @@ async function createEntry(
   const sessionCwd = nativeThread?.cwd ?? (path ? AGENT_CWD : cwd ? expandHome(cwd) : AGENT_CWD);
   const inMemoryCodexRuntime = !!nativeThreadId
     || (!path && (requestedAgent ?? DEFAULT_AGENT_KIND) === "codex");
+  let profileT1 = PROFILE ? performance.now() : 0;
   const runtime = await createAgentSessionRuntime(createRuntime, {
     cwd: sessionCwd,
     agentDir: getAgentDir(),
@@ -607,9 +674,19 @@ async function createEntry(
       ? SessionManager.inMemory(sessionCwd)
       : SessionManager.create(sessionCwd),
   });
-  if (path) await runtime.switchSession(path);
-  recordSessionMessageCompletions(runtime.session.sessionManager.getEntries());
-
+  profile?.("createRuntime", performance.now() - profileT1);
+  if (path) {
+    const t = PROFILE ? performance.now() : 0;
+    await runtime.switchSession(path);
+    profile?.("switchSession", performance.now() - t);
+  }
+  if (PROFILE) {
+    const t = performance.now();
+    recordSessionMessageCompletions(runtime.session.sessionManager.getEntries());
+    profile?.("recordCompletions", performance.now() - t);
+  } else {
+    recordSessionMessageCompletions(runtime.session.sessionManager.getEntries());
+  }
   const agent = nativeThreadId ? "codex" : agentKindForRuntime(runtime, path, requestedAgent);
   const codexState = agent === "codex"
     ? nativeThreadId
@@ -670,7 +747,13 @@ async function createEntry(
     activeTools: new Map(),
     activeTodos: new Map(),
   };
-  refreshEntryFileState(entry);
+  if (PROFILE) {
+    const t = performance.now();
+    refreshEntryFileState(entry);
+    profile?.("refreshFileState", performance.now() - t);
+  } else {
+    refreshEntryFileState(entry);
+  }
   entries.set(entry.id, entry);
   if (draftConnectionId) draftEntries.set(draftConnectionId, entry);
   if (entry.codex && (nativeThreadId || path)) {
@@ -680,7 +763,14 @@ async function createEntry(
       codexRemoteStatus().catch(() => undefined),
     ]);
   }
-  entry.lastSnapshot = buildSnapshot(entry);
+  if (PROFILE) {
+    const t = performance.now();
+    entry.lastSnapshot = buildSnapshot(entry);
+    profile?.("buildSnapshot", performance.now() - t);
+    profile?.("total", performance.now() - profileT0);
+  } else {
+    entry.lastSnapshot = buildSnapshot(entry);
+  }
   if (entry.agent === "pi") {
     bindSession(entry);
     await bindWebExtensions(entry);
@@ -1256,7 +1346,7 @@ function handleCodexEvent(entry: SessionEntry, event: CodexSessionEvent): void {
       broadcastSnapshot(entry);
       break;
     case "catalog_changed":
-      codexThreadsCache = null;
+      invalidateCodexThreads();
       knownRootsCache = null;
       break;
     case "remote_status":
@@ -1267,7 +1357,16 @@ function handleCodexEvent(entry: SessionEntry, event: CodexSessionEvent): void {
       entry.codexAgentStarted = false;
       entry.activeTools.clear();
       entry.activeTodos.clear();
-      codexThreadsCache = null;
+      // Keep the sidebar current (preview/updatedAt) without a full rollout
+      // rescan; fall back to a stale-marked catalog if the read fails.
+      if (entry.codex?.currentThreadId) {
+        const threadId = entry.codex.currentThreadId;
+        void codexAppServer.readThread(threadId)
+          .then(upsertCachedCodexThread)
+          .catch(() => invalidateCodexThreads());
+      } else {
+        invalidateCodexThreads();
+      }
       broadcast({ type: "agent_end" });
       broadcastSnapshot(entry, { isStreaming: false });
       if (event.error) broadcastTo(entry, { type: "error", message: event.error });
@@ -1480,7 +1579,7 @@ async function handleCodexBuiltinCommand(
         entry.codexDraftName = parsed.args;
       } else if (codex?.currentThreadId) {
         await codexAppServer.renameThread(codex.currentThreadId, parsed.args);
-        codexThreadsCache = null;
+        renameCachedCodexThread(codex.currentThreadId, parsed.args);
       }
       if (entry.published && !entry.codexNative) session.setSessionName(parsed.args);
       broadcastSnapshot(entry);
@@ -1797,7 +1896,12 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
         entry.codexNative = true;
         entry.codexState = { ...codexStateForEntry(entry), threadId };
         entries.set(entry.id, entry);
-        codexThreadsCache = null;
+        // The new native thread must appear in the sidebar right away. A cheap
+        // single-thread read updates the cached catalog; only fall back to a
+        // full rescan if that read fails.
+        void codexAppServer.readThread(threadId)
+          .then(upsertCachedCodexThread)
+          .catch(() => invalidateCodexThreads());
         publishEntry(entry, ws);
         const draftName = entry.codexDraftName;
         entry.codexDraftName = undefined;
@@ -1806,7 +1910,7 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
           // slow shared-daemon round trip.
           void codexAppServer.renameThread(threadId, draftName)
             .then(() => {
-              codexThreadsCache = null;
+              renameCachedCodexThread(threadId, draftName);
             })
             .catch((error) => {
               sendTo(ws, {
@@ -1948,7 +2052,11 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
           bindings: wsEntry,
           forkThread: async () => {
             const forkedThreadId = await codex.fork();
-            codexThreadsCache = null;
+            // Show the forked thread immediately; only rescan the catalog if
+            // the single-thread read fails.
+            void codexAppServer.readThread(forkedThreadId)
+              .then(upsertCachedCodexThread)
+              .catch(() => invalidateCodexThreads());
             return forkedThreadId;
           },
           acquireEntry: (sessionId) => acquireEntry(sessionId),
@@ -2164,7 +2272,7 @@ async function deleteSession(id: string): Promise<{ ok: boolean; error?: string 
   if (codexThreadId) {
     try {
       await codexAppServer.deleteThread(codexThreadId);
-      codexThreadsCache = null;
+      dropCachedCodexThread(codexThreadId);
       const entry = entries.get(id);
       if (entry) {
         for (const ws of entry.clients) ws.close(1000, "session deleted");
@@ -2214,7 +2322,7 @@ async function deleteSession(id: string): Promise<{ ok: boolean; error?: string 
   if (bridgedCodexThreadId) {
     try {
       await codexAppServer.deleteThread(bridgedCodexThreadId);
-      codexThreadsCache = null;
+      dropCachedCodexThread(bridgedCodexThreadId);
     } catch (error) {
       return { ok: false, error: "failed to delete Codex thread: " + (error instanceof Error ? error.message : String(error)) };
     }
@@ -2256,7 +2364,7 @@ async function renameSession(
   if (codexThreadId) {
     try {
       await codexAppServer.renameThread(codexThreadId, name);
-      codexThreadsCache = null;
+      renameCachedCodexThread(codexThreadId, name);
       return { ok: true, name };
     } catch (error) {
       return { ok: false, error: "failed to rename Codex thread: " + (error instanceof Error ? error.message : String(error)) };
@@ -2270,7 +2378,7 @@ async function renameSession(
     if (entry.agent === "codex" && entry.codex?.currentThreadId) {
       try {
         await codexAppServer.renameThread(entry.codex.currentThreadId, name);
-        codexThreadsCache = null;
+        renameCachedCodexThread(entry.codex.currentThreadId, name);
       } catch (error) {
         return { ok: false, error: "failed to rename Codex thread: " + (error instanceof Error ? error.message : String(error)) };
       }
@@ -2779,7 +2887,7 @@ const httpServer = createServer(async (req, res) => {
     if (url.pathname === "/api/sessions") {
       const [sessions, nativeThreads] = await Promise.all([
         sessionSummaryIndex.list(),
-        codexThreads().catch(() => []),
+        codexThreads().catch(() => [] as CodexThreadInfo[]),
       ]);
       void codexRemoteStatus();
       // Which loaded runtimes are currently streaming (for the sidebar running dot)
@@ -3518,6 +3626,18 @@ httpServer.listen(PORT, HOST, () => {
     );
   } else {
     console.log(`pi-web-chat auth: 2FA disabled (PI_WEB_2FA=off), access token = ${auth.token}`);
+  }
+
+  // The Codex thread catalog is slow to build from rollout files (seconds on a
+  // long-lived ~/.codex). Warm it once in the background so the first
+  // /api/sessions request does not pay that cost on the response path.
+  // Skip it while a test fake backend is in play: tests assert that certain
+  // paths never start Codex at all.
+  if (!process.env.PI_WEB_CODEX_STARTED_MARKER) {
+    void refreshCodexThreads().catch(() => {
+      // Codex missing or not usable here; the first sessions request will retry
+      // and simply report no Codex threads if the backend stays unavailable.
+    });
   }
 });
 
