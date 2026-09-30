@@ -93,7 +93,7 @@ export function MobileFilePreview({
   };
 
   return (
-    <div className="fixed inset-x-0 top-0 z-50 flex h-[var(--app-viewport-height,100dvh)] flex-col bg-canvas">
+    <div className="fixed inset-0 z-50 flex flex-col bg-canvas">
       <header className="flex min-h-14 shrink-0 items-center gap-1 border-b border-line bg-sidebar px-[max(0.25rem,env(safe-area-inset-left))] pt-[env(safe-area-inset-top)] pr-[max(0.25rem,env(safe-area-inset-right))]">
         <button
           type="button"
