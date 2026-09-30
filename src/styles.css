@@ -616,11 +616,31 @@ body {
   padding-top: 0.125rem;
   padding-bottom: 0.125rem;
 }
-.message-markdown [data-streamdown="blockquote"] {
-  margin-top: 0.75rem;
-  margin-bottom: 0.75rem;
-  padding-left: 0.75rem;
+.message-markdown [data-streamdown="blockquote"],
+.prose blockquote {
+  margin-top: 0.875rem !important;
+  margin-bottom: 0.875rem !important;
+  padding: 0.5rem 0.875rem !important;
+  border-left: 3px solid var(--c-accent) !important;
+  border-radius: 0 0.5rem 0.5rem 0;
+  background-color: color-mix(in srgb, var(--c-accent) 6%, transparent);
+  color: var(--c-ink) !important;
+  font-style: normal;
 }
+.dark .message-markdown [data-streamdown="blockquote"],
+.dark .prose blockquote {
+  background-color: color-mix(in srgb, var(--c-accent) 9%, transparent);
+}
+
+.message-markdown hr,
+.prose hr {
+  border: none !important;
+  height: 1px !important;
+  margin-top: 1.5rem !important;
+  margin-bottom: 1.5rem !important;
+  background: linear-gradient(to right, transparent, var(--c-line) 20%, var(--c-line) 80%, transparent) !important;
+}
+
 .message-markdown [data-streamdown="code-block"],
 .message-markdown [data-streamdown="table-wrapper"] {
   margin-top: 0.75rem;
