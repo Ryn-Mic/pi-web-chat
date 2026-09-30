@@ -1,4 +1,4 @@
-import { createReadStream, statSync } from "node:fs";
+import { closeSync, createReadStream, fstatSync, openSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { extname } from "node:path";
 import {
@@ -59,6 +59,84 @@ interface StaticOptions {
 const INTERNAL_ERROR_TEXT = "internal server error";
 const INTERNAL_ERROR_JSON = { error: INTERNAL_ERROR_TEXT };
 
+function destroyReadStream(stream: ReturnType<typeof createReadStream>): void {
+  // An in-flight fs read can report an error after HTTP listeners are detached.
+  stream.once("error", () => {});
+  stream.destroy();
+}
+
+function pipeContentStream(
+  req: IncomingMessage,
+  res: ServerResponse,
+  stream: ReturnType<typeof createReadStream>,
+  expectedBytes: number,
+): void {
+  if (req.aborted || res.writableEnded || res.destroyed) {
+    destroyReadStream(stream);
+    return;
+  }
+  if (req.method === "HEAD" || expectedBytes === 0) {
+    destroyReadStream(stream);
+    res.writeHead(200);
+    res.end();
+    return;
+  }
+
+  let sentBytes = 0;
+  const detach = () => {
+    req.removeListener("aborted", onRequestClose);
+    req.removeListener("close", onRequestClose);
+    res.removeListener("close", cleanup);
+    res.removeListener("finish", cleanup);
+    stream.removeListener("data", onData);
+    stream.removeListener("end", onEnd);
+  };
+  const cleanup = () => {
+    detach();
+    stream.unpipe(res);
+    destroyReadStream(stream);
+  };
+  const onRequestClose = () => {
+    cleanup();
+    // A response with an incomplete Content-Length cannot reuse its connection.
+    res.destroy();
+  };
+  const onData = (chunk: Buffer | string) => {
+    sentBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+  };
+  const onEnd = () => {
+    if (sentBytes !== expectedBytes) {
+      cleanup();
+      res.destroy();
+    } else {
+      res.end();
+    }
+  };
+  const onError = () => {
+    cleanup();
+    res.destroy();
+  };
+
+  req.once("aborted", onRequestClose);
+  req.once("close", onRequestClose);
+  res.once("close", cleanup);
+  res.once("finish", cleanup);
+  stream.on("data", onData);
+  stream.once("end", onEnd);
+  stream.once("error", onError);
+  // Keep the error listener until the descriptor closes, including after abort.
+  stream.once("close", () => stream.removeListener("error", onError));
+  try {
+    res.writeHead(200);
+    // Node's pipe end listener can already be queued when we detect a short
+    // read. End only after our own byte-count check, never via pipe's listener.
+    stream.pipe(res, { end: false });
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
+}
+
 export function streamStaticFile(
   req: IncomingMessage,
   res: ServerResponse,
@@ -66,16 +144,15 @@ export function streamStaticFile(
   options?: StaticOptions,
 ): void {
   let stream: ReturnType<typeof createReadStream> | undefined;
-  const cleanup = () => {
-    stream?.destroy();
-    stream = undefined;
-  };
-  req.once("aborted", cleanup);
-  res.once("close", cleanup);
+  let fd: number | undefined;
 
   try {
-    const st = statSync(filePath);
+    fd = openSync(filePath, "r");
+    // Headers and reads must describe the same open file, even after replacement.
+    const st = fstatSync(fd);
     if (!st.isFile()) {
+      closeSync(fd);
+      fd = undefined;
       sendPlain(res, 404, "Not found");
       return;
     }
@@ -90,15 +167,22 @@ export function streamStaticFile(
     };
     if (options?.cacheControl) headers["cache-control"] = options.cacheControl;
 
-    res.writeHead(200, headers);
-    stream = createReadStream(filePath);
-    stream.on("error", () => {
-      cleanup();
-      res.destroy();
+    stream = createReadStream(filePath, {
+      fd, autoClose: true, start: 0,
+      ...(st.size > 0 ? { end: st.size - 1 } : {}),
     });
-    stream.pipe(res);
+    fd = undefined; // The stream now owns the descriptor.
+    if (st.size === 0) stream.push(null);
+    for (const [key, value] of Object.entries(headers)) res.setHeader(key, value);
+    pipeContentStream(req, res, stream, st.size);
   } catch (err) {
-    cleanup();
+    if (stream) destroyReadStream(stream);
+    if (fd !== undefined) closeSync(fd);
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    res.removeHeader("content-length");
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ENOTDIR") {
       sendPlain(res, 404, "Not found");
@@ -139,89 +223,24 @@ export function sendResolvedFile(
   meta: ResolvedPreviewFile,
   options?: SendResolvedFileOptions,
 ): void {
-  const extraHeaders = options?.extraHeaders;
-  const onReady = options?.onReady;
-
   let stream: ReturnType<typeof createReadStream> | undefined;
-  let reqAborted = false;
-
-  const destroyStream = () => {
-    const current = stream;
-    if (!current) return;
-    current.unpipe(res);
-    current.destroy();
-    if (stream === current) {
-      stream = undefined;
-    }
-  };
-
-  const onReqAborted = () => {
-    reqAborted = true;
-    detach();
-    destroyStream();
-  };
-  const onResClose = () => {
-    detach();
-    destroyStream();
-  };
-  const onResFinish = () => {
-    detach();
-    destroyStream();
-  };
-  const onStreamError = () => {
-    detach();
-    if (!res.headersSent) {
-      res.writeHead(500, { "content-type": "application/json", "cache-control": "no-store" });
-    }
-    res.end();
-    destroyStream();
-  };
-
-  const detach = () => {
-    req.removeListener("aborted", onReqAborted);
-    req.removeListener("close", onReqAborted);
-    res.removeListener("close", onResClose);
-    res.removeListener("finish", onResFinish);
-    stream?.removeListener("error", onStreamError);
-  };
 
   try {
     const fdResult = openResolvedPreviewFile(meta);
     stream = fdResult.stream;
 
+    // A failed one-time capability check must leave no file framing headers on
+    // the caller's JSON error response.
+    options?.onReady?.();
     setContentHeaders(res, meta);
-    if (extraHeaders) {
-      for (const [key, value] of Object.entries(extraHeaders)) {
+    if (options?.extraHeaders) {
+      for (const [key, value] of Object.entries(options.extraHeaders)) {
         res.setHeader(key, value);
       }
     }
-    onReady?.();
-
-    if (req.method === "HEAD") {
-      res.writeHead(200);
-      res.end();
-      destroyStream();
-      return;
-    }
-
-    // Only register listeners after the file descriptor is open; if open fails,
-    // the function throws and no listeners are left behind.
-    req.once("aborted", onReqAborted);
-    req.once("close", onReqAborted);
-    res.once("close", onResClose);
-    res.once("finish", onResFinish);
-    stream.once("error", onStreamError);
-
-    if (reqAborted || res.writableEnded || res.destroyed) {
-      detach();
-      destroyStream();
-      return;
-    }
-    res.writeHead(200);
-    stream.pipe(res);
+    pipeContentStream(req, res, stream, meta.size);
   } catch (err) {
-    detach();
-    destroyStream();
+    if (stream) destroyReadStream(stream);
     throw err;
   }
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import EventEmitter from "node:events";
-import { createServer } from "node:http";
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { Agent, createServer, request } from "node:http";
+import { appendFileSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -192,6 +192,129 @@ test("sendResolvedFile removes own listeners after successful GET response", asy
   rmSync(dir, { recursive: true, force: true });
 });
 
+for (const initialContent of ["hello", ""]) {
+  test(`sendResolvedFile bounds a ${initialContent.length}-byte response when its open file grows`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-web-send-growth-"));
+    const filePath = join(dir, "doc.txt");
+    writeFileSync(filePath, initialContent);
+    const req = new FakeRequest("GET");
+    const res = new FakeResponse();
+    const finished = new Promise<void>((resolve, reject) => {
+      res.once("finish", resolve);
+      res.once("error", reject);
+    });
+    try {
+      sendResolvedFile(req, res, resolvedPreviewMeta(filePath), {
+        // The descriptor has passed metadata validation, but no read has begun.
+        onReady: () => appendFileSync(filePath, "added after open"),
+      });
+      await finished;
+      assert.equal(res.headers["content-length"], String(initialContent.length));
+      assert.equal(Buffer.concat(res.chunks).toString(), initialContent);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("sendResolvedFile preserves keepalive on growth and closes it on truncation", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-web-keepalive-growth-"));
+  const filePath = join(dir, "doc.txt");
+  writeFileSync(filePath, "hello");
+  let requests = 0;
+  const server = createServer((req, res) => {
+    const currentRequest = requests++;
+    if (currentRequest === 0) {
+      sendResolvedFile(req, res, resolvedPreviewMeta(filePath), {
+        onReady: () => appendFileSync(filePath, "ed"),
+      });
+    } else if (currentRequest === 2) {
+      sendResolvedFile(req, res, resolvedPreviewMeta(filePath), {
+        onReady: () => writeFileSync(filePath, "hi"),
+      });
+    } else {
+      res.writeHead(409, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "content changed" }));
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+  const get = () => new Promise<{ status: number; text: string; reused: boolean }>((resolve, reject) => {
+    const req = request(`http://127.0.0.1:${port}`, { agent }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      res.once("error", reject);
+      res.once("end", () => resolve({
+        status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString(), reused: req.reusedSocket,
+      }));
+    });
+    req.once("error", reject);
+    req.end();
+  });
+  try {
+    assert.deepEqual(await get(), { status: 200, text: "hello", reused: false });
+    assert.deepEqual(await get(), { status: 409, text: '{"error":"content changed"}', reused: true });
+    await assert.rejects(get(), { code: "ECONNRESET" });
+    assert.deepEqual(await get(), { status: 409, text: '{"error":"content changed"}', reused: false });
+  } finally {
+    agent.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("sendResolvedFile destroys an incomplete response when its open file truncates", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-web-send-truncation-"));
+  const filePath = join(dir, "doc.txt");
+  writeFileSync(filePath, "hello");
+  const req = new FakeRequest("GET");
+  const res = new FakeResponse();
+  const closed = new Promise<void>((resolve) => res.once("close", resolve));
+  try {
+    sendResolvedFile(req, res, resolvedPreviewMeta(filePath), {
+      onReady: () => writeFileSync(filePath, "hi"),
+    });
+    await closed;
+    assert.equal(res.headers["content-length"], "5");
+    assert.equal(Buffer.concat(res.chunks).toString(), "hi");
+    assert.equal(res.destroyed, true);
+    assert.equal(res.writableEnded, false);
+    assert.equal(req.listenerCount("aborted"), 0);
+    assert.equal(req.listenerCount("close"), 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+for (const initialContent of ["hello", ""]) {
+  test(`streamStaticFile bounds a ${initialContent.length}-byte response when its open file grows`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-web-static-growth-"));
+    const filePath = join(dir, "asset.txt");
+    writeFileSync(filePath, initialContent);
+    const req = new FakeRequest("GET");
+    class GrowingResponse extends FakeResponse {
+      override writeHead(status: number) {
+        appendFileSync(filePath, "added after open");
+        super.writeHead(status);
+      }
+    }
+    const res = new GrowingResponse();
+    const finished = new Promise<void>((resolve, reject) => {
+      res.once("finish", resolve);
+      res.once("error", reject);
+    });
+    try {
+      streamStaticFile(req, res, filePath);
+      await finished;
+      assert.equal(res.headers["content-length"], String(initialContent.length));
+      assert.equal(Buffer.concat(res.chunks).toString(), initialContent);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
 test("sendResolvedFile opens fd before HEAD onReady and removes own listeners", () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-web-send-"));
   const filePath = join(dir, "doc.txt");
@@ -266,6 +389,7 @@ test("sendResolvedFile does not send 200 when onReady throws", () => {
   }, /consume failed/);
   assert.equal(res.statusCode, undefined);
   assert.equal(res.headersSent, false);
+  assert.deepEqual(res.headers, {});
   assert.equal(req.listenerCount("aborted"), 0);
   assert.equal(req.listenerCount("close"), 0);
   assert.equal(res.listenerCount("close"), 0);
@@ -306,6 +430,7 @@ test("sendResolvedFile detaches and destroys stream on request abort", async () 
     });
 
     req.emit("aborted");
+    assert.doesNotThrow(() => source.emit("error", new Error("late read failure")));
     res.flushPendingWrites();
     await Promise.all([sourceClosed, sourceUnpiped]);
 

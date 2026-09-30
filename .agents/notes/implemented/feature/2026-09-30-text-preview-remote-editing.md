@@ -31,7 +31,7 @@ Focused Node tests pass for UTF-8 detection, binary/size rejection, unknown text
 
 All four `tests/e2e/file-editing.spec.ts` Chromium flows pass using an isolated project and the real file API: an actual Monaco editor opens an extensionless Dockerfile, edits and saves it; hidden drafts survive cancelled page exit and tab close; an external write triggers 409 while retaining the draft; and mobile editing uses the parent-page native control with cancelled Back and successful save/close. Existing preview and Git browser flows also pass, including active HTML/SVG isolation.
 
-Final integration verification passes all 387 Node tests, all 25 Chromium browser flows, TypeScript checking and all 14 Note checks. Build gates confirm that the 1.32 MiB initial chat graph excludes Monaco and that PWA precache excludes editor/viewer lazy assets. Package checks and npm dry-run pass at 7.62 MiB packed and 23.84 MiB unpacked; an installable v0.1.122 tarball is generated without installing or restarting production.
+Final integration verification passes all 394 Node tests, all 25 Chromium browser flows, TypeScript checking and all 15 Note checks. Build gates confirm that the 1.32 MiB initial chat graph excludes Monaco and that PWA precache excludes editor/viewer lazy assets. Package checks and npm dry-run pass at 7.62 MiB packed and 23.84 MiB unpacked; an installable v0.1.122 tarball is generated for the separately authorized production installation.
 
 ## Consequences
 

@@ -36,7 +36,7 @@ Focused catalog, cache, Pi summary, auth and native Codex tests pass (48 cases).
 
 All five `tests/e2e/sessions-list.spec.ts` Chromium flows pass for progressive discovery and pagination, full-catalog search, cached rendering during a pending reload, logout with a late response, recovery from an expired page cursor, partial source failures and empty search feedback. A failed or incomplete catalog does not claim that no saved sessions exist; a completed empty search explicitly reports no matching sessions.
 
-Final integration verification passes all 387 Node tests, all 25 Chromium browser flows, TypeScript checking, all 14 Note checks and the build/package gates. Browser catalog flows use controlled responses and do not measure cold-scan latency against a user's real session archive.
+Final integration verification passes all 394 Node tests, all 25 Chromium browser flows, TypeScript checking, all 15 Note checks and the build/package gates. Browser catalog flows use controlled responses and do not measure cold-scan latency against a user's real session archive.
 
 ## Consequences
 

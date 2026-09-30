@@ -18,7 +18,7 @@ Mobile starter titles occupy the center column of a grid with equal seventeen-pi
 
 - The pre-change Chromium reproduction with iPhone UA, standalone mode and a 390 by 844 viewport reports body, root and composer bottoms at 852 pixels. It also reports a 34-pixel safe-bottom variable but only eight pixels of actual composer padding.
 - All three `tests/e2e/mobile-layout.spec.ts` Chromium flows pass: standalone control boundaries and all four starter title centers; a simulated 405-pixel keyboard viewport, native pan without style compensation, keyboard close and rotation; and desktop-to-short-mobile resize. The corrected 390 by 844 layout ends at 844 pixels and keeps the composer fully visible.
-- Final integration verification passes all 25 Chromium browser flows, all 387 Node tests, TypeScript checking and the build/package gates. Browser plugin is unavailable; the existing Playwright workflow is used without dependency installation.
+- Final integration verification passes all 25 Chromium browser flows, all 394 Node tests, TypeScript checking and the build/package gates. Browser plugin is unavailable; the existing Playwright workflow is used without dependency installation.
 
 ## Alternatives considered
 

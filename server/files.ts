@@ -152,10 +152,17 @@ export function openResolvedPreviewFile(meta: ResolvedPreviewFile): OpenResolved
       err.code = "ESTALE";
       throw err;
     }
-    return {
+    const stream = createReadStream(meta.realAbs, {
       fd,
-      stream: createReadStream(meta.realAbs, { fd, autoClose: true }),
-    };
+      autoClose: true,
+      start: 0,
+      // A later append must never extend the validated HTTP response body.
+      ...(meta.size > 0 ? { end: meta.size - 1 } : {}),
+    });
+    // end: 0 would allow one byte if an empty file grows before the first read.
+    // Mark EOF now instead; the stream still owns and closes its descriptor.
+    if (meta.size === 0) stream.push(null);
+    return { fd, stream };
   } catch (err) {
     closeSync(fd);
     throw err;

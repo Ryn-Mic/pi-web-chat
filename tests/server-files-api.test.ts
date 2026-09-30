@@ -178,9 +178,11 @@ test("file APIs require a session token, authorize known cwd, and reject unsafe 
   assert.ok(etag);
 
   const body = await fetch(contentUrl, {
-    headers: { authorization: `Bearer ${sessionToken}`, "if-match": etag },
+    headers: { authorization: `Bearer ${sessionToken}`, "if-match": etag, range: "bytes=0-1" },
   });
   assert.equal(body.status, 200);
+  assert.equal(body.headers.get("content-length"), "5");
+  assert.equal(body.headers.get("accept-ranges"), null);
   assert.equal(await body.text(), "hello");
 
   writeFileSync(join(root, "README.md"), "changed");
