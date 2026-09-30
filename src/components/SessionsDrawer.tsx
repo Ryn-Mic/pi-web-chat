@@ -6,7 +6,7 @@ import { deleteSession, renameSession, useInvalidateSessions, useSessions } from
 import { activityEyeState, activityEyeTone } from "../lib/activity";
 import { getAgentPreference } from "../lib/agent";
 import { chatClient, useChat } from "../lib/chat";
-import { onRequestOpenSessionsDrawer } from "../lib/drawer";
+import { onRequestOpenSessionsDrawer, setSessionsDrawerOpen } from "../lib/drawer";
 import { localeTag, useLocale, useT } from "../lib/i18n";
 import { confirmDiscardWorkspaceTextDrafts, discardWorkspaceTextDrafts } from "../lib/file-text-drafts";
 import { markFreshDraftRequested } from "../lib/resume";
@@ -625,6 +625,11 @@ export function SessionsDrawer({
       setOpen(true);
     });
   }, [sidebarPinned]);
+
+  useEffect(() => {
+    setSessionsDrawerOpen(open && !sidebarPinned);
+    return () => setSessionsDrawerOpen(false);
+  }, [open, sidebarPinned]);
 
   return (
     <Dialog.Root

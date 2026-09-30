@@ -711,6 +711,7 @@ export function MessageList({
   cwd,
   agent,
   onPreviewFile,
+  hideScrollButton = false,
 }: {
   messages: UIMessage[];
   streamText: string;
@@ -727,6 +728,7 @@ export function MessageList({
   cwd?: string;
   agent: UIAgentKind;
   onPreviewFile?: PreviewMessageFile;
+  hideScrollButton?: boolean;
 }) {
   const t = useT();
   const keys = useMemo(() => messageKeys(messages), [messages]);
@@ -932,19 +934,22 @@ export function MessageList({
         </div>
       </div>
 
-      {/* Floating scroll to bottom / generating pill */}
-      {!isAtBottom && messages.length > 0 && (
+      {/* Floating scroll to bottom circle button (hidden when sidebar/drawer is open) */}
+      {!hideScrollButton && !isAtBottom && messages.length > 0 && (
         <button
           type="button"
           onClick={scrollToBottomSmooth}
-          aria-label={t("scrollToBottom")}
-          className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-line bg-card/95 px-3 py-1.5 text-xs font-medium text-ink shadow-md backdrop-blur-sm transition-all hover:bg-hover hover:scale-105 active:scale-95"
+          aria-label={isStreaming ? t("generatingResponse") : t("scrollToBottom")}
+          title={isStreaming ? t("generatingResponse") : t("scrollToBottom")}
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex size-9 items-center justify-center rounded-full border border-line bg-card/90 text-muted shadow-md backdrop-blur-md transition-all hover:bg-hover hover:text-ink hover:scale-105 active:scale-95 dark:border-white/[0.08] dark:shadow-xl"
         >
           {isStreaming && (
-            <span className="size-2 animate-pulse rounded-full bg-accent" aria-hidden />
+            <span
+              className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full border-2 border-card bg-accent animate-pulse"
+              aria-hidden
+            />
           )}
-          <NavigationActionIcon direction="down" size={14} />
-          <span>{isStreaming ? t("generatingResponse") : t("scrollToBottom")}</span>
+          <NavigationActionIcon direction="down" size={16} />
         </button>
       )}
     </div>
