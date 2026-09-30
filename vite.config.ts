@@ -5,12 +5,14 @@ import { fileViewerRenderers } from "@file-viewer/vite-plugin";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
+import { assertAppPrecacheBudget, frontendBuildGraph, selectAppPrecache } from "./scripts/frontend-build-graph.ts";
+import { devBackendPort } from "./scripts/dev-web-options.ts";
 
 const pkg = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf8"),
 ) as { version: string };
 
-const DEV_SERVER_PORT = process.env.PI_WEB_DEV_PORT ?? "3141";
+const DEV_SERVER_PORT = devBackendPort();
 const PACKAGED_PPT_FALLBACK_ID = "\0pi-web-chat:packaged-ppt-fallback";
 
 const fileViewerPackagedPptFallbackPlugin: Plugin = {
@@ -65,7 +67,11 @@ const fileViewerInventoryPlugin: Plugin = {
         file: chunk.fileName,
         facadeModuleId: chunk.facadeModuleId ?? null,
         moduleIds: Object.keys(chunk.modules),
+        imports: chunk.imports,
+        dynamicImports: chunk.dynamicImports,
+        assets: [...(chunk.viteMetadata?.importedAssets ?? []), ...(chunk.viteMetadata?.importedCss ?? [])],
       }));
+    frontendBuildGraph(chunks);
     this.emitFile({
       type: "asset",
       fileName: ".vite/file-viewer-inventory.json",
@@ -88,10 +94,17 @@ export default defineConfig({
         filePreview: resolve(import.meta.dirname, "file-preview.html"),
       },
       output: {
-        // Preserve Rollup's natural lazy graph. Only change emitted names so
-        // Workbox can exclude every full-viewer chunk without naming a shared
-        // headless precheck chunk as viewer runtime.
+        onlyExplicitManualChunks: true,
+        manualChunks(id) {
+          // Keep renderer packages behind their dynamic entry. Explicit-only
+          // assignment prevents shared headless helpers from being pulled in.
+          const viewerPackage = id.replaceAll("\\", "/").match(/\/node_modules\/@file-viewer\/(react-full|preset-all|renderer-[^/]+)\//)?.[1];
+          if (viewerPackage) return `file-viewer-${viewerPackage}`;
+        },
+        // Names are descriptive; cache ownership is determined from the actual
+        // dependency graph, so shared headless chunks stay available offline.
         chunkFileNames(chunk) {
+          if (chunk.name.startsWith("file-viewer-")) return "assets/[name]-[hash].js";
           const moduleIds = chunk.moduleIds;
           const includesHeadless = moduleIds.some((id) =>
             id.includes("/node_modules/@file-viewer/core/dist/headless"),
@@ -155,8 +168,16 @@ export default defineConfig({
         globPatterns: ["**/*.{js,css,html,woff2,svg,png,webmanifest}"],
         globIgnores: [
           "file-viewer/**",
-          "assets/file-viewer-*.js",
         ],
+        // Workbox applies its file-size scan before custom transforms. Let it
+        // inspect heavy lazy chunks, then enforce the selected app budget below.
+        maximumFileSizeToCacheInBytes: 32 * 1024 * 1024,
+        manifestTransforms: [async (entries) => {
+          const inventory = JSON.parse(readFileSync(resolve(import.meta.dirname, "dist/public/.vite/file-viewer-inventory.json"), "utf8"));
+          const manifest = selectAppPrecache(entries, inventory.chunks);
+          assertAppPrecacheBudget(manifest);
+          return { manifest, warnings: [] };
+        }],
         // App shell: prefer network so iOS PWAs pick up new deploys
         runtimeCaching: [
           {

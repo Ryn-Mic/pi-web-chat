@@ -7,7 +7,7 @@ import {
 } from "../lib/file-workspace-tabs";
 import { previewIdentity, type PreviewWorkspaceState } from "../lib/file-preview";
 import { useT } from "../lib/i18n";
-import { RefreshActionIcon } from "./MorphIcons";
+import { DismissActionIcon, RefreshActionIcon } from "./MorphIcons";
 
 export const FILES_TAB_ID = "files";
 export const GIT_TAB_ID = "git";
@@ -128,7 +128,7 @@ export function FileWorkspaceTabs({
                 title={t("closePreviewTab")}
                 className="mr-1 flex size-5 shrink-0 items-center justify-center rounded text-faint transition-colors hover:bg-hover hover:text-ink"
               >
-                <span aria-hidden>×</span>
+                <DismissActionIcon size={13} />
               </button>
             )}
           </div>

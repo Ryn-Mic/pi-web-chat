@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -10,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import {
   legacyManagedHealthPid,
@@ -137,8 +139,22 @@ test("legacy ownership requires the exact old health shape and recorded listener
   );
 });
 
-function runManager(stateDir: string, source: string): string {
-  const managerUrl = new URL("../extensions/daemon-manager.ts", import.meta.url).href;
+function createManagerFixture(root: string): string {
+  const extensions = join(root, "extensions");
+  mkdirSync(extensions, { recursive: true });
+  for (const file of ["daemon-manager.ts", "agent-binaries.ts"]) {
+    copyFileSync(new URL(`../extensions/${file}`, import.meta.url), join(extensions, file));
+  }
+  // ROOT/SERVER resolve beside this copied source, independently of whether the
+  // workspace was built. The legacy test process supplies this fixture's entry.
+  return pathToFileURL(join(extensions, "daemon-manager.ts")).href;
+}
+
+function runManager(
+  stateDir: string,
+  source: string,
+  managerUrl = new URL("../extensions/daemon-manager.ts", import.meta.url).href,
+): string {
   return execFileSync(
     process.execPath,
     [
@@ -228,6 +244,7 @@ test("new manager can query and stop a verified pre-instance daemon", async () =
   const root = mkdtempSync(join(tmpdir(), "pi-web-legacy-server-"));
   const stateDir = mkdtempSync(join(tmpdir(), "pi-web-legacy-state-"));
   const { child, port } = await spawnLegacyServer(root);
+  const managerUrl = createManagerFixture(root);
   try {
     writeFileSync(join(stateDir, "pi-web-chat.pid"), `${child.pid}\n`, "utf8");
     writeFileSync(join(stateDir, "pi-web-chat.port"), `${port}\n`, "utf8");
@@ -258,6 +275,14 @@ test("new manager can query and stop a verified pre-instance daemon", async () =
     );
     assert.equal(existsSync(join(stateDir, "pi-web-chat.pid")), true);
     unlinkSync(join(stateDir, "pi-web-chat.instance"));
+
+    assert.deepEqual(JSON.parse(runManager(stateDir,
+      `process.stdout.write(JSON.stringify(manager.preflightRestart("${port}", "127.0.0.1")));`, managerUrl)), { ok: true });
+    const invalidTarget = JSON.parse(runManager(stateDir,
+      'process.stdout.write(JSON.stringify(manager.preflightRestart("65536", "127.0.0.1")));', managerUrl));
+    assert.equal(invalidTarget.ok, false);
+    assert.equal(existsSync(join(stateDir, "pi-web-chat.pid")), true);
+    assert.equal(runManager(stateDir, "process.stdout.write(String(manager.readPid()));"), String(child.pid));
 
     const stopped = JSON.parse(
       runManager(
@@ -310,7 +335,12 @@ test("readiness does not accept another live server's health response", async ()
   const root = mkdtempSync(join(tmpdir(), "pi-web-other-server-"));
   const stateDir = mkdtempSync(join(tmpdir(), "pi-web-other-state-"));
   const { child, port } = await spawnLegacyServer(root);
+  const managerUrl = createManagerFixture(root);
   try {
+    const preflight = JSON.parse(runManager(stateDir,
+      `process.stdout.write(JSON.stringify(manager.preflightRestart("${port}", "127.0.0.1")));`, managerUrl));
+    assert.equal(preflight.ok, false);
+    assert.match(preflight.error, /already in use by another process/);
     const result = JSON.parse(
       runManager(
         stateDir,
@@ -323,6 +353,26 @@ test("readiness does not accept another live server's health response", async ()
     assert.match(result.error ?? "", /unexpected managed health identity/);
   } finally {
     stopChild(child);
+    rmSync(root, { recursive: true, force: true });
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("restart preflight preserves daemon state when its isolated installation has no build", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-web-unbuilt-manager-"));
+  const stateDir = mkdtempSync(join(tmpdir(), "pi-web-unbuilt-state-"));
+  try {
+    const managerUrl = createManagerFixture(root);
+    assert.equal(existsSync(join(root, "dist", "index.js")), false);
+    writeFileSync(join(stateDir, "pi-web-chat.pid"), `${process.pid}\n`, "utf8");
+    writeFileSync(join(stateDir, "pi-web-chat.port"), "9\n", "utf8");
+    writeFileSync(join(stateDir, "pi-web-chat.host"), "127.0.0.1\n", "utf8");
+    const result = JSON.parse(runManager(stateDir,
+      'process.stdout.write(JSON.stringify(manager.preflightRestart("9", "127.0.0.1")));', managerUrl));
+    assert.deepEqual(result, { ok: false, error: "build missing (dist/index.js); rebuild before restarting" });
+    assert.equal(existsSync(join(stateDir, "pi-web-chat.pid")), true);
+    assert.equal(existsSync(join(root, "dist", "index.js")), false);
+  } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(stateDir, { recursive: true, force: true });
   }

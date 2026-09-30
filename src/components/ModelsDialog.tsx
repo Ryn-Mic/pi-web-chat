@@ -10,6 +10,7 @@ import {
 import { useT } from "../lib/i18n";
 import { AgentEyes } from "./AgentEyes";
 import { LoadingIndicator } from "./LoadingIndicator";
+import { DIALOG_BACKDROP_CLASS } from "./ui";
 
 const APIS: UICustomApi[] = [
   "openai-completions",
@@ -620,7 +621,7 @@ export function ModelsDialog({
       }}
     >
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 bg-black/40 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
+        <Dialog.Backdrop className={DIALOG_BACKDROP_CLASS} />
         <Dialog.Popup className="fixed top-[max(1rem,env(safe-area-inset-top))] bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 flex w-[min(94vw,52rem)] translate-x-[-50%] translate-y-0 flex-col overflow-hidden rounded-2xl border border-line bg-card shadow-[0_18px_60px_rgba(0,0,0,0.16)] outline-none sm:top-1/2 sm:bottom-auto sm:max-h-[88vh] sm:-translate-y-1/2">
           <div className="flex items-start gap-2.5 border-b border-line px-3 py-2.5 sm:px-4">
             <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">

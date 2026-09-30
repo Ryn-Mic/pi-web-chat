@@ -19,7 +19,12 @@ export default defineConfig({
     timeout: 30_000,
     env: {
       ...process.env,
-      HOME: `${root}/home`,
+      NODE_ENV: "test",
+      PI_WEB_TEST_STATE_DIR: `${root}/home/.pi/web-chat`,
+      PI_CODING_AGENT_DIR: `${root}/home/.pi/agent`,
+      PI_CODING_AGENT_SESSION_DIR: `${root}/home/.pi/agent/sessions`,
+      PI_WEB_CODEX_BIN: `${root}/fake-codex.mjs`,
+      PI_WEB_CODEX_TRANSPORT: "standalone",
       PI_WEB_CWD: `${root}/project`,
       PI_WEB_TOKEN: "e2e-token",
       PI_WEB_2FA: "off",

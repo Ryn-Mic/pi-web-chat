@@ -103,7 +103,8 @@ test("separate message objects with equal content are cached independently", () 
   const a = serializeMessages([userMessage("hello")]);
   const b = serializeMessages([userMessage("hello")]);
   assert.notEqual(b[0], a[0]);
-  assert.deepEqual(b[0], a[0]);
+  assert.notEqual(b[0]?.id, a[0]?.id);
+  assert.deepEqual({ ...b[0], id: undefined }, { ...a[0], id: undefined });
 });
 
 test("args keep the agent's original object reference", () => {
@@ -200,4 +201,18 @@ test("todo task lists survive the cache and feed getActiveTodo", () => {
   const again = serializeMessages(messages);
   assert.equal(again[0], out[0]);
   assert.deepEqual(getActiveTodo(again), active);
+});
+
+
+test("persisted identities survive paging and tool completion", () => {
+  const assistant = assistantWithToolCall("stable-call");
+  const entries = [{ type: "message", id: "stable-entry", message: assistant }];
+  recordSessionMessageCompletions(entries);
+  const before = serializeMessages([assistant]);
+  const after = serializeMessages([userMessage("older"), assistant, toolResult("stable-call", "done")]);
+  assert.equal(before[0]?.id, "pi:stable-entry");
+  assert.equal(after[1]?.id, before[0]?.id);
+  const reopened = assistantWithToolCall("stable-call");
+  recordSessionMessageCompletions([{ type: "message", id: "stable-entry", message: reopened }]);
+  assert.equal(serializeMessages([reopened])[0]?.id, before[0]?.id);
 });

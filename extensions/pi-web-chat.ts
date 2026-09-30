@@ -19,6 +19,7 @@ import {
   managedRestartPortError,
   openBrowser,
   parseWebOptions,
+  preflightRestart,
   readManagedServerStatus,
   resolveLaunchTarget,
   rotateToken,
@@ -157,16 +158,16 @@ function launchDaemon(
   console.log(`  status:  pi --web status`);
   console.log(`  agents:  pi + Codex (select per new session in Web settings)`);
   console.log(`  logs:    ${LOG_FILE}`);
-  console.log(`  auth:    token & 2FA — see ${LOG_FILE} (or ~/.pi/web-chat/token)`);
+  console.log(`  auth:    token & 2FA — access token stored in ${TOKEN_FILE}`);
   if (opts.openBrowser) openBrowser(url);
 }
 
 function handleRotateToken(ctx?: {
   ui: { notify: (msg: string, kind?: "error" | "info" | "warning") => void };
 }): void {
-  const token = rotateToken();
+  rotateToken();
   const message =
-    `pi-web-chat: access token rotated — ${token} ` +
+    `pi-web-chat: access token rotated ` +
     `(stored in ${TOKEN_FILE}, applies on next login)`;
   if (ctx) ctx.ui.notify(message, "info");
   else console.log(message);
@@ -230,6 +231,11 @@ function runDaemonAndExit(): void {
 
   if (action === "restart") {
     const { port, host } = resolveLaunchTarget(parsed);
+    const preflight = preflightRestart(port, host);
+    if (!preflight.ok) {
+      console.error(`pi-web-chat: ${preflight.error}`);
+      process.exit(1);
+    }
     const result = stopServer({ waitMs: 5_000 });
     if (result.error) {
       console.error(`pi-web-chat: ${result.error}`);
@@ -336,7 +342,17 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (action === "restart") {
+        const restartPortError = managedRestartPortError(action, parsed.portExplicit);
+        if (restartPortError) {
+          ctx.ui.notify(`pi-web-chat: ${restartPortError}`, "error");
+          return;
+        }
         const { port, host } = resolveLaunchTarget(parsed);
+        const preflight = preflightRestart(port, host);
+        if (!preflight.ok) {
+          ctx.ui.notify(`pi-web-chat: ${preflight.error}`, "error");
+          return;
+        }
         const stopResult = stopServer({ waitMs: 5_000 });
         if (stopResult.error) {
           ctx.ui.notify(`pi-web-chat: ${stopResult.error}`, "error");

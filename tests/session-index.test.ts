@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -73,6 +73,41 @@ test("identifies Codex sessions from persisted adapter metadata", async () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("progressive indexing publishes recent summaries before the complete catalog", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-web-index-progressive-"));
+  try {
+    for (let index = 0; index < 35; index += 1) {
+      const file = sessionFile(root, `id-${index}`);
+      writeFileSync(file, line(header(`id-${index}`)) + line(message(`u-${index}`, null, "user", `Request ${index}`, "2025-01-01T00:01:00.000Z")));
+      utimesSync(file, new Date(1000 + index * 1000), new Date(1000 + index * 1000));
+    }
+    const summaries = new SessionSummaryIndex(root);
+    const batches: string[][] = [];
+    const final = await summaries.list((rows) => batches.push(rows.map((row) => row.id)));
+    assert.equal(batches.length, 35);
+    assert.ok(batches.every((batch) => batch.length === 1), "each completed summary publishes a small delta");
+    assert.ok(batches.slice(0, 16).flat().includes("id-34"), "recent filenames are scheduled in the first batch");
+    assert.equal(final.length, 35);
+    assert.equal(summaries.cachedSummaries().length, 35);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a huge recent transcript cannot block a smaller sibling from appearing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-web-index-first-row-"));
+  try {
+    const large = sessionFile(root, "z-huge");
+    const small = sessionFile(root, "small");
+    const entry = line(message("u-large", null, "user", "x".repeat(1000), "2025-01-01T00:01:00.000Z"));
+    writeFileSync(large, line(header("z-huge")) + entry.repeat(5000));
+    writeFileSync(small, line(header("small")));
+    utimesSync(large, new Date(2000), new Date(2000));
+    utimesSync(small, new Date(1000), new Date(1000));
+    const published: string[] = [];
+    await new SessionSummaryIndex(root).list((rows) => published.push(...rows.map((row) => row.id)));
+    assert.deepEqual(published, ["small", "z-huge"]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("reads only an append into the existing summary state", async () => {
@@ -156,4 +191,22 @@ test("retains a torn tail until a later append completes it", async () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test("concurrent cold and append refreshes count entries exactly once", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-web-index-concurrent-"));
+  const file = sessionFile(root, "concurrent");
+  // Multiple chunks and UTF-8 text exercise decoder ownership while reads yield.
+  const entries = Array.from({ length: 2500 }, (_, i) => message(`m${i}`, null, "user", "中文".repeat(100), "2025-01-01T00:01:00.000Z"));
+  writeFileSync(file, line(header("concurrent")) + entries.map(line).join(""));
+  try {
+    const index = new SessionSummaryIndex(root);
+    const cold = await Promise.all(Array.from({ length: 20 }, () => index.list()));
+    assert.ok(cold.every((list) => list[0]?.messageCount === 2500));
+    appendFileSync(file, entries.slice(0, 100).map(line).join(""));
+    const appended = await Promise.all(Array.from({ length: 20 }, () => index.list()));
+    assert.ok(appended.every((list) => list[0]?.messageCount === 2600));
+    assert.equal((await index.list())[0]?.messageCount, 2600);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

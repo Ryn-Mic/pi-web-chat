@@ -148,6 +148,19 @@ test("file APIs require a session token, authorize known cwd, and reject unsafe 
 
   const sessionToken = await login(baseUrl);
 
+  const sourceUrl = `${baseUrl}/api/files/text?cwd=${encodeURIComponent(root)}&path=README.md`;
+  assert.equal((await fetch(sourceUrl)).status, 401);
+  const source = await fetch(sourceUrl, { headers: { authorization: `Bearer ${sessionToken}` } });
+  assert.equal(source.status, 200);
+  const sourceSnapshot = await source.json() as { text: string; revision: string };
+  assert.equal(sourceSnapshot.text, "hello");
+  // Capability/query credentials must not acquire a write surface.
+  const sourceQuerySave = await fetch(`${sourceUrl}&token=${encodeURIComponent(sessionToken)}`, {
+    method: "PUT", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "query write", revision: sourceSnapshot.revision }),
+  });
+  assert.equal(sourceQuerySave.status, 401);
+
   const contentUrl = `${baseUrl}/api/files/content?cwd=${encodeURIComponent(root)}&path=${encodeURIComponent("README.md")}`;
   const head = await fetch(contentUrl, {
     method: "HEAD",
@@ -165,9 +178,11 @@ test("file APIs require a session token, authorize known cwd, and reject unsafe 
   assert.ok(etag);
 
   const body = await fetch(contentUrl, {
-    headers: { authorization: `Bearer ${sessionToken}`, "if-match": etag },
+    headers: { authorization: `Bearer ${sessionToken}`, "if-match": etag, range: "bytes=0-1" },
   });
   assert.equal(body.status, 200);
+  assert.equal(body.headers.get("content-length"), "5");
+  assert.equal(body.headers.get("accept-ranges"), null);
   assert.equal(await body.text(), "hello");
 
   writeFileSync(join(root, "README.md"), "changed");

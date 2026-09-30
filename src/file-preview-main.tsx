@@ -12,6 +12,7 @@ import {
   type PreviewFrameMessage,
 } from "./lib/file-preview-frame";
 import "./styles.css";
+import { fallbackTextPreview } from "./lib/file-preview-text";
 
 function notifyParent(message: PreviewFrameMessage) {
   window.parent.postMessage(message, location.origin);
@@ -33,8 +34,11 @@ function PreviewFrameApp() {
     void loadFramePreviewFile({ contextId, signal: controller.signal })
       .then(async (next) => {
         const check = await precheckFileViewerSource(next.file);
-        if (!check.previewable) throw new PreviewFrameError("unsupported");
-        if (check.valid === false) throw new PreviewFrameError("malformed");
+        if (!check.previewable || check.valid === false) {
+          const fallback = await fallbackTextPreview(next.file);
+          if (!fallback) throw new PreviewFrameError(check.valid === false ? "malformed" : "unsupported");
+          next.file = fallback;
+        }
         document.documentElement.classList.toggle("dark", next.theme === "dark");
         document.documentElement.lang = next.locale;
         setPreview(next);

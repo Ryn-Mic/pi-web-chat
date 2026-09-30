@@ -40,6 +40,8 @@ export type UIContentBlock =
   | { type: "image"; dataUrl?: string };
 
 export interface UIMessage {
+  /** Stable source identity across pagination, tool completion and reconnects. */
+  id?: string;
   role: "user" | "assistant" | "custom";
   content: UIContentBlock[];
   errorMessage?: string;
@@ -227,6 +229,8 @@ export interface UISnapshotDelta {
   revision: number;
   from: number;
   messages: UIMessage[];
+  /** The server moved the history boundary; discard pages from the old window. */
+  resetHistory?: boolean;
   snapshot: UISnapshotMetadata;
 }
 
@@ -246,6 +250,16 @@ export interface UISessionInfo {
   agent?: UIAgentKind;
   /** Native Codex identity carried only by legacy bridge records. */
   codexThreadId?: string;
+}
+
+/** A stable page of the session catalog while background sources are refreshed. */
+export interface UISessionsPage {
+  sessions: UISessionInfo[];
+  nextCursor: string | null;
+  /** More summaries are being discovered; revalidate the first page shortly. */
+  scanning: boolean;
+  /** A source could not refresh; available summaries remain usable. */
+  partialFailure?: boolean;
 }
 
 export interface UIForkPoint {
@@ -519,3 +533,14 @@ export type ClientCommand =
   | { type: "get_commands" }
   | { type: "codex_interaction_response"; response: UICodexInteractionResponse }
   | { type: "extension_ui_response"; response: UIExtensionUIResponse };
+/** Authenticated project text surface; saves must include the loaded revision. */
+export interface UITextFileSnapshot {
+  text: string;
+  revision: string;
+  name: string;
+}
+
+export interface UITextFileSaveRequest {
+  text: string;
+  revision: string;
+}

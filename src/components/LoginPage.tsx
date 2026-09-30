@@ -65,15 +65,15 @@ export function LoginPage() {
                 inputMode="numeric"
                 autoComplete="one-time-code"
                 value={totp}
-                onChange={(e) => setTotp(e.target.value)}
+                onChange={(e) => setTotp(e.target.value.replace(/\D/g, "").slice(0, 6))}
                 placeholder="••••••"
-                maxLength={6}
                 className="mt-1.5 w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm tracking-[0.3em] text-ink outline-none placeholder:text-faint focus:border-faint"
               />
             </label>
           )}
 
-          {error && <p className="mt-3 text-sm text-red-500">{error}</p>}
+          {twoFactor && <p className="mt-3 text-xs leading-relaxed text-faint">{t("twoFactorSetupHint")}</p>}
+          {error && <p role="alert" className="mt-3 text-sm text-red-500">{error}</p>}
 
           <button
             type="submit"

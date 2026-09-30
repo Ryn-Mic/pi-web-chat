@@ -25,6 +25,10 @@ export const MORPH_ICON_PATHS = {
     "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z M2 10h20",
   chevronRight: "M9 6l6 6-6 6",
   chevronDown: "M6 9l6 6 6-6",
+  chevronLeft: "M15 6l-6 6 6 6",
+  arrowDown: "M12 5v14M19 12l-7 7-7-7",
+  reuse: "M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11",
+  gitBranch: "M6 3v12a6 6 0 0 0 12 0V9M9 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM21 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z",
 
   // New session & action triggers
   plus: "M12 5v14M5 12h14",
@@ -36,6 +40,12 @@ export const MORPH_ICON_PATHS = {
   // Copy & feedback
   copy: "M8 17.929H6c-1.105 0-2-.912-2-2.036V5.036C4 3.91 4.895 3 6 3h8c1.105 0 2 .911 2 2.036v1.866m-6 .17h8c1.105 0 2 .91 2 2.035v10.857C20 21.09 19.105 22 18 22h-8c-1.105 0-2-.911-2-2.036V9.107c0-1.124.895-2.036 2-2.036Z",
   check: "M20 6 9 17l-5-5",
+
+  // Session list row actions (rename / delete / search)
+  edit: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z",
+  trash:
+    "M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M10 11v6M14 11v6",
+  search: "M18 11a7 7 0 1 1-14 0 7 7 0 0 1 14 0ZM21 21l-4.35-4.35",
 } as const;
 
 export type MorphActionMode = keyof typeof MORPH_ICON_PATHS;

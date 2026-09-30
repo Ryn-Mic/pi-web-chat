@@ -1,5 +1,5 @@
-import { useCallback } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import type {
   UICustomModelsResponse,
   UICustomProvider,
@@ -11,6 +11,7 @@ import type {
   UIForkPoint,
   UIModel,
   UISessionInfo,
+  UISessionsPage,
   UITreeResponse,
   UIGitStatus,
   UIGitBranch,
@@ -18,7 +19,8 @@ import type {
   UIGitCommitDetail,
   UIGitDiff,
 } from "../../shared/protocol";
-import { authHeaders, setAuthStatus } from "./auth";
+import { authHeaders, getAuthStatus, getSessionCacheScope, setAuthStatus } from "./auth";
+import { readSessionListCache, writeSessionListCache } from "./session-list-cache";
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { ...init, headers: { ...authHeaders(), ...init?.headers } });
@@ -33,14 +35,62 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const SESSIONS_QUERY_KEY = ["sessions"] as const;
 
-export function useSessions(enabled = true) {
-  return useQuery({
-    queryKey: SESSIONS_QUERY_KEY,
-    queryFn: () => fetchJson<UISessionInfo[]>("/api/sessions"),
+export function useSessions(enabled = true, search = "") {
+  const scope = getSessionCacheScope();
+  const normalizedSearch = search.trim().toLowerCase();
+  const qc = useQueryClient();
+  const forceNextRefresh = useRef(false);
+  const queryKey = useMemo(() => [...SESSIONS_QUERY_KEY, scope, normalizedSearch], [scope, normalizedSearch]);
+  const cached = useMemo(() => normalizedSearch ? undefined : readSessionListCache(scope), [scope, normalizedSearch]);
+  const query = useInfiniteQuery({
+    queryKey,
+    initialPageParam: null as string | null,
+    queryFn: async ({ pageParam, signal }) => {
+      const params = new URLSearchParams({ limit: "40" });
+      if (pageParam) params.set("cursor", pageParam);
+      if (normalizedSearch) params.set("q", normalizedSearch);
+      if (!pageParam && forceNextRefresh.current) {
+        params.set("refresh", "1");
+        forceNextRefresh.current = false;
+      }
+      const result = await fetchJson<UISessionsPage | UISessionInfo[]>(`/api/sessions?${params}`, { signal });
+      // A cached older server or consumer may still expose the original array.
+      return Array.isArray(result) ? { sessions: result, nextCursor: null, scanning: false } : result;
+    },
+    getNextPageParam: (page) => page.nextCursor,
+    ...(cached ? { initialData: { pages: [{ sessions: cached, nextCursor: null, scanning: true }], pageParams: [null] } } : {}),
     enabled,
     staleTime: 0,
     refetchOnMount: "always",
+    refetchInterval: (current) => current.state.data?.pages[0]?.scanning ? 700 : false,
+    retry: 1,
   });
+  const scanning = query.data?.pages[0]?.scanning ?? false;
+  const sessions = useMemo(() => {
+    if (!query.data) return undefined;
+    const known = new Map<string, UISessionInfo>();
+    if (scanning) for (const session of cached ?? []) known.set(session.id, session);
+    for (const page of query.data.pages) for (const session of page.sessions) known.set(session.id, session);
+    return [...known.values()].sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified));
+  }, [query.data, cached, scanning]);
+  useEffect(() => {
+    if (sessions && !normalizedSearch && !scanning && !query.isError
+      && getAuthStatus() === "authenticated" && getSessionCacheScope() === scope) writeSessionListCache(scope, sessions);
+  }, [scope, sessions, scanning, query.isError, normalizedSearch]);
+  const refetch = useCallback(() => {
+    forceNextRefresh.current = true;
+    // Discard expired cursor chains, retaining visible first-page rows while
+    // a fresh immutable snapshot is obtained.
+    qc.setQueryData<InfiniteData<UISessionsPage, string | null>>(queryKey, (previous) => previous ? {
+      pages: previous.pages.slice(0, 1), pageParams: previous.pageParams.slice(0, 1),
+    } : previous);
+    return query.refetch();
+  }, [qc, queryKey, query.refetch]);
+  return {
+    ...query, refetch, data: sessions, scanning,
+    partialFailure: query.data?.pages[0]?.partialFailure ?? false,
+    showingCached: Boolean(cached?.length && scanning),
+  };
 }
 
 /** Refresh the sidebar list after session create/switch/message completion */

@@ -100,7 +100,7 @@ function etagFor(st: { dev: number | bigint; ino: number | bigint; size: number;
   return `W/"${String(st.dev)}-${String(st.ino)}-${st.size}-${st.mtimeMs}"`;
 }
 
-export function resolvePreviewFile(root: string, rel: string): ResolvedPreviewFile {
+export function resolvePreviewFile(root: string, rel: string, options?: { sourceText?: boolean }): ResolvedPreviewFile {
   const rootAbs = resolve(root);
   const rootRealAbs = realpathSync(rootAbs);
   const abs = assertInsideRoot(rootAbs, rel);
@@ -129,7 +129,7 @@ export function resolvePreviewFile(root: string, rel: string): ResolvedPreviewFi
     path: normalizedRel,
     name: basename(normalizedRel),
     size: st.size,
-    mimeType: lookupMime(normalizedRel),
+    mimeType: options?.sourceText ? "text/plain" : lookupMime(normalizedRel),
     mtimeMs: st.mtimeMs,
     dev: st.dev,
     ino: st.ino,
@@ -152,10 +152,17 @@ export function openResolvedPreviewFile(meta: ResolvedPreviewFile): OpenResolved
       err.code = "ESTALE";
       throw err;
     }
-    return {
+    const stream = createReadStream(meta.realAbs, {
       fd,
-      stream: createReadStream(meta.realAbs, { fd, autoClose: true }),
-    };
+      autoClose: true,
+      start: 0,
+      // A later append must never extend the validated HTTP response body.
+      ...(meta.size > 0 ? { end: meta.size - 1 } : {}),
+    });
+    // end: 0 would allow one byte if an empty file grows before the first read.
+    // Mark EOF now instead; the stream still owns and closes its descriptor.
+    if (meta.size === 0) stream.push(null);
+    return { fd, stream };
   } catch (err) {
     closeSync(fd);
     throw err;

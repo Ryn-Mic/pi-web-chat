@@ -19,6 +19,7 @@ import {
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
+import { frontendBuildGraph, isEditorWorkerAsset, MAX_CHAT_STATIC_BYTES } from "./frontend-build-graph.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "dist");
@@ -30,7 +31,6 @@ const FILE_VIEWER_PACKAGES = [
   "@file-viewer/vite-plugin",
   "file-viewer-copy-assets",
 ];
-const FILE_VIEWER_PACKAGED_PPT_FALLBACK_ID = "\0pi-web-chat:packaged-ppt-fallback";
 
 function failBuild(message) {
   console.error(`build failed: ${message}`);
@@ -239,9 +239,6 @@ function assertFileViewerLazy(manifest) {
     failBuild("File Viewer full package is not reachable through the chat dynamic-import graph");
   }
 
-  const viewerGraph = collectManifestGraph(manifest, [fullKey], "imports");
-  const viewerDynamicGraph = collectManifestGraph(manifest, [fullKey], "dynamicImports");
-  const allViewerChunks = new Set([...viewerGraph, ...viewerDynamicGraph]);
   const inventoryPath = join(publicDist, ".vite", "file-viewer-inventory.json");
   if (!existsSync(inventoryPath)) failBuild("File Viewer module inventory missing");
   const inventory = JSON.parse(readFileSync(inventoryPath, "utf8"));
@@ -250,18 +247,6 @@ function assertFileViewerLazy(manifest) {
   );
   if (!hasPresetAll) failBuild("lazy File Viewer graph is missing the full preset");
 
-  // A full renderer may import shared app/core chunks. Those chunks are not
-  // viewer-only and can legitimately remain in the app precache; only chunks
-  // absent from the chat static graph are subject to the no-precache rule.
-  const exclusiveViewerChunks = [...allViewerChunks]
-    .filter((key) => !staticGraph.has(key))
-    .map((key) => manifest[key]?.file)
-    .filter((file) => typeof file === "string" && file !== fullEntry.file);
-
-  return {
-    fullChunk: fullEntry.file,
-    viewerChunks: exclusiveViewerChunks,
-  };
 }
 
 function assertFrameEntryIsolated(manifest) {
@@ -288,7 +273,7 @@ function assertFrameEntryIsolated(manifest) {
   console.log("✓ file preview entry isolated from chat/auth/router");
 }
 
-function assertFileViewerNotPrecached({ fullChunk, viewerChunks }) {
+function assertAppPrecache() {
   const swPath = join(publicDist, "sw.js");
   if (!existsSync(swPath)) failBuild("dist/public/sw.js missing");
   const serviceWorker = readFileSync(swPath, "utf8");
@@ -296,40 +281,32 @@ function assertFileViewerNotPrecached({ fullChunk, viewerChunks }) {
   if (serviceWorker.includes("file-viewer/")) {
     failBuild("File Viewer runtime assets leaked into the service-worker precache");
   }
-  const emittedViewerChunks = listFilesRecursive(join(publicDist, "assets"))
-    .map((file) => toRelativePath(publicDist, file))
-    .filter((file) => /^assets\/file-viewer-.*\.js$/.test(file));
   const inventory = JSON.parse(
     readFileSync(join(publicDist, ".vite", "file-viewer-inventory.json"), "utf8"),
   );
-  // Inventory ownership catches a viewer chunk even if its output naming
-  // regresses and Workbox's file-viewer-* ignore would otherwise miss it.
-  const inventoryViewerChunks = inventory.chunks
-    .filter((chunk) => {
-      const includesHeadless = chunk.moduleIds.some((id) =>
-        id.includes("/node_modules/@file-viewer/core/dist/headless"),
-      );
-      return !includesHeadless && chunk.moduleIds.some(
-        (id) =>
-          id === FILE_VIEWER_PACKAGED_PPT_FALLBACK_ID ||
-          id.includes("/node_modules/@file-viewer/"),
-      );
-    })
-    .map((chunk) => chunk.file);
-  const precachedViewerChunks = [...new Set([
-    fullChunk,
-    ...viewerChunks,
-    ...emittedViewerChunks,
-    ...inventoryViewerChunks,
-  ])]
-    .filter((file) => serviceWorker.includes(file));
+  const { chatStatic, viewerOnly } = frontendBuildGraph(inventory.chunks);
+  const precachedViewerChunks = [...viewerOnly].filter((file) => serviceWorker.includes(file));
+  precachedViewerChunks.push(...listFilesRecursive(join(publicDist, "assets"))
+    .map((file) => toRelativePath(publicDist, file))
+    .filter((file) => isEditorWorkerAsset(file) && serviceWorker.includes(file)));
   if (precachedViewerChunks.length > 0) {
     failBuild(
       `File Viewer lazy chunks leaked into the service-worker precache: ${precachedViewerChunks.join(", ")}`,
     );
   }
 
-  console.log("✓ File Viewer-owned chunks are lazy and excluded from service-worker precache");
+  const manifest = loadManifest();
+  const chatKey = findHtmlEntrypoints(manifest).find(([key, entry]) => key === "index.html" || entry.src === "index.html")?.[0];
+  const staticEntries = collectManifestGraph(manifest, [chatKey], "imports");
+  const requiredFiles = new Set(["index.html", ...chatStatic]);
+  for (const key of staticEntries) {
+    for (const file of [...(manifest[key]?.css ?? []), ...(manifest[key]?.assets ?? [])]) requiredFiles.add(file);
+  }
+  const missing = [...requiredFiles].filter((file) => !serviceWorker.includes(file));
+  if (missing.length) failBuild(`chat static dependencies missing from PWA precache: ${missing.join(", ")}`);
+  const staticBytes = [...requiredFiles].reduce((sum, file) => sum + statSync(join(publicDist, file)).size, 0);
+  if (staticBytes > MAX_CHAT_STATIC_BYTES) failBuild(`chat static size ${staticBytes} exceeds ${MAX_CHAT_STATIC_BYTES}`);
+  console.log(`✓ chat static dependency closure precached (${(staticBytes / 1024 / 1024).toFixed(2)} MiB); viewer-only chunks excluded`);
 }
 
 function assertThirdPartyNotices(assetRoot) {
@@ -346,6 +323,8 @@ function assertThirdPartyNotices(assetRoot) {
     "GPL-3.0-only.txt",
     "morphicons-MIT.txt",
     "LaoA-GrokBot-MIT.txt",
+    "monaco-editor-MIT.txt",
+    "monaco-editor-NOTICES.txt",
   ];
 
   for (const name of requiredRootFiles) {
@@ -397,9 +376,9 @@ assertFileViewerAssetsNotCopied();
 const fileViewerAssetRoot = assertFileViewerAssets();
 const manifest = loadManifest();
 assertFileViewerRuntimeAssetsNotBundled(manifest);
-const viewerBuild = assertFileViewerLazy(manifest);
+assertFileViewerLazy(manifest);
 assertFrameEntryIsolated(manifest);
-assertFileViewerNotPrecached(viewerBuild);
+assertAppPrecache();
 assertThirdPartyNotices(fileViewerAssetRoot);
 removeBuildOnlyArtifacts();
 

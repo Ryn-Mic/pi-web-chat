@@ -2,6 +2,31 @@ import { useEffect, useState } from "react";
 import { MorphIcon } from "morphicons/react";
 import { MORPH_ICON_PATHS } from "../lib/morph-icons";
 
+/** Navigation and message actions share centralized paths and motion preferences. */
+export function NavigationActionIcon({
+  direction,
+  size = 16,
+  className = "",
+}: {
+  direction: "back" | "down" | "reuse";
+  size?: number;
+  className?: string;
+}) {
+  const path = direction === "back" ? "chevronLeft" : direction === "down" ? "arrowDown" : "reuse";
+  return (
+    <MorphIcon icon={MORPH_ICON_PATHS[path]} size={size} strokeWidth={2}
+      spring="snappy" reducedMotion="user" className={`shrink-0 ${className}`} aria-hidden focusable="false" />
+  );
+}
+
+export function StarterPromptIcon({ kind }: { kind: "search" | "git" | "tests" | "performance" }) {
+  const path = kind === "search" ? "search" : kind === "git" ? "gitBranch" : kind === "tests" ? "check" : "sparkle";
+  return (
+    <MorphIcon icon={MORPH_ICON_PATHS[path]} size={17} strokeWidth={1.8}
+      spring="snappy" reducedMotion="user" className="shrink-0 text-accent" aria-hidden focusable="false" />
+  );
+}
+
 /** Settings trigger icon that smoothly morphs between gear and close state */
 export function SettingsTriggerIcon({
   open = false,
@@ -173,6 +198,116 @@ export function CopyActionIcon({
       spring="snappy"
       reducedMotion="user"
       className={`shrink-0 ${copied ? "text-emerald-500 scale-105" : ""} ${className}`}
+      aria-hidden
+      focusable="false"
+    />
+  );
+}
+
+/** Pencil icon for rename actions in list rows */
+export function RenameActionIcon({
+  size = 14,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <MorphIcon
+      icon={MORPH_ICON_PATHS.edit}
+      size={size}
+      strokeWidth={1.8}
+      spring="snappy"
+      reducedMotion="user"
+      className={`shrink-0 ${className}`}
+      aria-hidden
+      focusable="false"
+    />
+  );
+}
+
+/** Trash icon for delete actions in list rows */
+export function DeleteActionIcon({
+  size = 14,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <MorphIcon
+      icon={MORPH_ICON_PATHS.trash}
+      size={size}
+      strokeWidth={1.8}
+      spring="snappy"
+      reducedMotion="user"
+      className={`shrink-0 ${className}`}
+      aria-hidden
+      focusable="false"
+    />
+  );
+}
+
+/** Checkmark icon confirming a destructive action */
+export function ConfirmActionIcon({
+  size = 14,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <MorphIcon
+      icon={MORPH_ICON_PATHS.check}
+      size={size}
+      strokeWidth={2.2}
+      spring="snappy"
+      reducedMotion="user"
+      className={`shrink-0 ${className}`}
+      aria-hidden
+      focusable="false"
+    />
+  );
+}
+
+/** Cross icon dismissing a destructive action */
+export function DismissActionIcon({
+  size = 14,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <MorphIcon
+      icon={MORPH_ICON_PATHS.close}
+      size={size}
+      strokeWidth={2.2}
+      spring="snappy"
+      reducedMotion="user"
+      className={`shrink-0 ${className}`}
+      aria-hidden
+      focusable="false"
+    />
+  );
+}
+
+/** Magnifier icon for search fields */
+export function SearchFieldIcon({
+  size = 14,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <MorphIcon
+      icon={MORPH_ICON_PATHS.search}
+      size={size}
+      strokeWidth={2}
+      spring="snappy"
+      reducedMotion="user"
+      className={`shrink-0 ${className}`}
       aria-hidden
       focusable="false"
     />

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { UIActiveTodo, UIContentBlock, UIMessage, UITodoTask } from "../shared/protocol.ts";
 
 type AnyMessage = {
@@ -37,6 +38,23 @@ type CachedMessage = {
 const uiBySource = new WeakMap<object, CachedMessage>();
 
 /** True message completion times, including timestamps restored from session entries. */
+const idBySource = new WeakMap<object, string>();
+
+export function recordMessageIdentity(message: unknown, id: string): void {
+  if (!message || typeof message !== "object" || !id) return;
+  if (idBySource.get(message) !== id) uiBySource.delete(message);
+  idBySource.set(message, id);
+}
+
+function messageIdentity(message: AnyMessage): string {
+  let id = idBySource.get(message);
+  if (!id) {
+    id = typeof message.id === "string" && message.id ? `codex:${message.id}` : `message:${randomUUID()}`;
+    idBySource.set(message, id);
+  }
+  return id;
+}
+
 const completedAtBySource = new WeakMap<object, number>();
 
 export function recordMessageCompletion(message: unknown, completedAt = Date.now()): void {
@@ -49,8 +67,9 @@ export function recordMessageCompletion(message: unknown, completedAt = Date.now
 export function recordSessionMessageCompletions(entries: unknown[]): void {
   for (const value of entries) {
     if (!value || typeof value !== "object") continue;
-    const entry = value as { type?: unknown; timestamp?: unknown; message?: unknown };
+    const entry = value as { type?: unknown; id?: unknown; timestamp?: unknown; message?: unknown };
     if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") continue;
+    if (typeof entry.id === "string") recordMessageIdentity(entry.message, `pi:${entry.id}`);
     const completedAt =
       typeof entry.timestamp === "number"
         ? entry.timestamp
@@ -144,6 +163,7 @@ function serializeMessage(
     }
     if (blocks.length === 0) return null;
     return {
+      id: messageIdentity(m),
       role: "user",
       content: blocks,
       timestamp: typeof m.timestamp === "number" ? m.timestamp : undefined,
@@ -172,6 +192,7 @@ function serializeMessage(
     }
     if (blocks.length === 0 && !m.errorMessage) return null;
     return {
+      id: messageIdentity(m),
       role: "assistant",
       content: blocks,
       errorMessage: typeof m.errorMessage === "string" ? m.errorMessage : undefined,
@@ -184,6 +205,7 @@ function serializeMessage(
   const text = textFromContent(m.content);
   if (!text) return null;
   return {
+    id: messageIdentity(m),
     role: "custom",
     content: [{ type: "text", text }],
     timestamp: typeof m.timestamp === "number" ? m.timestamp : undefined,

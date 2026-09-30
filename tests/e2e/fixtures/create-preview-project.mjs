@@ -10,8 +10,25 @@ const messageFileSessionId = "e2e-file-links";
 rmSync(base, { recursive: true, force: true });
 mkdirSync(home, { recursive: true });
 mkdirSync(project, { recursive: true });
+// Browser fixtures must never enumerate or attach the user's native sessions.
+writeFileSync(join(base, "fake-codex.mjs"), `#!/usr/bin/env node
+import { createInterface } from "node:readline";
+createInterface({ input: process.stdin }).on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.id === undefined) return;
+  const result = message.method === "initialize" ? {}
+    : message.method === "remoteControl/status/read" ? { status: "disabled" }
+    : { data: [], nextCursor: null };
+  process.stdout.write(JSON.stringify({ id: message.id, result }) + "\\n");
+});
+`, { mode: 0o755 });
 writeFileSync(join(project, "README.md"), "# Preview fixture\n\nHello from the file viewer.\n");
 writeFileSync(join(project, "notes.txt"), "plain text\n");
+writeFileSync(join(project, "Dockerfile"), "FROM node:22\n");
+writeFileSync(join(project, "edit-draft.txt"), "draft before\n");
+writeFileSync(join(project, "edit-conflict.txt"), "conflict before\n");
+writeFileSync(join(project, "edit-mobile.txt"), "mobile before\n");
+writeFileSync(join(project, "unknown-binary.bin"), Buffer.from([0, 1, 2, 3]));
 writeFileSync(join(project, "active.html"), "<script>parent.__previewPwned = true</script><h1>Visible text</h1>");
 writeFileSync(join(project, "active.svg"), '<svg xmlns="http://www.w3.org/2000/svg"><script>parent.__previewPwned=true</script></svg>');
 execFileSync("git", ["-C", project, "init", "-q"]);

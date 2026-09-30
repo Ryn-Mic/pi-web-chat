@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import {
+  appendFileSync,
   chmodSync,
   closeSync,
+  fstatSync,
   ftruncateSync,
   mkdirSync,
   mkdtempSync,
@@ -250,6 +252,20 @@ test("openResolvedPreviewFile: rejects a file replaced after metadata resolution
   const meta = resolvePreviewFile(root, "race.txt");
   writeFileSync(join(root, "race.txt"), "after-change");
   assert.throws(() => openResolvedPreviewFile(meta), { code: "ESTALE" });
+});
+
+test("openResolvedPreviewFile: an empty descriptor stays at EOF after append and closes", async () => {
+  fixture();
+  const filePath = join(root, "empty.txt");
+  writeFileSync(filePath, "");
+  const { fd, stream } = openResolvedPreviewFile(resolvePreviewFile(root, "empty.txt"));
+  const closed = new Promise<void>((resolve) => stream.once("close", resolve));
+  appendFileSync(filePath, "late content");
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  await closed;
+  assert.equal(Buffer.concat(chunks).length, 0);
+  assert.throws(() => fstatSync(fd), { code: "EBADF" });
 });
 
 test("openResolvedPreviewFile: rejects a directory even when stat quadruplet matches", () => {

@@ -23,6 +23,8 @@ import {
   GIT_TAB_ID,
 } from "./FileWorkspaceTabs";
 import { GitWorkspacePanel } from "./GitWorkspacePanel";
+import { confirmDiscardTextFileDraft } from "../lib/file-text-drafts";
+import { useT } from "../lib/i18n";
 
 export function openWorkspacePreview(file: PreviewFileSelection): void {
   const tabKey = chatClient.activeTabKey;
@@ -32,6 +34,7 @@ export function openWorkspacePreview(file: PreviewFileSelection): void {
 }
 
 export function FileWorkspaceSidebar() {
+  const t = useT();
   const open = useFilesPanelOpen();
   const { snapshot } = useChat();
   const tabKey = chatClient.activeTabKey ?? "unbound";
@@ -85,7 +88,10 @@ export function FileWorkspaceSidebar() {
           else if (identity === GIT_TAB_ID) activatePreview(tabKey, GIT_TAB_ID);
           else activatePreview(tabKey, identity);
         }}
-        onClose={(identity) => closePreview(tabKey, identity)}
+        onClose={(identity) => {
+          const tab = workspace.tabs.find((entry) => previewIdentity(entry.cwd, entry.path) === identity);
+          if (!tab || confirmDiscardTextFileDraft(tab.cwd, tab.path, t("fileEditDiscard"), tabKey)) closePreview(tabKey, identity);
+        }}
         onRefresh={refresh}
       />
 
@@ -123,7 +129,7 @@ export function FileWorkspaceSidebar() {
         const active = identity === workspace.active;
         return (
           <div
-            key={identity}
+            key={JSON.stringify([tabKey, identity])}
             id={workspacePanelId(tabKey, identity)}
             role="tabpanel"
             aria-labelledby={workspaceTabId(tabKey, identity)}
@@ -135,6 +141,7 @@ export function FileWorkspaceSidebar() {
                 cwd={tab.cwd}
                 path={tab.path}
                 name={tab.name}
+                workspaceKey={tabKey}
                 refreshToken={refreshByIdentity[identity] ?? 0}
               />
             )}

@@ -3,6 +3,7 @@ import { useForkPoints } from "../lib/api";
 import { chatClient, useChat } from "../lib/chat";
 import { useT } from "../lib/i18n";
 import { LoadingIndicator } from "./LoadingIndicator";
+import { DIALOG_BACKDROP_CLASS, DIALOG_POPUP_CLASS, PRIMARY_BUTTON_CLASS, SECONDARY_BUTTON_CLASS } from "./ui";
 
 /** Fork into a new session from a specific user-message point */
 export function ForkDialog({
@@ -33,8 +34,8 @@ export function ForkDialog({
       }}
     >
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 bg-black/40 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
-        <Dialog.Popup className="fixed top-1/2 left-1/2 flex max-h-[75vh] w-[90vw] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-line bg-card shadow-xl outline-none">
+        <Dialog.Backdrop className={DIALOG_BACKDROP_CLASS} />
+        <Dialog.Popup className={DIALOG_POPUP_CLASS}>
           <div className="border-b border-line px-4 py-3">
             <Dialog.Title className="text-sm font-semibold">{t("forkSession")}</Dialog.Title>
             <Dialog.Description className="mt-0.5 text-xs text-faint">
@@ -58,7 +59,7 @@ export function ForkDialog({
                   type="button"
                   autoFocus
                   onClick={() => onOpenChange(false)}
-                  className="min-h-10 rounded-lg border border-line px-4 py-2 text-sm text-muted transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  className={`${SECONDARY_BUTTON_CLASS} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
                 >
                   {t("cancel")}
                 </button>
@@ -71,7 +72,7 @@ export function ForkDialog({
                       onOpenChange(false);
                     }
                   }}
-                  className="min-h-10 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-ink transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40"
+                  className={`${PRIMARY_BUTTON_CLASS} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2`}
                 >
                   {t("codexForkAction")}
                 </button>

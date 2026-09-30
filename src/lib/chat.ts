@@ -16,6 +16,7 @@ import type {
   UISnapshot,
 } from "../../shared/protocol";
 import { applySnapshotDelta } from "../../shared/snapshot";
+import { serializeClientCommand } from "../../shared/client-command";
 import { authHeaders, checkAuth } from "./auth";
 import {
   clearComposerDraft,
@@ -34,6 +35,7 @@ import {
   type WorkspaceTab,
 } from "./session-workspace";
 import { deriveVersionNotice } from "./version";
+import { t } from "./i18n";
 
 export interface ActiveTool {
   toolCallId: string;
@@ -44,7 +46,7 @@ export interface ActiveTool {
 
 interface PendingSteer {
   requestId: string;
-  command: Extract<ClientCommand, { type: "prompt" }>;
+  frame: string;
   submitted: SubmittedComposerPrompt;
   userCountAtSend: number;
   awaitingReceipt: boolean;
@@ -94,6 +96,8 @@ export interface ChatState {
   historyCursor: string | null;
   historyHasMore: boolean;
   historyLoading: boolean;
+  /** The current page failed; retain its cursor so the user can retry. */
+  historyError: boolean;
   /** Assistant text streaming right now (not yet in the snapshot) */
   streamText: string;
   streamThinking: string;
@@ -143,6 +147,7 @@ function createInitialState(): ChatState {
     historyCursor: null,
     historyHasMore: false,
     historyLoading: false,
+    historyError: false,
     streamText: "",
     streamThinking: "",
     streamThinkingComplete: false,
@@ -201,7 +206,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
   private draftConnectionId: string = crypto.randomUUID();
   private pendingPrompt: {
     requestId: string;
-    command: Extract<ClientCommand, { type: "prompt" }>;
+    frame: string;
     submitted: SubmittedComposerPrompt;
     userCountAtSend: number;
     awaitingReceipt: boolean;
@@ -222,6 +227,8 @@ export class ChatClient implements WorkspaceClient<ChatState> {
   private eventSyncPending = false;
   /** Avoid spamming get_snapshot while waiting for one gap repair response. */
   private snapshotResyncPending = false;
+  /** A replacement window invalidates pages even when it reuses the cursor. */
+  private historyGeneration = 0;
 
   /**
    * Stream deltas coalesced here and flushed on a two-tier cadence, mirroring
@@ -541,6 +548,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       this.eventSeq = null;
       this.eventSyncPending = false;
       this.snapshotResyncPending = false;
+      this.historyGeneration += 1;
       this.update({
         connection: "connecting",
         snapshot: null,
@@ -548,6 +556,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         historyCursor: null,
         historyHasMore: false,
         historyLoading: false,
+        historyError: false,
         sessionId: null,
         streamText: "",
         streamThinking: "",
@@ -605,10 +614,10 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       // A dropped WebSocket has no delivery acknowledgement. Replaying the
       // same request id is safe because the server deduplicates it.
       if (this.pendingPrompt?.awaitingReceipt) {
-        ws.send(JSON.stringify(this.pendingPrompt.command));
+        ws.send(this.pendingPrompt.frame);
       }
       for (const steer of this.pendingSteers.values()) {
-        if (steer.awaitingReceipt) ws.send(JSON.stringify(steer.command));
+        if (steer.awaitingReceipt) ws.send(steer.frame);
       }
     };
     ws.onmessage = (e) => {
@@ -680,6 +689,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
   dispose() {
     this.intentionalClose = true;
     this.connectionVersion += 1;
+    this.historyGeneration += 1;
     this.clearReconnectTimer();
     this.clearDisconnectTimer();
     this.clearStreamBuffer();
@@ -695,11 +705,12 @@ export class ChatClient implements WorkspaceClient<ChatState> {
   async loadOlderMessages(): Promise<boolean> {
     const sessionId = this.state.sessionId;
     const cursor = this.state.historyCursor;
+    const generation = this.historyGeneration;
     if (!sessionId || !cursor || !this.state.historyHasMore || this.state.historyLoading) {
       return false;
     }
 
-    this.update({ historyLoading: true });
+    this.update({ historyLoading: true, historyError: false });
     try {
       const query = new URLSearchParams({ cursor });
       const url = `/api/sessions/${encodeURIComponent(sessionId)}/history?${query}`;
@@ -707,17 +718,25 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       if (!response.ok) throw new Error(`history request failed: ${response.status}`);
       const page = (await response.json()) as UIHistoryPage;
       // Ignore a response that outlived a tab/session switch or a second cursor.
-      if (this.state.sessionId !== sessionId || this.state.historyCursor !== cursor) return false;
+      if (
+        this.historyGeneration !== generation ||
+        this.state.sessionId !== sessionId ||
+        this.state.historyCursor !== cursor
+      ) return false;
       this.update({
         historicalMessages: [...page.messages, ...this.state.historicalMessages],
         historyCursor: page.cursor,
         historyHasMore: page.hasMore,
         historyLoading: false,
+        historyError: false,
       });
       return true;
     } catch {
-      if (this.state.sessionId === sessionId && this.state.historyCursor === cursor) {
-        this.update({ historyLoading: false });
+      if (
+        this.historyGeneration === generation &&
+        this.state.sessionId === sessionId && this.state.historyCursor === cursor
+      ) {
+        this.update({ historyLoading: false, historyError: true });
       }
       return false;
     }
@@ -801,11 +820,17 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       }
       const requestId = cmd.requestId ?? this.createRequestId();
       const command = { ...cmd, requestId };
+      const frame = serializeClientCommand(command);
+      if (frame === null) {
+        this.update({ lastError: t("requestCannotSend") });
+        return false;
+      }
       const submitted: SubmittedComposerPrompt = {
         text: command.text.trim(),
         images: [...(command.images ?? [])],
       };
       const optimisticMessage: UIMessage = {
+        id: `optimistic:${requestId}`,
         role: "user",
         content: [
           ...(submitted.text ? [{ type: "text" as const, text: submitted.text }] : []),
@@ -822,7 +847,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       if (steering) {
         this.pendingSteers.set(requestId, {
           requestId,
-          command,
+          frame,
           submitted,
           userCountAtSend,
           awaitingReceipt: true,
@@ -837,7 +862,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
           promptStatus: "sending",
         });
         try {
-          this.ws!.send(JSON.stringify(command));
+          this.ws!.send(frame);
           return true;
         } catch {
           this.pendingSteers.delete(requestId);
@@ -855,7 +880,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       this.optimisticUserCountAtSend = userCountAtSend;
       this.pendingPrompt = {
         requestId,
-        command,
+        frame,
         submitted,
         userCountAtSend,
         awaitingReceipt: true,
@@ -870,7 +895,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         promptStatus: "sending",
       });
       try {
-        this.ws!.send(JSON.stringify(command));
+        this.ws!.send(frame);
         return true;
       } catch {
         this.discardOptimisticMessage();
@@ -881,8 +906,19 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         return false;
       }
     }
-    if (socketOpen) this.ws!.send(JSON.stringify(cmd));
-    return socketOpen;
+    const frame = serializeClientCommand(cmd);
+    if (frame === null) {
+      this.update({ lastError: t("requestCannotSend") });
+      return false;
+    }
+    if (!socketOpen) return false;
+    try {
+      this.ws!.send(frame);
+      return true;
+    } catch {
+      this.update({ lastError: "The connection closed before the request could be sent." });
+      return false;
+    }
   }
 
   private scheduleDisconnected() {
@@ -942,7 +978,13 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     return true;
   }
 
-  private installSnapshot(snapshot: UISnapshot, revision: number, resetHistory = false) {
+  private installSnapshot(
+    snapshot: UISnapshot,
+    revision: number,
+    resetHistory = false,
+    fullSnapshot = false,
+  ) {
+    if (resetHistory) this.historyGeneration += 1;
     this.snapshotRevision = revision;
     this.snapshotResyncPending = false;
     if (snapshot.isStreaming) this.markPromptRunning();
@@ -956,11 +998,12 @@ export class ChatClient implements WorkspaceClient<ChatState> {
             historyCursor: snapshot.history?.cursor ?? null,
             historyHasMore: snapshot.history?.hasMore ?? false,
             historyLoading: false,
+            historyError: false,
           }
         : {}),
-      activeTools: snapshot.activeTools ?? (resetHistory ? [] : this.state.activeTools),
+      activeTools: snapshot.activeTools ?? (fullSnapshot ? [] : this.state.activeTools),
       pendingInteractions:
-        snapshot.pendingInteractions ?? (resetHistory ? [] : this.state.pendingInteractions),
+        snapshot.pendingInteractions ?? (fullSnapshot ? [] : this.state.pendingInteractions),
       streamText: "",
       streamThinking: "",
       streamThinkingComplete: false,
@@ -988,7 +1031,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         this.onSessionBound?.(event.sessionId);
         break;
       case "snapshot":
-        this.installSnapshot(event.snapshot, event.revision, true);
+        this.installSnapshot(event.snapshot, event.revision, true, true);
         break;
       case "snapshot_delta": {
         const snapshot = applySnapshotDelta(
@@ -1000,7 +1043,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
           this.requestFullSnapshot();
           break;
         }
-        this.installSnapshot(snapshot, event.delta.revision);
+        this.installSnapshot(snapshot, event.delta.revision, event.delta.resetHistory === true);
         break;
       }
       case "prompt_received":

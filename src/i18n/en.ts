@@ -52,7 +52,14 @@ export type Messages = {
   emptySession: string;
   messageCount: string;
   loadEarlierMessages: string;
+  historyLoadFailed: string;
+  requestCannotSend: string;
   noSavedSessions: string;
+  loadMoreSessions: string;
+  sessionsDiscovering: string;
+  sessionCacheRefreshing: string;
+  sessionsLoadFailed: string;
+  sessionsRetry: string;
   noProject: string;
   sessionList: string;
   pinSidebar: string;
@@ -84,6 +91,20 @@ export type Messages = {
   filePreviewExpired: string;
   filePreviewFailed: string;
   filePreviewRetry: string;
+  fileEditOpen: string;
+  fileEditBack: string;
+  fileEditorLabel: string;
+  fileEditSave: string;
+  fileEditSaving: string;
+  fileEditSaved: string;
+  fileEditUnsaved: string;
+  fileEditTextOnly: string;
+  fileEditUnavailable: string;
+  fileEditConflict: string;
+  fileEditReload: string;
+  fileEditDiscard: string;
+  fileEditDiscardWorkspace: string;
+  fileEditReloadConfirm: string;
   previewFile: string;
   referenceFile: string;
   closePreviewTab: string;
@@ -274,6 +295,7 @@ export type Messages = {
   accessToken: string;
   accessTokenPlaceholder: string;
   twoFactorCode: string;
+  twoFactorSetupHint: string;
   logout: string;
 };
 
@@ -329,7 +351,14 @@ export const en: Messages = {
   emptySession: "(empty session)",
   messageCount: "{count} messages",
   loadEarlierMessages: "Load earlier messages",
+  historyLoadFailed: "Couldn't load earlier messages. Try again.",
+  requestCannotSend: "Couldn't send this request. Shorten the message or remove some attachments, then try again.",
   noSavedSessions: "No saved sessions",
+  loadMoreSessions: "Load more sessions",
+  sessionsDiscovering: "Discovering more sessions…",
+  sessionCacheRefreshing: "Showing saved sessions while refreshing…",
+  sessionsLoadFailed: "Couldn't refresh all sessions. Available sessions are still usable.",
+  sessionsRetry: "Retry loading sessions",
   noProject: "No project",
   sessionList: "Session list",
   pinSidebar: "Pin sidebar",
@@ -359,6 +388,20 @@ export const en: Messages = {
   filePreviewExpired: "{name} preview expired",
   filePreviewFailed: "Failed to load {name}",
   filePreviewRetry: "Retry",
+  fileEditOpen: "Edit source",
+  fileEditBack: "Back to preview",
+  fileEditorLabel: "Edit {name}",
+  fileEditSave: "Save",
+  fileEditSaving: "Saving…",
+  fileEditSaved: "Saved to the project",
+  fileEditUnsaved: "Unsaved changes · drafts stay when switching files",
+  fileEditTextOnly: "UTF-8 text · Ctrl / ⌘ S to save",
+  fileEditUnavailable: "Editing supports UTF-8 text up to {size} MiB. Binary and read-only files cannot be edited.",
+  fileEditConflict: "The file changed on the server. Your draft is kept; reload the file before saving.",
+  fileEditReload: "Reload file",
+  fileEditDiscard: "Discard unsaved changes and close this file?",
+  fileEditDiscardWorkspace: "Discard this session's unsaved file changes and continue?",
+  fileEditReloadConfirm: "Discard your draft and load the latest file from the server?",
   previewFile: "Preview {name}",
   referenceFile: "Reference {name}",
   closePreviewTab: "Close preview tab",
@@ -543,5 +586,6 @@ export const en: Messages = {
   accessToken: "Access token",
   accessTokenPlaceholder: "Paste your access token",
   twoFactorCode: "2FA code (6 digits)",
+  twoFactorSetupHint: "First setup: add the secret from ~/.pi/web-chat/2fa.secret on the server to your authenticator.",
   logout: "Sign out",
 };

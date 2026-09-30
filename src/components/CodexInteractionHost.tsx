@@ -6,6 +6,7 @@ import type {
 } from "../../shared/protocol";
 import { chatClient, useChat } from "../lib/chat";
 import { useT } from "../lib/i18n";
+import { PRIMARY_BUTTON_CLASS, SECONDARY_BUTTON_CLASS } from "./ui";
 
 type JsonSchema = {
   type?: string;
@@ -572,7 +573,7 @@ export function CodexInteractionHost() {
               type="button"
               disabled={submitting}
               onClick={cancel}
-              className="min-h-9 rounded-lg border border-line px-3 text-sm text-muted transition-colors hover:bg-hover hover:text-ink disabled:opacity-50"
+              className={SECONDARY_BUTTON_CLASS}
             >
               {t("codexCancelTurn")}
             </button>
@@ -581,13 +582,13 @@ export function CodexInteractionHost() {
                 type="button"
                 disabled={submitting}
                 onClick={() => respond({ action: "decline" })}
-                className="min-h-9 rounded-lg border border-line px-3 text-sm text-muted transition-colors hover:bg-hover hover:text-ink disabled:opacity-50"
+                className={SECONDARY_BUTTON_CLASS}
               >
                 {t("codexDecline")}
               </button>
             )}
             {interaction.kind === "user_input" && (
-              <button type="button" disabled={submitting} onClick={submitUserInput} className="min-h-9 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-50">
+              <button type="button" disabled={submitting} onClick={submitUserInput} className={PRIMARY_BUTTON_CLASS}>
                 {t("codexSubmit")}
               </button>
             )}
@@ -596,7 +597,7 @@ export function CodexInteractionHost() {
                 type="button"
                 disabled={submitting || (interaction.mode === "url" && !externalUrl)}
                 onClick={() => interaction.mode === "url" ? respond({ action: "accept" }) : submitMcpForm()}
-                className="min-h-9 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-50"
+                className={PRIMARY_BUTTON_CLASS}
               >
                 {interaction.mode === "url" ? t("codexAuthorizationDone") : t("codexSubmit")}
               </button>
@@ -604,12 +605,12 @@ export function CodexInteractionHost() {
             {approval && (
               <>
                 {interaction.kind !== "permissions_approval" && interaction.allowSessionApproval && (
-                  <button type="button" disabled={submitting} onClick={() => respond({ action: "accept_for_session" })} className="min-h-9 rounded-lg border border-accent px-3 text-sm font-medium text-ink transition-colors hover:bg-accent/10 disabled:opacity-50">
+                  <button type="button" disabled={submitting} onClick={() => respond({ action: "accept_for_session" })} className="min-h-10 rounded-lg border border-accent px-3 py-2 text-sm font-medium text-ink transition-colors hover:bg-accent/10 disabled:opacity-50">
                     {t("codexAcceptSession")}
                   </button>
                 )}
                 {interaction.kind === "permissions_approval" && (
-                  <button type="button" disabled={submitting} onClick={() => respond({ action: "accept", scope: "session" })} className="min-h-9 rounded-lg border border-accent px-3 text-sm font-medium text-ink transition-colors hover:bg-accent/10 disabled:opacity-50">
+                  <button type="button" disabled={submitting} onClick={() => respond({ action: "accept", scope: "session" })} className="min-h-10 rounded-lg border border-accent px-3 py-2 text-sm font-medium text-ink transition-colors hover:bg-accent/10 disabled:opacity-50">
                     {t("codexAcceptSession")}
                   </button>
                 )}
@@ -617,7 +618,7 @@ export function CodexInteractionHost() {
                   type="button"
                   disabled={submitting}
                   onClick={() => respond({ action: "accept", ...(interaction.kind === "permissions_approval" ? { scope: "turn" as const } : {}) })}
-                  className="min-h-9 rounded-lg bg-accent px-4 text-sm font-medium text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-50"
+                  className={PRIMARY_BUTTON_CLASS}
                 >
                   {t("codexAcceptOnce")}
                 </button>

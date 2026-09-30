@@ -240,6 +240,7 @@ lines.on("line", (line) => {
       PI_WEB_2FA: "off",
       PI_WEB_CODEX_BIN: fakeCodex,
       PI_WEB_CODEX_TRANSPORT: "proxy",
+      PI_WEB_CODEX_STARTED_MARKER: startedMarker,
       FAKE_CODEX_STARTED: startedMarker,
       FAKE_CODEX_REQUESTS: requestLog,
       FAKE_PROJECT: project,
@@ -794,6 +795,191 @@ lines.on("line", (line) => {
     assert.ok(((upgradedCatalog.commands as Array<{ name?: unknown }> | undefined) ?? [])
       .some((command) => command.name === "compact"));
     assert.equal(closed, false, "the socket must never close during the whole observer flow");
+  } finally {
+    ws?.terminate();
+    await stopChild(child);
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a large hydrated Codex page reaches the browser as a bounded tail with paged history", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-web-codex-tail-"));
+  const project = join(home, "project");
+  const fakeCodex = join(home, "fake-codex-large.mjs");
+  // Far past the browser tail window (120), small enough to stay a fast test.
+  const PAGE_ITEMS = 600;
+  mkdirSync(project, { recursive: true });
+
+  const pageItems = Array.from({ length: PAGE_ITEMS }, (_, index) => ({
+    type: "userMessage",
+    id: `page-${index}`,
+    content: [{ type: "text", text: `m-${String(index).padStart(3, "0")}` }],
+  }));
+  const olderItems = [
+    { type: "userMessage", id: "old-1", content: [{ type: "text", text: "older-1" }] },
+    { type: "userMessage", id: "old-2", content: [{ type: "text", text: "older-2" }] },
+  ];
+
+  writeFileSync(fakeCodex, `#!/usr/bin/env node
+import { createInterface } from "node:readline";
+const pageItems = ${JSON.stringify(pageItems)};
+const olderItems = ${JSON.stringify(olderItems)};
+const pageTurn = () => ({ id: "turn-large", status: "completed", items: pageItems });
+const olderTurn = () => ({ id: "turn-older", status: "completed", items: olderItems });
+const lines = createInterface({ input: process.stdin });
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.id === undefined) return;
+  const respond = (result) => process.stdout.write(JSON.stringify({ id: message.id, result }) + "\\n");
+  if (message.method === "initialize") { respond({}); return; }
+  if (message.method === "thread/read") {
+    respond({ thread: { id: message.params?.threadId, cwd: process.env.FAKE_PROJECT, preview: "large thread", status: { type: "idle" } } });
+    return;
+  }
+  if (message.method === "thread/resume") {
+    respond({
+      thread: { id: message.params?.threadId, cwd: process.env.FAKE_PROJECT, status: { type: "idle" } },
+      initialTurnsPage: { data: [pageTurn()], nextCursor: "older-turns" },
+      model: "gpt-large",
+    });
+    return;
+  }
+  if (message.method === "thread/turns/list") {
+    // A null cursor is the refresh path; "older-turns" is the page before the
+    // hydrated one, which is what the paged history must hand over to.
+    if (message.params?.cursor === "older-turns") respond({ data: [olderTurn()], nextCursor: null });
+    else respond({ data: [pageTurn()], nextCursor: "older-turns" });
+    return;
+  }
+  if (message.method === "turn/start") {
+    const threadId = message.params?.threadId;
+    const turn = { id: "live-turn", status: "inProgress", items: [] };
+    respond({ turn });
+    setTimeout(() => {
+      process.stdout.write(JSON.stringify({ method: "turn/started", params: { threadId, turn } }) + "\\n");
+      for (let i = 0; i < 130; i += 1) process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId, item: { id: "live-" + i, type: "agentMessage", text: "live " + i } } }) + "\\n");
+    }, 5);
+    return;
+  }
+  if (message.method === "model/list") { respond({ data: [], nextCursor: null }); return; }
+  if (message.method === "remoteControl/status/read") { respond({ status: "disabled" }); return; }
+  if (message.method === "thread/unsubscribe") { respond({}); return; }
+  process.stdout.write(JSON.stringify({ id: message.id, error: { code: -32601, message: "unsupported test method" } }) + "\\n");
+});
+`, { mode: 0o755 });
+  chmodSync(fakeCodex, 0o755);
+
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const sessionId = "codex:thr-large";
+  const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      NODE_ENV: "test",
+      HOST: "127.0.0.1",
+      PORT: String(port),
+      PI_WEB_CWD: project,
+      PI_WEB_TEST_STATE_DIR: join(home, ".pi", "web-chat"),
+      PI_CODING_AGENT_DIR: join(home, ".pi", "agent"),
+      PI_CODING_AGENT_SESSION_DIR: join(home, ".pi", "agent", "sessions"),
+      PI_WEB_TOKEN: "codex-server-test-token",
+      PI_WEB_2FA: "off",
+      PI_WEB_CODEX_BIN: fakeCodex,
+      PI_WEB_CODEX_TRANSPORT: "standalone",
+      FAKE_PROJECT: project,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout?.resume();
+  child.stderr?.resume();
+
+  let ws: WebSocket | undefined;
+  try {
+    await waitForHealth(baseUrl);
+    const sessionToken = await login(baseUrl);
+    const authHeaders = { authorization: `Bearer ${sessionToken}` };
+    ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws?token=${encodeURIComponent(sessionToken)}`
+      + `&session=${encodeURIComponent(sessionId)}`,
+    );
+    const events: Array<Record<string, unknown>> = [];
+    ws.on("message", (raw) => events.push(JSON.parse(raw.toString()) as Record<string, unknown>));
+    await new Promise<void>((resolve, reject) => {
+      ws!.once("open", resolve);
+      ws!.once("error", reject);
+    });
+
+    interface PageShape {
+      messages: Array<{ content: Array<{ text?: string }> }>;
+      history?: { cursor: string | null; hasMore: boolean };
+      cursor?: string | null;
+      hasMore?: boolean;
+    }
+    const snapshotEvent = await waitForEvent(events, (event) =>
+      event.type === "snapshot"
+      && (event.snapshot as { agent?: unknown } | undefined)?.agent === "codex");
+    const snapshot = snapshotEvent.snapshot as PageShape;
+    const snapshotTexts = snapshot.messages.map((message) => String(message.content[0]?.text));
+
+    // The first frame is the newest 120 of the 600 hydrated messages; the older
+    // ones must stay behind a cursor instead of riding along with the snapshot.
+    assert.equal(snapshot.messages.length, 120, "the tail window caps the first snapshot");
+    assert.equal(snapshot.history?.hasMore, true);
+    assert.match(snapshot.history?.cursor ?? "", /^page:\d+:480$/);
+    assert.equal(snapshotTexts[0], "m-480", "the snapshot carries the newest window");
+    assert.equal(snapshotTexts.at(-1), "m-599");
+
+    const historyUrl = `${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/history`;
+    assert.equal(new Set(snapshot.messages.map((message) => (message as { id?: string }).id)).size, snapshot.messages.length);
+    for (const [cursor, status] of [["page:bad", 400], ["page:0:480", 409]] as const) {
+      assert.equal((await fetch(`${historyUrl}?cursor=${cursor}`, { headers: authHeaders })).status, status);
+    }
+
+    const withoutCursor = await fetch(historyUrl, { headers: authHeaders });
+    assert.equal(withoutCursor.status, 200);
+    const mirror = await withoutCursor.json() as PageShape;
+    assert.equal(mirror.messages.length, 120, "a cursorless history read mirrors the tail window");
+    assert.equal(mirror.cursor, snapshot.history?.cursor);
+
+    // Walk the cursor chain: the rest of the hydrated page, then the app-server
+    // cursor for turns older than it.
+    const pages: string[][] = [];
+    let cursor = snapshot.history?.cursor ?? null;
+    let hasMore = snapshot.history?.hasMore ?? false;
+    while (hasMore && cursor) {
+      const response = await fetch(
+        `${historyUrl}?cursor=${encodeURIComponent(cursor)}`,
+        { headers: authHeaders },
+      );
+      assert.equal(response.status, 200);
+      const page = await response.json() as PageShape;
+      assert.ok((page.messages?.length ?? 0) <= 120, "history pages stay bounded too");
+      pages.push(page.messages.map((message) => String(message.content[0]?.text)));
+      cursor = page.cursor ?? null;
+      hasMore = page.hasMore ?? false;
+      assert.ok(pages.length < 40, "the cursor chain must terminate");
+    }
+    assert.equal(pages.length, 5, "four pages of the hydrated page plus the older turn");
+
+    // The client prepends every fetched page, so replaying that reconstruction
+    // must reproduce the whole transcript once, in order, without gaps.
+    const reconstructed = [...pages.reverse().flat(), ...snapshotTexts];
+    assert.deepEqual(
+      reconstructed,
+      [
+        "older-1",
+        "older-2",
+        ...Array.from({ length: PAGE_ITEMS }, (_, index) => `m-${String(index).padStart(3, "0")}`),
+      ],
+    );
+    ws.send(JSON.stringify({ type: "prompt", text: "grow the live window", requestId: "tail-slide" }));
+    const slide = await waitForEvent(events, (event) => event.type === "snapshot_delta" && (event.delta as { resetHistory?: boolean } | undefined)?.resetHistory === true);
+    const delta = slide.delta as { messages: unknown[]; snapshot: { history?: { cursor: string | null; hasMore: boolean } } };
+    assert.equal(delta.messages.length, 120, "a slide replaces the visible tail atomically");
+    assert.equal(delta.snapshot.history?.hasMore, true);
+    assert.notEqual(delta.snapshot.history?.cursor, snapshot.history?.cursor);
+
   } finally {
     ws?.terminate();
     await stopChild(child);

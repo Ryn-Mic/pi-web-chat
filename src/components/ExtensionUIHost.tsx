@@ -2,6 +2,7 @@ import { Dialog } from "@base-ui-components/react/dialog";
 import { useEffect, useState } from "react";
 import { chatClient, useChat } from "../lib/chat";
 import { useT } from "../lib/i18n";
+import { DIALOG_BACKDROP_CLASS, DIALOG_POPUP_CLASS } from "./ui";
 
 /** Browser implementation of the dialog-capable portion of pi's extension UI. */
 export function ExtensionUIHost() {
@@ -25,8 +26,8 @@ export function ExtensionUIHost() {
   return (
     <Dialog.Root open onOpenChange={(open) => !open && cancel()}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-black/40 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
-        <Dialog.Popup className="fixed top-1/2 left-1/2 z-50 flex max-h-[75vh] w-[90vw] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-line bg-card shadow-xl outline-none">
+        <Dialog.Backdrop className={`${DIALOG_BACKDROP_CLASS} z-40`} />
+        <Dialog.Popup className={`${DIALOG_POPUP_CLASS} z-50 rounded-2xl`}>
           <div className="border-b border-line px-4 py-3">
             <Dialog.Title className="text-sm font-semibold text-ink">{request.title}</Dialog.Title>
             {request.method === "confirm" && (

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ChatClient, chatClient } from "../src/lib/chat.ts";
+import { CLIENT_COMMAND_MAX_BYTES, CLIENT_COMMAND_MAX_TEXT_LENGTH } from "../shared/client-command.ts";
+import { clearComposerDraft, getComposerDraft, setComposerDraft } from "../src/lib/composer-drafts.ts";
+import type { ClientCommand } from "../shared/protocol.ts";
 
 class FakeWebSocket {
   static readonly OPEN = 1;
@@ -114,21 +117,26 @@ test("replaces the local prompt when its user message reaches a snapshot", () =>
 
 test("replays an unacknowledged prompt with the same request id after reconnecting", () => {
   const { client, restore } = createConnectedClient();
+  const previousLocation = (globalThis as { location?: unknown }).location;
+  Object.defineProperty(globalThis, "location", {
+    configurable: true,
+    value: { protocol: "http:", host: "localhost:3242" },
+  });
   try {
     const initialSocket = (client as unknown as { ws: FakeWebSocket }).ws;
-    client.send({ type: "prompt", text: "replay safely" });
+    const image = { data: "YQ==", mimeType: "image/png" };
+    client.send({ type: "prompt", text: "replay safely", images: [image] });
     const original = JSON.parse(initialSocket.sent[0]!);
-
-    const reconnectSocket = new FakeWebSocket();
-    (client as unknown as { ws: FakeWebSocket }).ws = reconnectSocket;
-    (client as unknown as { ws: FakeWebSocket; connectionVersion: number }).connectionVersion = 1;
-    // The reconnect path reuses this pending command; preserving the request
-    // id is the client contract the server uses for deduplication.
-    const pending = (client as unknown as { pendingPrompt: { command: unknown } }).pendingPrompt;
-    reconnectSocket.send(JSON.stringify(pending.command));
-
+    image.data = "changed after validation";
+    (client as unknown as { ws: FakeWebSocket | null }).ws = null;
+    client.connect();
+    const reconnectSocket = (client as unknown as { ws: FakeWebSocket & { onopen(): void } }).ws;
+    reconnectSocket.onopen();
     assert.equal(JSON.parse(reconnectSocket.sent[0]!).requestId, original.requestId);
+    assert.equal(reconnectSocket.sent[0], initialSocket.sent[0], "reconnect sends the validated frame unchanged");
   } finally {
+    client.dispose();
+    Object.defineProperty(globalThis, "location", { configurable: true, value: previousLocation });
     restore();
   }
 });
@@ -518,6 +526,69 @@ test("does not enter loading when the prompt cannot be sent", () => {
       configurable: true,
       value: previousWebSocket,
     });
+  }
+});
+
+test("locally rejects oversized prompt text without sending, clearing its draft, or blocking retry", () => {
+  const { client, restore } = createConnectedClient();
+  const key = "oversized-draft";
+  try {
+    emit(client, { type: "session_bound", sessionId: key });
+    const text = "a".repeat(CLIENT_COMMAND_MAX_TEXT_LENGTH + 1);
+    setComposerDraft(key, { text, images: [] });
+    assert.equal(client.send({ type: "prompt", text }), false);
+    assert.equal(client.state.promptStatus, "idle");
+    assert.deepEqual(client.state.optimisticMessages, []);
+    assert.equal(getComposerDraft(key).text, text);
+    assert.match(client.state.lastError ?? "", /Shorten the message/);
+    assert.deepEqual((client as unknown as { ws: FakeWebSocket }).ws.sent, []);
+    assert.equal(client.send({ type: "prompt", text: "shortened retry" }), true);
+    assert.equal(client.state.promptStatus, "sending");
+    assert.equal(client.state.lastError, null);
+  } finally {
+    clearComposerDraft(key);
+    restore();
+  }
+});
+
+test("locally rejects more than 64 images without entering sending and permits a corrected retry", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    const image = { data: "YQ==", mimeType: "image/png" };
+    assert.equal(client.send({ type: "prompt", text: "images", images: Array.from({ length: 65 }, () => image) }), false);
+    assert.equal(client.state.promptStatus, "idle");
+    assert.deepEqual(client.state.optimisticMessages, []);
+    assert.deepEqual((client as unknown as { ws: FakeWebSocket }).ws.sent, []);
+    assert.equal(client.send({ type: "prompt", text: "one image", images: [image] }), true);
+  } finally {
+    restore();
+  }
+});
+
+test("counts JSON framing against the 64 MiB prompt budget before entering sending", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    const image = { data: "a".repeat(CLIENT_COMMAND_MAX_BYTES / 2), mimeType: "image/png" };
+    assert.equal(client.send({ type: "prompt", text: "", images: [image, image] }), false);
+    assert.equal(client.state.promptStatus, "idle");
+    assert.deepEqual(client.state.optimisticMessages, []);
+    assert.deepEqual((client as unknown as { ws: FakeWebSocket }).ws.sent, []);
+    assert.equal(client.send({ type: "prompt", text: "small retry" }), true);
+  } finally {
+    restore();
+  }
+});
+
+test("invalid commands and failed socket sends return false instead of throwing", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    assert.equal(client.send({ type: "sync_events", afterSeq: -1 }), false);
+    assert.equal(client.send({ type: "set_thinking_level", level: "invalid" } as unknown as ClientCommand), false);
+    assert.deepEqual((client as unknown as { ws: FakeWebSocket }).ws.sent, []);
+    (client as unknown as { ws: FakeWebSocket }).ws.send = () => { throw new Error("closed"); };
+    assert.equal(client.send({ type: "abort" }), false);
+  } finally {
+    restore();
   }
 });
 
@@ -1148,6 +1219,100 @@ test("ignores an older history response after switching sessions", async () => {
 
     assert.equal(await loading, false);
     assert.deepEqual(client.state.historicalMessages, []);
+  } finally {
+    globalThis.fetch = previousFetch;
+    restore();
+  }
+});
+
+test("a sliding snapshot window resets history and invalidates an in-flight page", async () => {
+  const previousFetch = globalThis.fetch;
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, { type: "session_bound", sessionId: "session-a" });
+    const snapshot = {
+      messages: [{ id: "latest", role: "assistant", content: [{ type: "text", text: "latest" }] }],
+      history: { cursor: "cursor-1", hasMore: true },
+      isStreaming: false, model: null, thinkingLevel: "off", thinkingLevels: ["off"],
+    };
+    emit(client, { type: "snapshot", revision: 0, snapshot });
+    emit(client, { type: "tool_start", toolCallId: "still-running", toolName: "bash" });
+    let resolveFetch!: (response: Response) => void;
+    globalThis.fetch = (() => new Promise<Response>((resolve) => { resolveFetch = resolve; })) as typeof fetch;
+    const loading = client.loadOlderMessages();
+    const { messages: _messages, ...metadata } = snapshot;
+    emit(client, {
+      type: "snapshot_delta",
+      delta: { baseRevision: 0, revision: 1, from: 0, resetHistory: true,
+        messages: [{ id: "new-latest", role: "assistant", content: [{ type: "text", text: "new window" }] }],
+        snapshot: metadata,
+      },
+    });
+    assert.equal(client.state.historyLoading, false);
+    assert.equal(client.state.historyCursor, "cursor-1");
+    resolveFetch(new Response(JSON.stringify({
+      messages: [{ role: "user", content: [{ type: "text", text: "stale" }] }],
+      cursor: null, hasMore: false,
+    }), { status: 200 }));
+    assert.equal(await loading, false, "a reused cursor cannot revive the old page");
+    assert.deepEqual(client.state.historicalMessages, []);
+    assert.equal(client.state.historyHasMore, true);
+    assert.equal(client.state.snapshot?.messages[0]?.content[0]?.text, "new window");
+    assert.equal(client.state.activeTools[0]?.toolCallId, "still-running", "a history reset does not clear unrelated tool events");
+  } finally {
+    globalThis.fetch = previousFetch;
+    restore();
+  }
+});
+
+test("full snapshots invalidate pages and preserve retry after a history failure", async () => {
+  const previousFetch = globalThis.fetch;
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, { type: "session_bound", sessionId: "session-a" });
+    const snapshot = { messages: [], history: { cursor: "same-cursor", hasMore: true }, isStreaming: false };
+    emit(client, { type: "snapshot", revision: 0, snapshot });
+    let rejectFetch!: (reason: Error) => void;
+    globalThis.fetch = (() => new Promise<Response>((_, reject) => { rejectFetch = reject; })) as typeof fetch;
+    const stale = client.loadOlderMessages();
+    emit(client, { type: "snapshot", revision: 1, snapshot });
+    rejectFetch(new Error("old connection failed"));
+    assert.equal(await stale, false);
+    assert.equal(client.state.historyError, false, "an obsolete failure cannot overwrite the new window");
+
+    globalThis.fetch = (async () => new Response("unavailable", { status: 503 })) as typeof fetch;
+    assert.equal(await client.loadOlderMessages(), false);
+    assert.equal(client.state.historyError, true);
+    assert.equal(client.state.historyCursor, "same-cursor");
+    assert.equal(client.state.historyHasMore, true);
+    globalThis.fetch = (async () => new Response(JSON.stringify({ messages: [], cursor: null, hasMore: false }))) as typeof fetch;
+    assert.equal(await client.loadOlderMessages(), true);
+    assert.equal(client.state.historyError, false);
+  } finally {
+    globalThis.fetch = previousFetch;
+    restore();
+  }
+});
+
+test("a history-window reset clears loaded pages and refreshes the cursor", async () => {
+  const previousFetch = globalThis.fetch;
+  const { client, restore } = createConnectedClient();
+  try {
+    emit(client, { type: "session_bound", sessionId: "session-a" });
+    emit(client, { type: "snapshot", revision: 0, snapshot: {
+      messages: [], history: { cursor: "cursor-2", hasMore: true }, isStreaming: false,
+    } });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      messages: [{ role: "user", content: [{ type: "text", text: "earlier" }] }], cursor: null, hasMore: false,
+    }))) as typeof fetch;
+    assert.equal(await client.loadOlderMessages(), true);
+    emit(client, { type: "snapshot_delta", delta: {
+      baseRevision: 0, revision: 1, from: 0, messages: [], resetHistory: true,
+      snapshot: { history: { cursor: "cursor-3", hasMore: true }, isStreaming: false },
+    } });
+    assert.deepEqual(client.state.historicalMessages, []);
+    assert.equal(client.state.historyCursor, "cursor-3");
+    assert.equal(client.state.historyHasMore, true);
   } finally {
     globalThis.fetch = previousFetch;
     restore();

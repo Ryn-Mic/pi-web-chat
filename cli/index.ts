@@ -7,6 +7,7 @@ import {
   isLoopbackHost,
   openBrowser,
   parseWebOptions,
+  preflightRestart,
   readManagedServerStatus,
   resolveLaunchTarget,
   rotateToken,
@@ -36,6 +37,7 @@ export type StandaloneCliDependencies = {
   readManagedServerStatus(): ManagedServerStatus | null;
   describeServer(port: string, host: string, pid: number): string;
   resolveLaunchTarget(parsed: ParsedWebArgs): { port: string; host: string };
+  preflightRestart(port: string, host: string): { ok: true } | { ok: false; error: string };
   startServer(port: string, host: string, token?: string): StartResult;
   stopServer(options?: { waitMs?: number }): StopResult;
   waitForServerReady(
@@ -64,6 +66,7 @@ const defaults: StandaloneCliDependencies = {
   readManagedServerStatus,
   describeServer,
   resolveLaunchTarget,
+  preflightRestart,
   startServer,
   stopServer,
   waitForServerReady,
@@ -158,7 +161,7 @@ function launch(
   io.out("  status:  pi-web-chat status");
   io.out("  agents:  Pi + Codex (select per new session in Web settings)");
   io.out(`  logs:    ${deps.logFile}`);
-  io.out(`  auth:    token & 2FA — see ${deps.logFile} (or ${deps.tokenFile})`);
+  io.out(`  auth:    token & 2FA — access token stored in ${deps.tokenFile}`);
   deps.openBrowser(url);
   return 0;
 }
@@ -233,15 +236,20 @@ export function runStandaloneCli(
   }
 
   if (parsed.action === "rftoken") {
-    const token = deps.rotateToken();
+    deps.rotateToken();
     io.out(
-      `pi-web-chat: access token rotated — ${token} (stored in ${deps.tokenFile}, applies on next login)`,
+      `pi-web-chat: access token rotated (stored in ${deps.tokenFile}, applies on next login)`,
     );
     return 0;
   }
 
   if (parsed.action === "restart") {
     const target = deps.resolveLaunchTarget(parsed);
+    const preflight = deps.preflightRestart(target.port, target.host);
+    if (!preflight.ok) {
+      io.error(`pi-web-chat: ${preflight.error}`);
+      return 1;
+    }
     const probes = deps.detectAgents();
     const result = deps.stopServer({ waitMs: 5_000 });
     if (result.error) {

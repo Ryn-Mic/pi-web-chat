@@ -107,9 +107,8 @@
 }
 
 /*
- * The document stays fixed for standalone-PWA bounds, while iOS is allowed to
- * pan its visual viewport for the keyboard. #root stays in normal flow (not
- * fixed — that truncates content on iOS 26+).
+ * Keep the document within the visible browser height. iOS can still pan its
+ * visual viewport for the keyboard; #root stays in normal flow.
  */
 html,
 body {
@@ -123,23 +122,14 @@ body {
 }
 
 body {
-  /* Closed state: let the browser define the standalone app's drawable bounds.
-     A fixed height based on screen/innerHeight can overrun or undershoot them. */
   position: fixed;
   inset: 0;
-  height: auto;
+  height: var(--app-viewport-height, 100%);
   @apply bg-canvas text-ink antialiased;
 }
 
-/* Safari reserves the final home-indicator strip outside the fixed app box.
-   Let the composer use its own bottom padding, but do not send controls into
-   the native strip: a larger offset visibly clips the bottom control row. */
-html.ua-ios.ua-standalone body {
-  bottom: -0.5rem;
-}
-
 #root {
-  /* Fill the browser-controlled viewport (or the keyboard viewport above). */
+  /* Fill the visible height without adding a second viewport offset. */
   height: 100%;
   max-height: 100%;
   display: flex;
@@ -424,9 +414,8 @@ html.ua-ios.ua-standalone body {
     min(var(--composer-safe-bottom-max), var(--safe-bottom, env(safe-area-inset-bottom, 0px)))
   );
 }
-/* A standalone app's fixed viewport already stops above the native bottom
-   region. Applying the inset again leaves a visibly doubled gap. */
-html.ua-standalone .composer-bar {
+/* The keyboard already covers the home indicator; keep only normal spacing. */
+html.ua-keyboard-open .composer-bar {
   padding-bottom: 0.5rem;
 }
 

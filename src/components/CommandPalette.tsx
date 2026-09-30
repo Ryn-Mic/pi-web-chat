@@ -1,5 +1,6 @@
 import type { UIAgentKind, UICommandInfo } from "../../shared/protocol";
 import { useT } from "../lib/i18n";
+import { PALETTE_POPUP_CLASS } from "./ui";
 
 const SOURCE_ORDER: UICommandInfo["source"][] = ["builtin", "extension", "prompt", "skill"];
 
@@ -43,7 +44,7 @@ export function CommandPalette({
 
   if (matches.length === 0) {
     return (
-      <div className="absolute right-0 bottom-[calc(100%+0.5rem)] left-0 z-20 rounded-lg border border-line bg-card px-3 py-3 text-sm text-faint shadow-lg">
+      <div className={`${PALETTE_POPUP_CLASS} px-3 py-3 text-sm text-faint`}>
         {t("noCommandsFound")}
       </div>
     );
@@ -52,7 +53,7 @@ export function CommandPalette({
   let itemIndex = 0;
   return (
     <div
-      className="absolute right-0 bottom-[calc(100%+0.5rem)] left-0 z-20 max-h-72 overflow-y-auto rounded-lg border border-line bg-card py-1 shadow-lg"
+      className={`${PALETTE_POPUP_CLASS} max-h-72 overflow-y-auto py-1`}
       role="listbox"
       aria-label={t("commands")}
     >

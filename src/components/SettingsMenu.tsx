@@ -11,6 +11,8 @@ import { AgentIcon } from "./AgentIcon";
 import { AgentEyes } from "./AgentEyes";
 import { SettingsTriggerIcon } from "./MorphIcons";
 import { activityEyeTone } from "../lib/activity";
+import { viewportDiagnostics } from "../lib/viewport";
+import { DIALOG_BACKDROP_CLASS } from "./ui";
 import {
   useGrokTheme,
   setGrokTheme,
@@ -290,7 +292,7 @@ export function SettingsMenu({ openToken = 0 }: { openToken?: number }) {
           <SettingsTriggerIcon open={open} size={19} />
         </Dialog.Trigger>
         <Dialog.Portal>
-          <Dialog.Backdrop className="fixed inset-0 bg-black/35 transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
+          <Dialog.Backdrop className={DIALOG_BACKDROP_CLASS} />
           <Dialog.Popup className="fixed top-1/2 left-1/2 max-h-[min(88vh,42rem)] w-[min(94vw,37rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-line bg-card py-1 shadow-[0_18px_60px_rgba(0,0,0,0.16)] outline-none">
             <Dialog.Title className="sr-only">{t("settings")}</Dialog.Title>
               <PreferenceRow
@@ -448,7 +450,12 @@ export function SettingsMenu({ openToken = 0 }: { openToken?: number }) {
                 {t("logout")}
               </button>
               <div className="my-1 border-t border-line" />
-              <div className="px-3 pt-1 pb-2 text-[10px] text-faint">pi-web-chat v{__APP_VERSION__}</div>
+              <div className="px-3 pt-1 pb-2 text-[10px] text-faint">
+                pi-web-chat v{__APP_VERSION__}
+                {/* Temporary iOS viewport diagnostics (src/lib/viewport.ts);
+                    removed once the iOS 26+ top clearance is settled. */}
+                <span className="ml-1 font-mono">· {viewportDiagnostics()}</span>
+              </div>
           </Dialog.Popup>
         </Dialog.Portal>
       </Dialog.Root>
