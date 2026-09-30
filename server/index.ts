@@ -59,6 +59,10 @@ import {
   writeManagedDaemonState,
 } from "./daemon-state.ts";
 import { selectReplayEvents } from "./event-replay.ts";
+import {
+  createExtensionErrorReporter,
+  describeExtensionError,
+} from "./extension-errors.ts";
 import { handleDesktopFileContent, streamStaticFile } from "./file-content.ts";
 import { handleTextFileRequest } from "./file-text.ts";
 import {
@@ -339,6 +343,17 @@ interface SessionEntry {
   syncingExternal?: boolean;
   /** Browser that initiated the current extension command, if any. */
   extensionUIClient?: WebSocket;
+  /**
+   * Log-once bookkeeping for extension hook failures in this session. A hook
+   * that throws on every streaming delta must not flood the daemon log.
+   */
+  extensionErrors?: ReturnType<typeof createExtensionErrorReporter>;
+  /**
+   * Notices produced while no browser was attached (extension hooks fire
+   * during session creation, before `clients.add`). Flushed to the first
+   * client that binds, then dropped.
+   */
+  pendingNotices?: string[];
   /** Recently accepted browser prompt IDs, used to deduplicate reconnect replays. */
   receivedPromptIds: Map<string, number>;
   /** Web built-ins retain their terminal event so reconnect replays do not repeat side effects. */
@@ -645,6 +660,8 @@ function broadcastTo(entry: SessionEntry, event: ServerEvent) {
 }
 
 const REPLAY_EVENT_LIMIT = 4096;
+/** Notices buffered for a session that has no browser attached yet. */
+const PENDING_NOTICE_LIMIT = 20;
 
 function broadcastSessionEvent(entry: SessionEntry, payload: SessionEventPayload) {
   const event = { ...payload, seq: ++entry.eventSeq } as SequencedServerEvent;
@@ -2416,7 +2433,20 @@ async function bindWebExtensions(entry: SessionEntry) {
       },
     },
     onError: (error) => {
-      broadcastTo(entry, { type: "error", message: `Extension error: ${error.error}` });
+      entry.extensionErrors ??= createExtensionErrorReporter({ log: (line) => console.error(line) });
+      const report = entry.extensionErrors(error);
+      // Extension hook failures are never fatal: the SDK skips the hook and
+      // keeps the run alive. Report them as a named, dismissible notice
+      // instead of a prompt failure, and only once per distinct failure.
+      if (!report.first) return;
+      const message = describeExtensionError(error, { home: HOME });
+      if (entry.clients.size === 0) {
+        const pending = (entry.pendingNotices ??= []);
+        pending.push(message);
+        if (pending.length > PENDING_NOTICE_LIMIT) pending.shift();
+        return;
+      }
+      broadcastTo(entry, { type: "notice", message });
     },
   });
 }
@@ -3768,6 +3798,9 @@ wss.on("connection", (ws, req) => {
     if (preloaded || since === null) sendFullSnapshot(entry, ws);
     else sendEventsSince(entry, ws, since);
     sendCommandCatalog(entry, ws);
+    // Notices raised before this socket existed cannot be broadcast; hand the
+    // buffered ones to the client that finally attached.
+    for (const notice of entry.pendingNotices?.splice(0) ?? []) sendTo(ws, { type: "notice", message: notice });
     ready = true;
     for (const cmd of queue.splice(0)) dispatch(cmd);
   };
