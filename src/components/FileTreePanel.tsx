@@ -16,6 +16,7 @@ import { GitWorkspacePanel } from "./GitWorkspacePanel";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { DIALOG_BACKDROP_CLASS } from "./ui";
 import {
+  FileItemIcon,
   FolderTreeIcon,
   RefreshActionIcon,
   TreeChevronIcon,
@@ -68,9 +69,7 @@ function TreeNodeRow({
             className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] text-faint transition-colors cursor-not-allowed"
           >
             <span className="size-3 shrink-0" aria-hidden />
-            <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
-              {"\uf114"}
-            </span>
+            <FolderTreeIcon open={false} size={14} className="opacity-50" />
             <span className="truncate">{node.name}</span>
             <span className="sr-only"> {t("inaccessible")}</span>
           </button>
@@ -94,14 +93,21 @@ function TreeNodeRow({
             <span className="truncate">{node.name}</span>
           </button>
           {expanded && (
-            <TreeDir
-              cwd={cwd}
-              path={node.path}
-              depth={depth + 1}
-              onPreviewFile={onPreviewFile}
-              onPickFile={onPickFile}
-              selectedFileIdentity={selectedFileIdentity}
-            />
+            <div className="relative">
+              <div
+                className="pointer-events-none absolute top-0 bottom-0 w-px bg-line/40 dark:bg-white/[0.06]"
+                style={{ left: `${depth * 14 + 15}px` }}
+                aria-hidden
+              />
+              <TreeDir
+                cwd={cwd}
+                path={node.path}
+                depth={depth + 1}
+                onPreviewFile={onPreviewFile}
+                onPickFile={onPickFile}
+                selectedFileIdentity={selectedFileIdentity}
+              />
+            </div>
           )}
         </div>
       );
@@ -113,9 +119,7 @@ function TreeNodeRow({
         className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] text-muted"
       >
         <span className="size-3 shrink-0" aria-hidden />
-        <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
-          {"\uf114"}
-        </span>
+        <FolderTreeIcon open={false} size={14} className="opacity-60" />
         <span className="truncate">{node.name}</span>
       </div>
     );
@@ -145,9 +149,7 @@ function TreeNodeRow({
         className="flex min-h-8 min-w-0 flex-1 items-center gap-1.5 py-1.5 pr-1 text-left text-[13px]"
       >
         <span className={`size-1.5 shrink-0 rounded-full ${selected ? "bg-accent" : "bg-transparent"}`} aria-hidden />
-        <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
-          {"\uf016"}
-        </span>
+        <FileItemIcon size={14} className={selected ? "text-accent" : "text-faint"} />
         <span className="truncate">{node.name}</span>
       </button>
       <button
@@ -292,9 +294,7 @@ function FileSearchResultRow({
         className="flex min-h-8 min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left text-[13px]"
       >
         <span className={`size-1.5 shrink-0 rounded-full ${selected ? "bg-accent" : "bg-transparent"}`} aria-hidden />
-        <span className="shrink-0 font-mono text-[12px] text-faint" aria-hidden>
-          {"\uf016"}
-        </span>
+        <FileItemIcon size={14} className={selected ? "text-accent" : "text-faint"} />
         <span className="shrink-0 truncate">{match.name}</span>
         {secondaryPath && <span className="min-w-0 flex-1 truncate text-xs text-faint">{secondaryPath}</span>}
       </button>
