@@ -1,6 +1,6 @@
 # Agent Note: 用 AG-UI 规范 agent↔前端边界（调研与取舍）
 
-Status: proposed
+Status: rejected — AG-UI 只覆盖「事件词汇 → 传输」这一层，替代不了 pi/codex/cometix 的解析、历史分页、会话索引与重连重放；在前端继续使用自有 WS 协议的前提下没有增量收益（只有真要接第三方前端或第三方框架时才有），连词汇对齐也不做，避免为未采用的协议引入外部词汇。
 
 ## Problem
 
