@@ -424,7 +424,7 @@ export class CodexAppServerClient {
     return this.sendRequest(method, params);
   }
 
-  async listThreads(limit = 300): Promise<CodexThreadInfo[]> {
+  async listThreads(limit = 300, onProgress?: (threads: CodexThreadInfo[]) => void): Promise<CodexThreadInfo[]> {
     const result: CodexThreadInfo[] = [];
     let cursor: string | null = null;
     do {
@@ -437,9 +437,10 @@ export class CodexAppServerClient {
         useStateDbOnly: false,
       });
       const record = isRecord(response) ? response : {};
+      const page: CodexThreadInfo[] = [];
       for (const raw of Array.isArray(record.data) ? record.data : []) {
         if (!isRecord(raw) || !stringValue(raw.id)) continue;
-        result.push({
+        const thread = {
           id: String(raw.id),
           ...(stringValue(raw.sessionId) ? { sessionId: String(raw.sessionId) } : {}),
           preview: typeof raw.preview === "string" ? raw.preview : "",
@@ -449,9 +450,12 @@ export class CodexAppServerClient {
           ...(stringValue(raw.name) ? { name: String(raw.name) } : {}),
           ...(stringValue(raw.path) ? { path: String(raw.path) } : {}),
           status: raw.status,
-        });
+        };
+        result.push(thread);
+        page.push(thread);
         if (result.length >= limit) break;
       }
+      if (page.length) onProgress?.(page);
       cursor = stringValue(record.nextCursor) ?? null;
     } while (cursor && result.length < limit);
     return result;

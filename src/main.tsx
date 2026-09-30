@@ -54,6 +54,10 @@ function AuthGate() {
   const status = useAuthStatus();
 
   useEffect(() => {
+    if (status === "unauthenticated") queryClient.removeQueries({ queryKey: ["sessions"] });
+  }, [status]);
+
+  useEffect(() => {
     if (status !== "checking") return;
     void checkAuth();
     // Retry every 3s while the server is starting up

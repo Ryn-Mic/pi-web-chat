@@ -190,14 +190,6 @@ async function scanRange(state: FileState, start: number, end: number): Promise<
   } finally { await file.close(); }
 }
 
-async function mapBatches<T, R>(items: T[], worker: (item: T) => Promise<R>): Promise<R[]> {
-  const output: R[] = [];
-  for (let start = 0; start < items.length; start += COLD_SUMMARY_BATCH_SIZE) {
-    output.push(...(await Promise.all(items.slice(start, start + COLD_SUMMARY_BATCH_SIZE).map(worker))));
-  }
-  return output;
-}
-
 /** In-memory, append-aware index for JSONL files below the pi sessions directory. */
 export class SessionSummaryIndex {
   private readonly cache = new Map<string, FileState>();
@@ -205,7 +197,12 @@ export class SessionSummaryIndex {
   private epoch = 0;
   private byId = new Map<string, string>();
 
-  constructor(private readonly sessionsDir: string) {}
+  constructor(private readonly sessionsDir: string, private readonly onInvalidate?: () => void) {}
+
+  /** Only previously authorized, parsed roots; this never discovers transcripts. */
+  cachedSummaries(): UISessionInfo[] {
+    return [...this.cache.values()].filter((state) => state.headerSeen).map((state) => state.info);
+  }
 
   private async discover(): Promise<string[]> {
     let projects;
@@ -281,22 +278,40 @@ export class SessionSummaryIndex {
     return state.headerSeen ? finalizeInfo(state) : null;
   }
 
-  async list(): Promise<UISessionInfo[]> {
+  async list(onProgress?: (sessions: UISessionInfo[]) => void): Promise<UISessionInfo[]> {
     const paths = await this.discover();
     const present = new Set(paths);
     for (const path of this.cache.keys()) if (!present.has(path)) this.cache.delete(path);
-    const infos = (
-      await mapBatches(paths, async (path) => {
+    // Prefer already-known activity and newer timestamped filenames. Statting
+    // every path merely to schedule the first batch would delay cold rows on
+    // large or remote directories; final summaries establish the global order.
+    const recentPaths = onProgress
+      ? paths.sort((a, b) => {
+        const cachedA = this.cache.get(a)?.info.modified;
+        const cachedB = this.cache.get(b)?.info.modified;
+        const timeA = cachedA ? Date.parse(cachedA) : Date.parse(basename(a).slice(0, 10));
+        const timeB = cachedB ? Date.parse(cachedB) : Date.parse(basename(b).slice(0, 10));
+        return (Number.isNaN(timeB) ? 0 : timeB) - (Number.isNaN(timeA) ? 0 : timeA) || b.localeCompare(a);
+      })
+      : paths;
+    const infos: UISessionInfo[] = [];
+    for (let start = 0; start < recentPaths.length; start += COLD_SUMMARY_BATCH_SIZE) {
+      const batch = await Promise.all(recentPaths.slice(start, start + COLD_SUMMARY_BATCH_SIZE).map(async (path) => {
         try {
-          return await this.refreshFile(path);
+          const info = await this.refreshFile(path);
+          // One large transcript must not hold smaller siblings hostage. The
+          // catalog merges this small delta while this batch is still running.
+          if (info && onProgress) onProgress([info]);
+          return info;
         } catch {
           // One concurrently removed/unreadable file must not fail the entire
           // session sidebar refresh.
           this.cache.delete(path);
           return null;
         }
-      })
-    ).filter((info): info is UISessionInfo => info !== null);
+      }));
+      infos.push(...batch.filter((info): info is UISessionInfo => info !== null));
+    }
     this.byId = new Map(infos.map((info) => [info.id, info.path]));
     infos.sort((a, b) => new Date(b.modified).getTime() - new Date(a.modified).getTime());
     return infos;
@@ -314,6 +329,7 @@ export class SessionSummaryIndex {
   }
 
   invalidate(path?: string) {
+    this.onInvalidate?.();
     this.epoch += 1;
     // A new refresh must not reuse a scan started before invalidation.
     if (path) this.inFlight.delete(path);

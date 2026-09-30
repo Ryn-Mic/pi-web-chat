@@ -19,7 +19,7 @@ import {
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
-import { frontendBuildGraph, MAX_CHAT_STATIC_BYTES } from "./frontend-build-graph.ts";
+import { frontendBuildGraph, isEditorWorkerAsset, MAX_CHAT_STATIC_BYTES } from "./frontend-build-graph.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = join(root, "dist");
@@ -286,6 +286,9 @@ function assertAppPrecache() {
   );
   const { chatStatic, viewerOnly } = frontendBuildGraph(inventory.chunks);
   const precachedViewerChunks = [...viewerOnly].filter((file) => serviceWorker.includes(file));
+  precachedViewerChunks.push(...listFilesRecursive(join(publicDist, "assets"))
+    .map((file) => toRelativePath(publicDist, file))
+    .filter((file) => isEditorWorkerAsset(file) && serviceWorker.includes(file)));
   if (precachedViewerChunks.length > 0) {
     failBuild(
       `File Viewer lazy chunks leaked into the service-worker precache: ${precachedViewerChunks.join(", ")}`,
@@ -320,6 +323,8 @@ function assertThirdPartyNotices(assetRoot) {
     "GPL-3.0-only.txt",
     "morphicons-MIT.txt",
     "LaoA-GrokBot-MIT.txt",
+    "monaco-editor-MIT.txt",
+    "monaco-editor-NOTICES.txt",
   ];
 
   for (const name of requiredRootFiles) {

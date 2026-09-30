@@ -5,6 +5,8 @@ import { useT } from "../lib/i18n";
 import { markFreshDraftRequested } from "../lib/resume";
 import { AgentEyes } from "./AgentEyes";
 import { AgentIcon } from "./AgentIcon";
+import { confirmDiscardWorkspaceTextDrafts } from "../lib/file-text-drafts";
+import { DismissActionIcon } from "./MorphIcons";
 
 function firstUserText(tab: ChatTab): string | null {
   const message = tab.state.snapshot?.messages.find((item) => item.role === "user");
@@ -85,6 +87,7 @@ export function SessionTabs() {
               aria-label={`${t("closeSessionTab")}: ${title}`}
               title={t("closeSessionTab")}
               onClick={() => {
+                if (!confirmDiscardWorkspaceTextDrafts(tab.key, t("fileEditDiscardWorkspace"))) return;
                 const wasActive = tab.key === activeKey;
                 const next = chatClient.closeTab(tab.key);
                 if (wasActive) {
@@ -101,7 +104,7 @@ export function SessionTabs() {
               }}
               className="mr-1 flex size-5 shrink-0 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink"
             >
-              ×
+              <DismissActionIcon size={13} />
             </button>
           </div>
         );

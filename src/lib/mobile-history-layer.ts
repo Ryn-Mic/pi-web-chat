@@ -7,7 +7,7 @@ interface HistoryLayerHost {
 }
 
 /** Own one overlay entry; deferred cleanup also tolerates StrictMode effect replay. */
-export function createMobileHistoryLayer(onClose: () => void, host: HistoryLayerHost) {
+export function createMobileHistoryLayer(onClose: () => void, host: HistoryLayerHost, canClose: () => boolean = () => true) {
   const id = crypto.randomUUID();
   const mountedHref = host.href();
   let closing = false;
@@ -23,6 +23,12 @@ export function createMobileHistoryLayer(onClose: () => void, host: HistoryLayer
       }
       const removeListener = host.onPop(() => {
         if (ownsEntry()) return;
+        if (!closing && !canClose()) {
+          // Back already removed our entry. Recreate exactly one overlay entry;
+          // pushState replaces the abandoned forward entry rather than stacking.
+          host.history.pushState({ ...(host.history.state ?? {}), mobilePreviewLayer: id }, "", mountedHref);
+          return;
+        }
         closing = true;
         onClose();
       });
@@ -43,18 +49,21 @@ export function createMobileHistoryLayer(onClose: () => void, host: HistoryLayer
       };
     },
     close() {
-      if (closing) return;
+      if (closing || !canClose()) return false;
       closing = true;
       if (ownsEntry()) host.history.back();
       else onClose();
+      return true;
     },
   };
 }
 
 /** One browser Back entry per overlay mount, with the latest parent's callback. */
-export function useMobileHistoryLayer(onClose: () => void) {
+export function useMobileHistoryLayer(onClose: () => void, canClose: () => boolean = () => true) {
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const canCloseRef = useRef(canClose);
+  canCloseRef.current = canClose;
   const layer = useRef<ReturnType<typeof createMobileHistoryLayer> | null>(null);
   if (layer.current === null) {
     layer.current = createMobileHistoryLayer(() => onCloseRef.current(), {
@@ -64,7 +73,7 @@ export function useMobileHistoryLayer(onClose: () => void) {
         window.addEventListener("popstate", listener);
         return () => window.removeEventListener("popstate", listener);
       },
-    });
+    }, () => canCloseRef.current());
   }
   useEffect(() => layer.current!.mount(), []);
   return useCallback(() => layer.current!.close(), []);

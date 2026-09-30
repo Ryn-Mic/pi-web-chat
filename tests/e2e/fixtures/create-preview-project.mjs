@@ -24,6 +24,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 `, { mode: 0o755 });
 writeFileSync(join(project, "README.md"), "# Preview fixture\n\nHello from the file viewer.\n");
 writeFileSync(join(project, "notes.txt"), "plain text\n");
+writeFileSync(join(project, "Dockerfile"), "FROM node:22\n");
+writeFileSync(join(project, "edit-draft.txt"), "draft before\n");
+writeFileSync(join(project, "edit-conflict.txt"), "conflict before\n");
+writeFileSync(join(project, "edit-mobile.txt"), "mobile before\n");
+writeFileSync(join(project, "unknown-binary.bin"), Buffer.from([0, 1, 2, 3]));
 writeFileSync(join(project, "active.html"), "<script>parent.__previewPwned = true</script><h1>Visible text</h1>");
 writeFileSync(join(project, "active.svg"), '<svg xmlns="http://www.w3.org/2000/svg"><script>parent.__previewPwned=true</script></svg>');
 execFileSync("git", ["-C", project, "init", "-q"]);

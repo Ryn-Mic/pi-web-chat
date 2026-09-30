@@ -24,11 +24,11 @@ async function mockChat(page: Page, messages: UIMessage[]) {
   const sockets = new Map<string, WebSocketRoute>();
   const revisions = new Map<string, number>();
   let rejectReconnect = false;
-  await page.route("**/api/sessions", async (route) => route.fulfill({ json: ["a", "b"].map((letter) => ({
+  await page.route("**/api/sessions?*", async (route) => route.fulfill({ json: { sessions: ["a", "b"].map((letter) => ({
     id: `session-${letter}`, path: `${PROJECT_ROOT}/session-${letter}.jsonl`, project: PROJECT_ROOT,
     name: `Session ${letter.toUpperCase()}`, firstMessage: `Session ${letter.toUpperCase()}`,
     modified: "2026-09-30T00:00:00Z", messageCount: 60, agent: "pi",
-  })) }));
+  })), nextCursor: null, scanning: false } }));
   await page.routeWebSocket(/\/ws\?/, (socket) => {
     const id = new URL(socket.url()).searchParams.get("session") ?? "session-a";
     if (rejectReconnect) { socket.close(); return; }

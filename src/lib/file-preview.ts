@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { mergeTextFileDrafts } from "./file-text-drafts";
 
 export interface PreviewTab {
   cwd: string;
@@ -233,6 +234,7 @@ export function mergePreviewWorkspace(
   survivingKey: string,
 ): void {
   if (losingKey === survivingKey) return;
+  mergeTextFileDrafts(losingKey, survivingKey);
   const losing = workspaces.get(losingKey);
   if (!losing) {
     workspaces.delete(losingKey);

@@ -60,6 +60,7 @@ import {
 } from "./daemon-state.ts";
 import { selectReplayEvents } from "./event-replay.ts";
 import { handleDesktopFileContent, streamStaticFile } from "./file-content.ts";
+import { handleTextFileRequest } from "./file-text.ts";
 import {
   FileViewerAssetPathEscapeError,
   FILE_VIEWER_URL_PREFIX,
@@ -109,6 +110,7 @@ import {
   nativeCodexThreadId,
 } from "./codex-fork.ts";
 import { SessionSummaryIndex } from "./session-index.ts";
+import { SessionCatalog, SessionCatalogCursorError } from "./session-catalog.ts";
 import {
   checkoutGitBranch,
   getGitBranches,
@@ -178,7 +180,7 @@ const CODEX_TAIL_HIGH_WATER = CODEX_TAIL_MESSAGES * 2;
 /** Prefix for cursors that address the in-memory hydrated page. */
 const CODEX_PAGE_CURSOR_PREFIX = "page:";
 
-const sessionSummaryIndex = new SessionSummaryIndex(join(getAgentDir(), "sessions"));
+const sessionSummaryIndex = new SessionSummaryIndex(join(getAgentDir(), "sessions"), () => sessionCatalog.invalidate());
 const codexAppServer = new CodexAppServerClient({
   cwd: AGENT_CWD,
   binary: CODEX_BINARY,
@@ -187,6 +189,7 @@ const codexAppServer = new CodexAppServerClient({
 let codexModelsCache: { at: number; models: CodexModelInfo[] } | null = null;
 let codexThreadsCache: { at: number; threads: CodexThreadInfo[] } | null = null;
 let codexThreadsRefresh: Promise<CodexThreadInfo[]> | null = null;
+const codexThreadsProgress = new Set<(threads: CodexThreadInfo[]) => void>();
 let codexRemoteStatusCache: { at: number; status: CodexRemoteStatus } | null = null;
 
 /** Daemon state file dir (shared by the npm CLI and legacy Pi extension). */
@@ -384,9 +387,15 @@ async function codexModels(): Promise<CodexModelInfo[]> {
 }
 
 /** In-flight thread/list refresh shared by cold calls and revalidation. */
-function refreshCodexThreads(): Promise<CodexThreadInfo[]> {
+function refreshCodexThreads(onProgress?: (threads: CodexThreadInfo[]) => void): Promise<CodexThreadInfo[]> {
+  if (onProgress) {
+    codexThreadsProgress.add(onProgress);
+    if (codexThreadsCache) onProgress(codexThreadsCache.threads);
+  }
   if (!codexThreadsRefresh) {
-    codexThreadsRefresh = codexAppServer.listThreads()
+    codexThreadsRefresh = codexAppServer.listThreads(100_000, (threads) => {
+      for (const publish of codexThreadsProgress) publish(threads);
+    })
       .then((threads) => {
         codexThreadsCache = { at: Date.now(), threads };
         return threads;
@@ -395,7 +404,8 @@ function refreshCodexThreads(): Promise<CodexThreadInfo[]> {
         codexThreadsRefresh = null;
       });
   }
-  return codexThreadsRefresh;
+  const refresh = codexThreadsRefresh;
+  return onProgress ? refresh.finally(() => codexThreadsProgress.delete(onProgress)) : refresh;
 }
 
 /**
@@ -418,10 +428,12 @@ async function codexThreads(): Promise<CodexThreadInfo[]> {
 /** Mark the catalog stale but keep serving it until the refresh lands. */
 function invalidateCodexThreads(): void {
   if (codexThreadsCache) codexThreadsCache.at = 0;
+  sessionCatalog.invalidate();
 }
 
 /** Apply a known thread mutation to the cache without any list round trip. */
 function upsertCachedCodexThread(thread: CodexThreadInfo): void {
+  sessionCatalog.invalidate();
   const cached = codexThreadsCache;
   if (!cached) return;
   // Keep an already-applied display name if the fresh read predates a rename.
@@ -431,6 +443,7 @@ function upsertCachedCodexThread(thread: CodexThreadInfo): void {
 }
 
 function renameCachedCodexThread(threadId: string, name: string): void {
+  sessionCatalog.invalidate();
   const cached = codexThreadsCache;
   if (!cached) return;
   cached.threads = cached.threads.map((thread) =>
@@ -439,10 +452,53 @@ function renameCachedCodexThread(threadId: string, name: string): void {
 }
 
 function dropCachedCodexThread(threadId: string): void {
+  sessionCatalog.invalidate();
   const cached = codexThreadsCache;
   if (!cached) return;
   cached.threads = cached.threads.filter((thread) => thread.id !== threadId);
 }
+
+function codexSessionSummaries(threads: CodexThreadInfo[]): UISessionInfo[] {
+  return threads.map((thread) => {
+    const id = nativeCodexSessionId(thread.id);
+    const status = isRecord(thread.status) ? thread.status : undefined;
+    return {
+      id,
+      path: thread.path ?? id,
+      project: projectOf({ cwd: thread.cwd, path: thread.path ?? id }),
+      ...(thread.name ? { name: thread.name } : {}),
+      firstMessage: thread.preview.slice(0, 200),
+      modified: new Date(Math.max(thread.updatedAt, thread.createdAt) * 1000).toISOString(),
+      messageCount: 0,
+      isStreaming: status?.type === "active",
+      agent: "codex" as const,
+    };
+  });
+}
+
+function visibleSessionSummaries(sessions: UISessionInfo[]): UISessionInfo[] {
+  const nativeIds = new Set(sessions.flatMap((session) => {
+    const id = nativeCodexThreadId(session.id);
+    return id ? [id] : [];
+  }));
+  return sessions.filter((session) => !session.codexThreadId || !nativeIds.has(session.codexThreadId))
+    .map((session) => ({
+      ...session,
+      project: projectOf({ cwd: session.project, path: session.path }),
+      isStreaming: entries.has(session.id) ? entryIsStreaming(entries.get(session.id)!) : session.isStreaming ?? false,
+      agent: entries.get(session.id)?.agent ?? session.agent ?? "pi",
+    }));
+}
+
+const sessionCatalog = new SessionCatalog({
+  pi: (publish) => sessionSummaryIndex.list(publish),
+  codex: async (publish) => {
+    if (codexThreadsCache && Date.now() - codexThreadsCache.at < CODEX_THREADS_TTL_MS) {
+      return codexSessionSummaries(codexThreadsCache.threads);
+    }
+    return codexSessionSummaries(await refreshCodexThreads((threads) => publish(codexSessionSummaries(threads))));
+  },
+}, { transform: visibleSessionSummaries });
 
 async function codexRemoteStatus(): Promise<CodexRemoteStatus | undefined> {
   if (codexRemoteStatusCache && Date.now() - codexRemoteStatusCache.at < CODEX_CATALOG_TTL_MS) {
@@ -1085,7 +1141,18 @@ const KNOWN_ROOTS_TTL_MS = 3_000;
 let knownRootsCache: { at: number; roots: Set<string> } | null = null;
 
 /** Roots the file APIs may serve: loaded runtimes + sessions' cwds + the chat workspace. */
-async function knownProjectRoots(): Promise<Set<string>> {
+async function knownProjectRoots(requested?: string): Promise<Set<string>> {
+  // A selected session's workspace is already authoritative. File reads and
+  // saves should not rescan unrelated transcripts to reauthorize that cwd.
+  if (requested) {
+    const loaded = new Set<string>([AGENT_CWD]);
+    for (const entry of entries.values()) loaded.add(entryCwd(entry));
+    for (const session of sessionSummaryIndex.cachedSummaries()) {
+      if (session.project.startsWith("/")) loaded.add(session.project);
+    }
+    for (const thread of codexThreadsCache?.threads ?? []) loaded.add(resolve(thread.cwd));
+    if (loaded.has(requested)) return loaded;
+  }
   if (knownRootsCache && Date.now() - knownRootsCache.at < KNOWN_ROOTS_TTL_MS) {
     return knownRootsCache.roots;
   }
@@ -2956,6 +3023,13 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
+    if (await handleTextFileRequest(req, res, url, {
+      knownProjectRoots: () => knownProjectRoots(expandHome(url.searchParams.get("cwd") ?? "")),
+      expandHome,
+    })) {
+      return;
+    }
+
     if (await handleGitRequest(req, res, url, { knownProjectRoots, expandHome })) {
       return;
     }
@@ -2983,43 +3057,35 @@ const httpServer = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/sessions") {
+      if (url.searchParams.has("limit") || url.searchParams.has("cursor") || url.searchParams.has("q")) {
+        const rawLimit = url.searchParams.get("limit");
+        const query = url.searchParams.get("q") ?? "";
+        if ((rawLimit !== null && !/^[1-9]\d{0,2}$/.test(rawLimit)) || query.length > 200) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "invalid session page request" }));
+          return;
+        }
+        try {
+          const page = sessionCatalog.page({
+            limit: rawLimit === null ? 40 : Number(rawLimit),
+            cursor: url.searchParams.get("cursor"), query,
+            refresh: url.searchParams.get("refresh") === "1",
+          });
+          res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify(page));
+        } catch (error) {
+          if (!(error instanceof SessionCatalogCursorError)) throw error;
+          res.writeHead(url.searchParams.has("cursor") ? 409 : 400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: url.searchParams.has("cursor") ? "session page expired; reload the list" : "invalid page size" }));
+        }
+        return;
+      }
       const [sessions, nativeThreads] = await Promise.all([
         sessionSummaryIndex.list(),
         codexThreads().catch(() => [] as CodexThreadInfo[]),
       ]);
       void codexRemoteStatus();
-      // Which loaded runtimes are currently streaming (for the sidebar running dot)
-      const streamingIds = new Set<string>();
-      for (const entry of entries.values()) {
-        if (entryIsStreaming(entry)) streamingIds.add(entry.id);
-      }
-      const nativeThreadIds = new Set(nativeThreads.map((thread) => thread.id));
-      const piList: UISessionInfo[] = sessions
-        .filter((session) => !session.codexThreadId || !nativeThreadIds.has(session.codexThreadId))
-        .slice(0, 300)
-        .map((session) => ({
-        ...session,
-        project: projectOf({ cwd: session.project, path: session.path }),
-        isStreaming: streamingIds.has(session.id),
-        agent: entries.get(session.id)?.agent ?? session.agent ?? "pi",
-      }));
-      const codexList: UISessionInfo[] = nativeThreads
-        .map((thread) => {
-          const id = nativeCodexSessionId(thread.id);
-          const status = isRecord(thread.status) ? thread.status : undefined;
-          return {
-            id,
-            path: thread.path ?? id,
-            project: projectOf({ cwd: thread.cwd, path: thread.path ?? id }),
-            ...(thread.name ? { name: thread.name } : {}),
-            firstMessage: thread.preview,
-            modified: new Date(Math.max(thread.updatedAt, thread.createdAt) * 1000).toISOString(),
-            messageCount: 0,
-            isStreaming: streamingIds.has(id) || status?.type === "active",
-            agent: "codex" as const,
-          };
-        });
-      const list = [...piList, ...codexList]
+      const list = visibleSessionSummaries([...sessions, ...codexSessionSummaries(nativeThreads)])
         .sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified))
         .slice(0, 300);
       res.writeHead(200, { "content-type": "application/json" });

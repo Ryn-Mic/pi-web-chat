@@ -193,6 +193,27 @@ async function nextTask(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+test("Codex thread catalogs publish each page before later RPC pages finish", async () => {
+  const fake = new FakeRpcProcess((request, process) => {
+    if (request.method === "initialize") process.respond(request, {});
+    if (request.method === "thread/list" && !request.params?.cursor) process.respond(request, {
+      data: Array.from({ length: 100 }, (_, index) => ({ id: `thread-${index}`, cwd: "/project", updatedAt: 1 })),
+      nextCursor: "second-page",
+    });
+  });
+  const { spawnProcess } = fakeSpawner(() => fake);
+  const client = new CodexAppServerClient({ cwd: "/project", transport: "standalone", spawnProcess });
+  const pages: string[][] = [];
+  try {
+    const catalog = client.listThreads(100_000, (rows) => pages.push(rows.map((row) => row.id)));
+    const second = await fake.waitForRequest("thread/list", 2);
+    assert.deepEqual(pages.map((page) => page.length), [100]);
+    fake.respond(second, { data: [{ id: "thread-100", cwd: "/project", updatedAt: 1 }], nextCursor: null });
+    assert.equal((await catalog).length, 101);
+    assert.deepEqual(pages.map((page) => page.length), [100, 1], "progress is a small delta rather than a cumulative array");
+  } finally { await client.dispose(); }
+});
+
 async function waitUntil(predicate: () => boolean, message: string, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {

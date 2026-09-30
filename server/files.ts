@@ -100,7 +100,7 @@ function etagFor(st: { dev: number | bigint; ino: number | bigint; size: number;
   return `W/"${String(st.dev)}-${String(st.ino)}-${st.size}-${st.mtimeMs}"`;
 }
 
-export function resolvePreviewFile(root: string, rel: string): ResolvedPreviewFile {
+export function resolvePreviewFile(root: string, rel: string, options?: { sourceText?: boolean }): ResolvedPreviewFile {
   const rootAbs = resolve(root);
   const rootRealAbs = realpathSync(rootAbs);
   const abs = assertInsideRoot(rootAbs, rel);
@@ -129,7 +129,7 @@ export function resolvePreviewFile(root: string, rel: string): ResolvedPreviewFi
     path: normalizedRel,
     name: basename(normalizedRel),
     size: st.size,
-    mimeType: lookupMime(normalizedRel),
+    mimeType: options?.sourceText ? "text/plain" : lookupMime(normalizedRel),
     mtimeMs: st.mtimeMs,
     dev: st.dev,
     ino: st.ino,

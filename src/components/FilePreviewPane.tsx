@@ -6,50 +6,33 @@ import {
   isAbortError,
   type PreviewErrorCode,
 } from "../lib/file-preview-api";
-import type { Messages } from "../i18n/en";
+import { filePreviewErrorKey } from "../lib/file-preview-error";
+import { fallbackTextPreview } from "../lib/file-preview-text";
+import { getTextFileDraft } from "../lib/file-text-drafts";
 import { useLocale, useT } from "../lib/i18n";
 import { useTheme } from "../lib/theme";
 import { FileViewerSurface } from "./FileViewerSurface";
 import { LoadingIndicator } from "./LoadingIndicator";
+import { FileTextEditor } from "./FileTextEditor";
 
 interface FilePreviewPaneProps {
   cwd: string;
   path: string;
   name: string;
+  workspaceKey: string;
   refreshToken?: number;
 }
 
 type PaneStatus =
   | { kind: "loading" }
-  | { kind: "ready"; file: File }
-  | { kind: "error"; code: PreviewErrorCode };
-
-function errorKey(code: PreviewErrorCode): keyof Messages {
-  switch (code) {
-    case "unsupported":
-      return "filePreviewUnsupported";
-    case "malformed":
-      return "filePreviewMalformed";
-    case "too-large":
-      return "filePreviewTooLarge";
-    case "forbidden":
-      return "filePreviewForbidden";
-    case "missing":
-      return "filePreviewMissing";
-    case "changed":
-      return "filePreviewChanged";
-    case "expired":
-      return "filePreviewExpired";
-    case "failed":
-    default:
-      return "filePreviewFailed";
-  }
-}
+  | { kind: "ready"; file: File; editable: boolean }
+  | { kind: "error"; code: PreviewErrorCode; editable?: boolean };
 
 export function FilePreviewPane({
   cwd,
   path,
   name,
+  workspaceKey,
   refreshToken = 0,
 }: FilePreviewPaneProps) {
   const t = useT();
@@ -57,6 +40,7 @@ export function FilePreviewPane({
   const locale = useLocale();
   const [status, setStatus] = useState<PaneStatus>({ kind: "loading" });
   const [retryNonce, setRetryNonce] = useState(0);
+  const [editing, setEditing] = useState(() => !!getTextFileDraft(cwd, path, workspaceKey));
 
   useEffect(() => {
     const controller = new AbortController();
@@ -67,18 +51,19 @@ export function FilePreviewPane({
     loadDesktopPreviewFile({ cwd, path, signal: controller.signal })
       .then(async (file) => {
         const check = await precheckFileViewerSource(file);
+        const textFallback = await fallbackTextPreview(file);
         if (cancelled) return;
 
         if (!check.previewable) {
-          setStatus({ kind: "error", code: "unsupported" });
+          setStatus(textFallback ? { kind: "ready", file: textFallback, editable: true } : { kind: "error", code: "unsupported" });
           return;
         }
         if (check.valid === false) {
-          setStatus({ kind: "error", code: "malformed" });
+          setStatus(textFallback ? { kind: "ready", file: textFallback, editable: true } : { kind: "error", code: "malformed" });
           return;
         }
 
-        setStatus({ kind: "ready", file });
+        setStatus({ kind: "ready", file, editable: textFallback !== null });
       })
       .catch((err) => {
         if (cancelled) return;
@@ -102,6 +87,8 @@ export function FilePreviewPane({
     setRetryNonce((n) => n + 1);
   }, []);
 
+  if (editing) return <FileTextEditor key={JSON.stringify([workspaceKey, cwd, path])} cwd={cwd} path={path} name={name} workspaceKey={workspaceKey} onClose={() => { setEditing(false); handleRetry(); }} />;
+
   if (status.kind === "loading") {
     return (
       <div className="flex h-full min-h-0 w-full flex-col gap-4 p-4">
@@ -118,7 +105,7 @@ export function FilePreviewPane({
     return (
       <div className="flex h-full min-h-0 w-full flex-col items-center justify-center gap-4 p-6 text-center">
         <div className="text-sm text-neutral-600 dark:text-neutral-300">
-          {t(errorKey(status.code), { name })}
+          {t(filePreviewErrorKey(status.code), { name })}
         </div>
         <button
           type="button"
@@ -127,14 +114,18 @@ export function FilePreviewPane({
         >
           {t("filePreviewRetry")}
         </button>
+        {(status.editable || status.code === "unsupported") && (
+          <button type="button" onClick={() => setEditing(true)} className="rounded px-4 py-2 text-sm text-ink hover:bg-hover">{t("fileEditOpen")}</button>
+        )}
       </div>
     );
   }
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
-      <div className="border-b border-black/5 px-4 py-2 text-sm font-medium dark:border-white/10">
-        {name}
+      <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-2 text-sm font-medium">
+        <span className="min-w-0 truncate">{name}</span>
+        {status.editable && <button type="button" onClick={() => setEditing(true)} className="shrink-0 rounded px-2 py-1 text-xs text-muted hover:bg-hover">{t("fileEditOpen")}</button>}
       </div>
       <div className="min-h-0 flex-1">
         <FileViewerSurface
@@ -142,7 +133,7 @@ export function FilePreviewPane({
           mobile={false}
           theme={theme}
           locale={locale}
-          onError={() => setStatus({ kind: "error", code: "failed" })}
+          onError={() => setStatus({ kind: "error", code: "failed", editable: status.editable })}
         />
       </div>
     </div>

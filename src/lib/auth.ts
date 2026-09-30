@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { clearSessionListCache, SESSION_CACHE_SCOPE_KEY } from "./session-list-cache";
 
 export type AuthStatus = "checking" | "authenticated" | "unauthenticated";
 
@@ -18,6 +19,21 @@ function readStoredToken(): string | null {
 let cachedToken: string | null =
   typeof window !== "undefined" ? readStoredToken() : null;
 
+let cacheScope: string | null = null;
+
+/** Random namespace rather than a credential in query keys or cached metadata. */
+export function getSessionCacheScope(): string {
+  if (!cachedToken) return "";
+  if (cacheScope) return cacheScope;
+  try { cacheScope = localStorage.getItem(SESSION_CACHE_SCOPE_KEY); } catch { /* optional */ }
+  if (!cacheScope) {
+    cacheScope = crypto.randomUUID?.()
+      ?? Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    try { localStorage.setItem(SESSION_CACHE_SCOPE_KEY, cacheScope); } catch { /* optional */ }
+  }
+  return cacheScope;
+}
+
 function emit() {
   for (const l of listeners) l();
 }
@@ -27,11 +43,21 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
+/** Transient authenticated UI state can track changes without a React mount. */
+export function subscribeAuthChanges(listener: () => void): () => void {
+  return subscribe(listener);
+}
+
 export function getSessionToken(): string | null {
   return cachedToken;
 }
 
 export function setSessionToken(token: string | null) {
+  if (cachedToken !== token) {
+    clearSessionListCache();
+    cacheScope = null;
+    try { localStorage.removeItem(SESSION_CACHE_SCOPE_KEY); } catch { /* optional */ }
+  }
   cachedToken = token;
   try {
     if (token) localStorage.setItem(TOKEN_KEY, token);
@@ -49,6 +75,7 @@ export function getAuthStatus(): AuthStatus {
 export function setAuthStatus(next: AuthStatus) {
   if (status === next) return;
   status = next;
+  if (next === "unauthenticated") clearSessionListCache();
   emit();
 }
 

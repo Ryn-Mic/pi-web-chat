@@ -19,7 +19,13 @@ export function assertAppPrecacheBudget(entries: { url: string; size?: number }[
 
 export function isHeavyViewerModule(id: string): boolean {
   return /\/node_modules\/@file-viewer\/(?:react-full|preset-all|renderer-[^/]+)\//.test(id.replaceAll("\\", "/")) ||
+    id.replaceAll("\\", "/").includes("/node_modules/monaco-editor/") ||
     id === "\0pi-web-chat:packaged-ppt-fallback" || id.includes("/node_modules/rtf.js/");
+}
+
+/** Vite emits worker bundles separately from the main Rollup chunk inventory. */
+export function isEditorWorkerAsset(file: string): boolean {
+  return /(?:^|\/)monaco-editor\.worker[-.].*\.js$/i.test(file);
 }
 
 export function frontendBuildGraph(chunks: FrontendChunk[]) {
@@ -48,5 +54,5 @@ export function frontendBuildGraph(chunks: FrontendChunk[]) {
 
 export function selectAppPrecache<T extends { url: string }>(entries: T[], chunks: FrontendChunk[]): T[] {
   const { viewerOnly } = frontendBuildGraph(chunks);
-  return entries.filter((entry) => !entry.url.startsWith("file-viewer/") && !viewerOnly.has(entry.url));
+  return entries.filter((entry) => !entry.url.startsWith("file-viewer/") && !viewerOnly.has(entry.url) && !isEditorWorkerAsset(entry.url));
 }

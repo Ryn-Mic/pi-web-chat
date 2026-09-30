@@ -37,3 +37,15 @@ test("build rejects heavy renderers statically reachable from chat", () => {
   ];
   assert.throws(() => frontendBuildGraph(chunks), /heavy File Viewer modules leaked/);
 });
+
+test("Monaco, editor CSS and separately emitted workers stay outside the chat precache", () => {
+  const chunks = [
+    chunk("assets/chat.js", { facadeModuleId: "/project/index.html", dynamicImports: ["assets/editor.js"] }),
+    chunk("assets/editor.js", { imports: ["assets/monaco.js"] }),
+    chunk("assets/monaco.js", { moduleIds: ["/project/node_modules/monaco-editor/esm/vs/editor/editor.api.js"], assets: ["assets/monaco.css"] }),
+  ];
+  const urls = ["index.html", ...chunks.map((item) => item.file), "assets/monaco.css", "assets/monaco-editor.worker-test.js"];
+  assert.deepEqual(selectAppPrecache(urls.map((url) => ({ url })), chunks).map((entry) => entry.url), ["index.html", "assets/chat.js", "assets/editor.js"]);
+  chunks[0].imports = ["assets/monaco.js"];
+  assert.throws(() => frontendBuildGraph(chunks), /heavy File Viewer modules leaked/);
+});

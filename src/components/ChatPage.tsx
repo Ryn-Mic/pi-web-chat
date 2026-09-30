@@ -459,6 +459,8 @@ export function ChatPage() {
       <FilesDrawer onPreviewFile={setMobilePreview} onSelectCommit={setMobileGitCommit} />
       {mobilePreview && (
         <MobileFilePreview
+          key={JSON.stringify([chatClient.activeTabKey, mobilePreview.cwd, mobilePreview.path])}
+          workspaceKey={chatClient.activeTabKey ?? "unbound"}
           selection={mobilePreview}
           theme={theme}
           locale={locale}

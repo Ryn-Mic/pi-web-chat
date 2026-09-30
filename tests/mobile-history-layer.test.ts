@@ -23,6 +23,27 @@ function fixture() {
 
 const nextTask = () => new Promise((resolve) => setTimeout(resolve, 5));
 
+test("cancelled browser Back recreates one overlay entry and remains closeable", async () => {
+  const state = fixture();
+  let allowClose = false;
+  let closes = 0;
+  const layer = createMobileHistoryLayer(() => { closes += 1; }, state.host, () => allowClose);
+  const unmount = layer.mount();
+  const marker = state.host.history.state.mobilePreviewLayer;
+  state.host.history.back();
+  state.host.history.back();
+  assert.equal(closes, 0);
+  assert.equal(state.entries.length, 2);
+  assert.equal(state.host.history.state.mobilePreviewLayer, marker);
+  assert.equal(layer.close(), false);
+  allowClose = true;
+  assert.equal(layer.close(), true);
+  assert.equal(closes, 1);
+  unmount();
+  await nextTask();
+  assert.equal(state.backs, 3);
+});
+
 test("StrictMode effect replay creates one entry and cancels premature cleanup", async () => {
   const state = fixture();
   let closes = 0;

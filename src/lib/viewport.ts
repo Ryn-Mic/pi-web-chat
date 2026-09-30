@@ -4,10 +4,9 @@
  * Problems this addresses:
  * - 100dvh in standalone leaves dead space at the bottom.
  * - env(safe-area-inset-*) can over-report, inflating padding.
- * - When the keyboard opens, iOS pans the visual viewport. Let the whole app
- *   follow that native movement instead of competing with it from JavaScript.
+ * - A keyboard can shrink the visual viewport without changing layout height.
  *
- * Strategy: keep the app's normal closed viewport and only measure safe areas.
+ * Strategy: size the app to the visible height and measure safe areas once.
  * #root itself is NOT position:fixed (that can truncate on iOS 26+).
  *
  * The viewport meta deliberately omits viewport-fit=cover: laying the app out
@@ -18,8 +17,8 @@
  * iOS because every visualViewport scroll/resize fired DOM writes → reflows):
  * - safe areas barely change during a session: measure once, re-measure only
  *   on orientationchange
- * - keyboard movement does not cause any JS reads or writes
- * - safe areas are refreshed only on orientation changes
+ * - visible-height changes are coalesced into one animation frame
+ * - panning is left to the browser: no scroll listener or offset compensation
  */
 /** Guards against a wildly over-reported top inset. */
 const SAFE_TOP_MAX = 140;
@@ -84,6 +83,50 @@ export function initViewportLock() {
   root.classList.toggle("ua-standalone", standalone);
   root.classList.toggle("ua-ios", iosDevice);
 
+  let visibleHeight: number | null = null;
+  let closedHeight = window.innerHeight;
+  let viewportWidth = window.innerWidth;
+  let keyboardOpen = false;
+  let resizeFrame = 0;
+  const applyVisibleHeight = () => {
+    resizeFrame = 0;
+    const viewport = window.visualViewport;
+    // Pinch zoom belongs to the browser; resizing the app would rearrange the
+    // content the user is trying to magnify.
+    if (viewport && Math.abs(viewport.scale - 1) > 0.01) return;
+    const height = Math.round(viewport?.height ?? window.innerHeight);
+    if (!Number.isFinite(height) || height <= 0) return;
+    if (window.innerWidth !== viewportWidth) {
+      viewportWidth = window.innerWidth;
+      closedHeight = window.innerHeight;
+    }
+    const focused = document.activeElement;
+    const editing = focused instanceof HTMLElement && (
+      focused.matches("textarea, input:not([type=checkbox]):not([type=radio]):not([type=range])") ||
+      focused.isContentEditable
+    );
+    // Address-bar movement alone is smaller than a software keyboard. Retain
+    // the closed height while a focused editor has a substantially shorter view.
+    const nextKeyboardOpen = editing && closedHeight - height > 120;
+    if (!nextKeyboardOpen) closedHeight = height;
+    if (height !== visibleHeight) {
+      root.style.setProperty("--app-viewport-height", `${height}px`);
+      visibleHeight = height;
+    }
+    if (nextKeyboardOpen !== keyboardOpen) {
+      root.classList.toggle("ua-keyboard-open", nextKeyboardOpen);
+      keyboardOpen = nextKeyboardOpen;
+    }
+  };
+  const scheduleVisibleHeight = () => {
+    if (!resizeFrame) resizeFrame = requestAnimationFrame(applyVisibleHeight);
+  };
+  applyVisibleHeight();
+  window.addEventListener("resize", scheduleVisibleHeight);
+  window.visualViewport?.addEventListener("resize", scheduleVisibleHeight);
+  document.addEventListener("focusin", scheduleVisibleHeight);
+  document.addEventListener("focusout", scheduleVisibleHeight);
+
   // Safe areas are cached: they only change on rotation / entering-exiting
   // fullscreen, so re-measuring (DOM append + forced reflow) on every resize
   // is pure waste.
@@ -137,6 +180,10 @@ export function initViewportLock() {
     // Safe areas and viewport can both change on rotation.
     safeTop = null;
     safeBottom = null;
-    requestAnimationFrame(() => requestAnimationFrame(() => applyAll(true)));
+    closedHeight = window.innerHeight;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      applyAll(true);
+      scheduleVisibleHeight();
+    }));
   });
 }

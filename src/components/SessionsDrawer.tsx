@@ -8,6 +8,7 @@ import { getAgentPreference } from "../lib/agent";
 import { chatClient, useChat } from "../lib/chat";
 import { onRequestOpenSessionsDrawer } from "../lib/drawer";
 import { localeTag, useLocale, useT } from "../lib/i18n";
+import { confirmDiscardWorkspaceTextDrafts, discardWorkspaceTextDrafts } from "../lib/file-text-drafts";
 import { markFreshDraftRequested } from "../lib/resume";
 import {
   setSidebarPinned,
@@ -341,15 +342,13 @@ function SessionsPanel({
   const t = useT();
   const navigate = useNavigate();
   const sidebarPinned = useSidebarPinned();
-  const { data: sessions, isPending, isFetching, refetch } = useSessions(active);
-  useSessionListSync(active);
   const [searchQuery, setSearchQuery] = useState("");
+  const {
+    data: sessions, isPending, isFetching, isError, refetch, scanning, showingCached,
+    hasNextPage, fetchNextPage, isFetchingNextPage, partialFailure,
+  } = useSessions(active, searchQuery);
+  useSessionListSync(active);
   const activeSessionId = chatClient.state.sessionId;
-
-  // Refresh whenever the panel becomes active (drawer open / dock mount)
-  useEffect(() => {
-    if (active) void refetch();
-  }, [active, refetch]);
 
   const toggleDock = () => {
     if (sidebarPinned) {
@@ -377,11 +376,15 @@ function SessionsPanel({
   };
 
   const handleDelete = async (session: UISessionInfo) => {
+    const tab = chatClient.getTabsSnapshot().find((entry) => entry.sessionId === session.id);
+    const workspaceKey = tab?.key ?? session.id;
+    if (!confirmDiscardWorkspaceTextDrafts(workspaceKey, t("fileEditDiscardWorkspace"), false)) return;
     try {
       await deleteSession(session.id);
     } catch {
       return;
     }
+    discardWorkspaceTextDrafts(workspaceKey);
     await refetch();
     const deletingActiveSession =
       session.id === activeSessionId || session.path === currentSessionFile;
@@ -493,14 +496,25 @@ function SessionsPanel({
               aria-label={t("clearSearch")}
               className="absolute right-2 flex size-4 items-center justify-center rounded text-faint hover:text-ink"
             >
-              ×
+              <DismissActionIcon size={12} />
             </button>
           )}
         </div>
       </div>
 
-      <div className="thin-scroll flex-1 overflow-y-auto px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
-        {isPending ? (
+      <div
+        className="thin-scroll flex-1 overflow-y-auto px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]"
+        onScroll={(event) => {
+          const target = event.currentTarget;
+          if (hasNextPage && !isFetching && !isError && target.scrollHeight - target.scrollTop - target.clientHeight < 160) {
+            void fetchNextPage({ cancelRefetch: false });
+          }
+        }}
+      >
+        {showingCached && (
+          <p className="px-3 py-1 text-[11px] text-faint" role="status">{t("sessionCacheRefreshing")}</p>
+        )}
+        {isPending || (scanning && !sessions?.length) ? (
           <div className="flex justify-center px-4 py-8">
             <LoadingIndicator label={t("loading")} showLabel />
           </div>
@@ -522,10 +536,34 @@ function SessionsPanel({
             />
           ))
         )}
-        {!isPending && sessions && sessions.length === 0 && (
-          <div className="px-4 py-8 text-center text-sm text-faint">{t("noSavedSessions")}</div>
+        {(isError || partialFailure) && (
+          <div className="px-3 py-3 text-center text-xs text-faint" role="status">
+            <p>{t("sessionsLoadFailed")}</p>
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              className="mt-2 rounded-md border border-line px-3 py-1.5 text-ink hover:bg-hover disabled:opacity-50"
+            >{t("sessionsRetry")}</button>
+          </div>
         )}
-        {!isPending && sessions && sessions.length > 0 && totalFilteredCount === 0 && (
+        {hasNextPage && (
+          <button
+            type="button"
+            onClick={() => void fetchNextPage({ cancelRefetch: false })}
+            disabled={isFetching}
+            className="my-2 flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs text-faint hover:bg-hover hover:text-ink disabled:opacity-50"
+          >
+            {isFetchingNextPage ? <LoadingIndicator label={t("loading")} size="sm" /> : t("loadMoreSessions")}
+          </button>
+        )}
+        {scanning && Boolean(sessions?.length) && (
+          <div className="flex justify-center px-3 py-2"><LoadingIndicator label={t("sessionsDiscovering")} showLabel size="sm" /></div>
+        )}
+        {!isPending && !scanning && !isError && !partialFailure && sessions && sessions.length === 0 && (
+          <div className="px-4 py-8 text-center text-sm text-faint">{t(normalizedQuery ? "noMatchingSessions" : "noSavedSessions")}</div>
+        )}
+        {!isPending && !scanning && !isError && !partialFailure && sessions && sessions.length > 0 && totalFilteredCount === 0 && (
           <div className="px-4 py-8 text-center text-xs text-faint">{t("noMatchingSessions")}</div>
         )}
       </div>

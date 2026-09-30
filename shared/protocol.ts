@@ -252,6 +252,16 @@ export interface UISessionInfo {
   codexThreadId?: string;
 }
 
+/** A stable page of the session catalog while background sources are refreshed. */
+export interface UISessionsPage {
+  sessions: UISessionInfo[];
+  nextCursor: string | null;
+  /** More summaries are being discovered; revalidate the first page shortly. */
+  scanning: boolean;
+  /** A source could not refresh; available summaries remain usable. */
+  partialFailure?: boolean;
+}
+
 export interface UIForkPoint {
   entryId: string;
   text: string;
@@ -523,3 +533,14 @@ export type ClientCommand =
   | { type: "get_commands" }
   | { type: "codex_interaction_response"; response: UICodexInteractionResponse }
   | { type: "extension_ui_response"; response: UIExtensionUIResponse };
+/** Authenticated project text surface; saves must include the loaded revision. */
+export interface UITextFileSnapshot {
+  text: string;
+  revision: string;
+  name: string;
+}
+
+export interface UITextFileSaveRequest {
+  text: string;
+  revision: string;
+}

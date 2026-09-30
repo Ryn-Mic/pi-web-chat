@@ -660,15 +660,15 @@ export function EmptyStateHero({ cwd, agent }: { cwd?: string; agent: UIAgentKin
         </div>
       )}
 
-      <div className="mt-6 grid w-full max-w-xl grid-cols-1 gap-2.5 sm:grid-cols-2 text-left">
+      <div className="mt-6 grid w-full max-w-xl grid-cols-1 gap-2.5 text-center sm:grid-cols-2 sm:text-left">
         {starterPrompts.map((item) => (
           <button
             key={item.icon}
             type="button"
             onClick={() => handleSelectStarter(item.prompt)}
-            className="group flex flex-col rounded-xl border border-line bg-card/70 p-3 transition-all hover:border-accent/40 hover:bg-hover hover:shadow-xs active:scale-[0.99]"
+            className="group flex flex-col rounded-xl border border-line bg-card/70 p-3 text-center transition-all hover:border-accent/40 hover:bg-hover hover:shadow-xs active:scale-[0.99] sm:text-left"
           >
-            <div className="flex items-center gap-2">
+            <div className="grid w-full grid-cols-[17px_minmax(0,1fr)_17px] items-center gap-2 sm:flex">
               <StarterPromptIcon kind={item.icon} />
               <span className="text-xs font-semibold text-ink group-hover:text-accent transition-colors">
                 {item.title}
