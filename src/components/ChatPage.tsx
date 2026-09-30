@@ -1,5 +1,5 @@
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UICodexState } from "../../shared/protocol";
 import { activityEyeState, activityEyeTone, connectionActivity } from "../lib/activity";
 import { getAgentPreference } from "../lib/agent";
@@ -328,9 +328,13 @@ export function ChatPage() {
             </p>
           </div>
         ) : (
-          <>
+          // One remount boundary for everything that belongs to the active tab.
+          // Keying each child separately with the same tab key makes React see
+          // duplicate sibling keys, which duplicates or drops nodes on switch
+          // (the previous session's message list stayed mounted next to the new
+          // one, squeezing both into part of the column).
+          <Fragment key={activeTabKey}>
             <MessageList
-              key={activeTabKey}
               messages={messages}
               streamText={streamText}
               streamThinking={streamThinking}
@@ -439,7 +443,6 @@ export function ChatPage() {
               </div>
             )}
             <Composer
-              key={activeTabKey}
               tabKey={activeTabKey}
               isStreaming={isStreaming}
               sessionId={sessionId}
@@ -450,7 +453,7 @@ export function ChatPage() {
               onLoadHistoryThroughUserMessage={loadHistoryThroughUserMessage}
               containerRef={messageListRef}
             />
-          </>
+          </Fragment>
         )}
         <ExtensionUIHost />
         <CodexInteractionHost />
