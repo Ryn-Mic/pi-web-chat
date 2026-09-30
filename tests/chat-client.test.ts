@@ -504,6 +504,28 @@ test("an ambiguous old uncorrelated error preserves every pending steer", () => 
   }
 });
 
+test("an extension notice never marks the pending prompt as failed", () => {
+  const { client, restore } = createConnectedClient();
+  try {
+    client.send({ type: "prompt", text: "keep going" });
+    assert.equal(client.state.promptStatus, "sending");
+
+    const message =
+      "Extension error [goal-mode · before_agent_start]: Cannot convert undefined or null to object (~/.pi/agent/extensions/goal-mode.ts)";
+    emit(client, { type: "notice", message });
+
+    assert.equal(client.state.lastNotice, message);
+    assert.equal(client.state.lastError, null);
+    assert.equal(client.state.promptStatus, "sending");
+    assert.equal(
+      client.state.optimisticMessages.every((item) => item.errorMessage === undefined),
+      true,
+    );
+  } finally {
+    restore();
+  }
+});
+
 test("does not enter loading when the prompt cannot be sent", () => {
   const previousWebSocket = (globalThis as { WebSocket?: unknown }).WebSocket;
   Object.defineProperty(globalThis, "WebSocket", {

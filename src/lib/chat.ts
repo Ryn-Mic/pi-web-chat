@@ -1151,6 +1151,12 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         this.settleCommandRequest(event.requestId);
         this.update({ lastNotice: event.message });
         break;
+      case "notice":
+        // Out-of-band, non-fatal information (e.g. an extension hook failure).
+        // It must not mark the prompt as failed — the run is still alive.
+        console.warn("[pi-web-chat]", event.message);
+        this.update({ lastNotice: event.message });
+        break;
       case "client_action":
         this.settleCommandRequest(event.requestId);
         this.update({ commandIntent: event.action });

@@ -514,6 +514,8 @@ export type ServerEvent =
   | { type: "forked"; selectedText?: string }
   | { type: "command_catalog"; commands: UICommandInfo[] }
   | { type: "command_result"; message: string; requestId?: string }
+  /** Non-fatal, out-of-band information: extension runtime errors, notices. */
+  | { type: "notice"; message: string }
   | { type: "client_action"; action: UIClientAction; requestId?: string }
   | { type: "extension_ui_request"; request: UIExtensionUIRequest }
   | { type: "codex_interaction"; interaction: UICodexInteraction }
