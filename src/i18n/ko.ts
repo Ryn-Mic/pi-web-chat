@@ -45,6 +45,7 @@ export const ko: Messages = {
   newSession: "새 세션",
   resumeSession: "마지막 세션 이어서 열기",
   newSessionInProject: "이 프로젝트에 새 세션",
+  newSessionDefault: "새 독립 세션",
   renameSession: "세션 이름 변경",
   deleteSession: "세션 삭제",
   confirmDelete: "삭제 확인",

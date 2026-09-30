@@ -119,7 +119,7 @@ export function BranchBadge({
 }
 
 /** ~/a/b/project → "project" (basename, like zentui's basename path mode) */
-function projectLabel(cwd?: string): string | null {
+export function projectLabel(cwd?: string): string | null {
   if (!cwd) return null;
   const parts = cwd.split("/").filter(Boolean);
   return parts.length > 0 ? (parts[parts.length - 1] ?? cwd) : cwd;

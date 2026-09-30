@@ -46,6 +46,7 @@ export const zh: Messages = {
   newSession: "新建会话",
   resumeSession: "恢复上次会话",
   newSessionInProject: "在此项目中新建会话",
+  newSessionDefault: "新建全局独立会话",
   renameSession: "重命名会话",
   deleteSession: "删除会话",
   confirmDelete: "确认删除",

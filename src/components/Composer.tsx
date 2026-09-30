@@ -426,7 +426,7 @@ export function Composer({
   };
 
   return (
-    <div className="composer-bar shrink-0 bg-canvas md:rounded-b-2xl">
+    <div className="composer-bar shrink-0 bg-canvas/90 backdrop-blur-md md:rounded-b-2xl">
       {/* Keep this row mounted at first paint so late session metadata cannot
           change the composer's height or its keyboard position. */}
       <div
@@ -484,7 +484,7 @@ export function Composer({
             void addFiles(droppedFiles);
           }
         }}
-        className="composer-panel relative rounded-2xl border border-line bg-card px-2 pt-2 pb-2 shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-colors focus-within:border-faint"
+        className="composer-panel relative rounded-2xl border border-line bg-card px-2 pt-2 pb-2 shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-colors focus-within:border-faint dark:border-white/[0.09] dark:shadow-[0_4px_24px_rgba(0,0,0,0.4)] dark:focus-within:border-accent/60"
       >
         {isDraggingOver && (
           <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-accent bg-card/90 backdrop-blur-xs">

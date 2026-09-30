@@ -19,14 +19,14 @@ export const DIALOG_BACKDROP_CLASS =
  * different position (side drawers, bottom sheets) intentionally do not use it.
  */
 export const DIALOG_POPUP_CLASS =
-  "fixed top-1/2 left-1/2 flex max-h-[75vh] w-[90vw] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-line bg-card shadow-xl outline-none";
+  "fixed top-1/2 left-1/2 flex max-h-[75vh] w-[90vw] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-line bg-card shadow-xl dark:border-white/[0.08] dark:shadow-2xl outline-none";
 
 /**
  * Composer-anchored palette surface (command palette, file mentions). The
  * popup is absolutely positioned above the composer input.
  */
 export const PALETTE_POPUP_CLASS =
-  "absolute right-0 bottom-[calc(100%+0.5rem)] left-0 z-20 rounded-lg border border-line bg-card shadow-lg";
+  "absolute right-0 bottom-[calc(100%+0.5rem)] left-0 z-20 rounded-lg border border-line bg-card shadow-lg dark:border-white/[0.08] dark:shadow-2xl";
 
 /** Primary action button (confirm, send, save). */
 export const PRIMARY_BUTTON_CLASS =
