@@ -734,11 +734,9 @@ export function MessageList({
   const keys = useMemo(() => messageKeys(messages), [messages]);
   const chatFontSize = useChatFontSize();
   const stickToBottom = useRef(true);
-  const previousScrollHeight = useRef(0);
-  const pendingBottomSnap = useRef(false);
-  const bottomSnapBaseline = useRef(0);
   const touchStartY = useRef<number | null>(null);
   const mounted = useRef(false);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const chatStyle = {
     "--chat-font-size": `${chatFontSizePixels(chatFontSize)}px`,
@@ -749,22 +747,57 @@ export function MessageList({
     return () => { mounted.current = false; };
   }, []);
 
+  // When content size changes (streaming tokens, images loaded, code blocks highlighted),
+  // automatically stick to bottom if user has not scrolled away.
+  useEffect(() => {
+    const content = contentRef.current;
+    const container = containerRef.current;
+    if (!content || !container) return;
+
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (!stickToBottom.current) return;
+      container.scrollTop = container.scrollHeight;
+      setIsAtBottom(true);
+    });
+
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [containerRef]);
+
+  // When messages or stream updates occur, ensure bottom follow if pinned.
+  useEffect(() => {
+    if (!stickToBottom.current) return;
+    const container = containerRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+    setIsAtBottom(true);
+  }, [messages, streamText, streamThinking, activeTools, isStreaming]);
+
+  // Re-pin to bottom whenever streaming starts or user sends a prompt.
+  const prevStreaming = useRef(isStreaming);
+  useEffect(() => {
+    if (!prevStreaming.current && isStreaming) {
+      stickToBottom.current = true;
+      setIsAtBottom(true);
+      const container = containerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
+    }
+    prevStreaming.current = isStreaming;
+  }, [isStreaming, containerRef]);
+
   const loadOlder = async () => {
     const container = containerRef.current;
     const previousHeight = container?.scrollHeight ?? 0;
     const previousTop = container?.scrollTop ?? 0;
     stickToBottom.current = false;
-    pendingBottomSnap.current = false;
     setIsAtBottom(false);
     const loaded = await onLoadOlder();
     if (!loaded) return;
     requestAnimationFrame(() => {
       const current = containerRef.current;
-      // A tab switch reuses containerRef for a different MessageList. Its late
-      // page belongs to the captured container, never the new active tab.
       if (!mounted.current || !container || current !== container || !container.isConnected) return;
       current.scrollTop = previousTop + (current.scrollHeight - previousHeight);
-      previousScrollHeight.current = current.scrollHeight;
     });
   };
 
@@ -772,80 +805,29 @@ export function MessageList({
     const el = containerRef.current;
     if (!el) return;
     stickToBottom.current = true;
-    pendingBottomSnap.current = false;
-    previousScrollHeight.current = 0;
     setIsAtBottom(true);
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   };
 
-  // Coalesce streaming updates into one scroll per frame. Compare the current
-  // position with the pre-render height so a delayed scroll event cannot let a
-  // token render yank the user back down after they started scrolling upward.
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const priorHeight = previousScrollHeight.current;
-    const wasAtBottomBeforeRender =
-      container.scrollTop + container.clientHeight >= priorHeight - BOTTOM_TOLERANCE;
-    previousScrollHeight.current = container.scrollHeight;
-
-    if (!stickToBottom.current) {
-      pendingBottomSnap.current = false;
-      return;
-    }
-    if (wasAtBottomBeforeRender && !pendingBottomSnap.current) {
-      pendingBottomSnap.current = true;
-      bottomSnapBaseline.current = priorHeight;
-    }
-    if (!pendingBottomSnap.current) return;
-
-    const raf = requestAnimationFrame(() => {
-      if (!stickToBottom.current || !pendingBottomSnap.current) return;
-      pendingBottomSnap.current = false;
-
-      const current = containerRef.current;
-      if (!current) return;
-      const userStayedAtBottom =
-        current.scrollTop + current.clientHeight >=
-        bottomSnapBaseline.current - BOTTOM_TOLERANCE;
-      if (!userStayedAtBottom) {
-        stickToBottom.current = false;
-        setIsAtBottom(false);
-        return;
-      }
-
-      const distance = current.scrollHeight - current.scrollTop - current.clientHeight;
-      if (distance > 1) current.scrollTop = current.scrollHeight;
-      previousScrollHeight.current = current.scrollHeight;
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [
-    messages,
-    streamText,
-    streamThinking,
-    activeTools,
-    isStreaming,
-    containerRef,
-    chatFontSize,
-  ]);
-
   const handleScroll = () => {
     const el = containerRef.current;
     if (!el) return;
-    const atBottom =
-      el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_TOLERANCE;
-    stickToBottom.current = atBottom;
-    if (!atBottom) pendingBottomSnap.current = false;
-    setIsAtBottom(atBottom);
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = distanceToBottom <= 24;
+    if (atBottom) {
+      stickToBottom.current = true;
+      setIsAtBottom(true);
+    } else {
+      setIsAtBottom(false);
+    }
   };
 
   const handleWheel = (event: WheelEvent) => {
-    // Ctrl+wheel is trackpad pinch zoom rather than scroll intent.
-    if (event.ctrlKey || event.deltaY >= 0) return;
-    stickToBottom.current = false;
-    pendingBottomSnap.current = false;
-    setIsAtBottom(false);
+    if (event.ctrlKey) return;
+    if (event.deltaY < 0) {
+      stickToBottom.current = false;
+      setIsAtBottom(false);
+    }
   };
 
   const handleTouchStart = (event: TouchEvent) => {
@@ -855,12 +837,10 @@ export function MessageList({
   const handleTouchMove = (event: TouchEvent) => {
     if (touchStartY.current === null) return;
     const y = event.touches[0]?.clientY;
-    // A downward finger movement scrolls toward older content. Unpin on the
-    // first pixel, before the browser's asynchronous scroll event arrives.
-    if (y == null || y <= touchStartY.current) return;
-    stickToBottom.current = false;
-    pendingBottomSnap.current = false;
-    setIsAtBottom(false);
+    if (y != null && y > touchStartY.current + 8) {
+      stickToBottom.current = false;
+      setIsAtBottom(false);
+    }
   };
 
   // Only show ... while waiting for a response (hidden when final assistant
@@ -883,7 +863,7 @@ export function MessageList({
         onTouchMove={handleTouchMove}
         className="thin-scroll h-full overflow-x-hidden overflow-y-auto"
       >
-        <div className="mx-auto flex min-w-0 max-w-3xl flex-col gap-4 px-3 py-4 sm:gap-5 sm:px-4 sm:py-5 min-h-full">
+        <div ref={contentRef} className="mx-auto flex min-w-0 max-w-3xl flex-col gap-4 px-3 py-4 sm:gap-5 sm:px-4 sm:py-5 min-h-full">
           {historyHasMore && (
             <div className="flex flex-col items-center gap-2">
               {historyError && <p role="status" className="text-xs text-red-500">{t("historyLoadFailed")}</p>}

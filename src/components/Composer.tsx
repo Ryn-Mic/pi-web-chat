@@ -622,7 +622,7 @@ export function Composer({
             }}
           />
           {/* Bottom control row (Claude/ChatGPT desktop layout) */}
-          <div className="mt-1 flex items-center gap-1 px-1">
+          <div className="mt-1 flex min-w-0 items-center gap-1 px-1">
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={processingImages}

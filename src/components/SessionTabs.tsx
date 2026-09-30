@@ -55,9 +55,9 @@ export function SessionTabs() {
         return (
           <div
             key={tab.key}
-            className={`group flex min-w-0 max-w-52 shrink-0 items-center rounded-lg border transition-colors ${
+            className={`group flex min-w-0 max-w-52 shrink-0 items-center rounded-lg border transition-all ${
               active
-                ? "border-line bg-card text-ink shadow-sm"
+                ? "border-line bg-card text-ink shadow-2xs dark:border-white/[0.08]"
                 : "border-transparent text-muted hover:bg-hover hover:text-ink"
             }`}
           >
@@ -102,7 +102,9 @@ export function SessionTabs() {
                   }
                 }
               }}
-              className="mr-1 flex size-5 shrink-0 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-ink"
+              className={`mr-1 flex size-5 shrink-0 items-center justify-center rounded-md text-faint transition-all hover:bg-hover hover:text-ink ${
+                active ? "opacity-70 hover:opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              }`}
             >
               <DismissActionIcon size={13} />
             </button>
