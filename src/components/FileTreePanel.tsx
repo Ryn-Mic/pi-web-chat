@@ -3,7 +3,7 @@ import { useEffect, useState, type MouseEvent } from "react";
 import type { UIFileMatch, UITreeNode } from "../../shared/protocol";
 import { useFileSearch, useInvalidateGit, useInvalidateTree, useTree } from "../lib/api";
 import { chatClient, useChat } from "../lib/chat";
-import { onRequestOpenFilesDrawer } from "../lib/drawer";
+import { onRequestOpenFilesDrawer, setFilesDrawerOpen } from "../lib/drawer";
 import { previewIdentity } from "../lib/file-preview";
 import {
   currentFileSearchMatches,
@@ -509,6 +509,10 @@ export function FilesDrawer({
     if (nextView) setView(nextView);
     setOpen(true);
   }), []);
+  useEffect(() => {
+    setFilesDrawerOpen(open);
+    return () => setFilesDrawerOpen(false);
+  }, [open]);
   const [refreshing, setRefreshing] = useState(false);
   const refresh = () => {
     if (!snapshot?.cwd) return;

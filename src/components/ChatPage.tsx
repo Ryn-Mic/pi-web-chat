@@ -6,7 +6,7 @@ import { getAgentPreference } from "../lib/agent";
 import { AgentEyes } from "./AgentEyes";
 import { AgentIcon } from "./AgentIcon";
 import { chatClient, useChat } from "../lib/chat";
-import { requestOpenFilesDrawer, requestOpenSessionsDrawer } from "../lib/drawer";
+import { requestOpenFilesDrawer, requestOpenSessionsDrawer, useAnyDrawerOpen } from "../lib/drawer";
 import { activatePreview } from "../lib/file-preview";
 import { setFilesPanelOpen, useFilesPanelOpen } from "../lib/filetree";
 import { useLocale, useT } from "../lib/i18n";
@@ -201,6 +201,8 @@ export function ChatPage() {
   // panel state must not disable it — otherwise docking on desktop then
   // shrinking to a mobile width leaves the drawer unreachable by swipe.
   const filesPanelOpen = useFilesPanelOpen();
+  const anyDrawerOpen = useAnyDrawerOpen();
+  const isAnySidebarOpen = filesPanelOpen || sidebarPinned || anyDrawerOpen;
   const openFilesDrawer = useCallback(() => requestOpenFilesDrawer(), []);
   useRightEdgeSwipe({ enabled: true, onSwipeLeft: openFilesDrawer });
 
@@ -330,6 +332,7 @@ export function ChatPage() {
               cwd={snapshot?.cwd}
               agent={snapshot?.agent ?? getAgentPreference() ?? "pi"}
               onPreviewFile={previewMessageFile}
+              hideScrollButton={isAnySidebarOpen}
             />
             {connection !== "connected" && (
               <div role="status" className="shrink-0 border-t border-line bg-card px-4 py-2 text-xs text-muted">

@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from "react";
+
 /**
  * Drawer open-request event buses (sessions + files).
  *
@@ -6,6 +8,39 @@
  */
 const listeners = new Set<() => void>();
 const filesListeners = new Set<(view?: "files" | "git") => void>();
+
+let sessionsDrawerOpen = false;
+let filesDrawerOpen = false;
+const stateListeners = new Set<() => void>();
+
+function notifyState() {
+  for (const l of stateListeners) l();
+}
+
+export function setSessionsDrawerOpen(open: boolean) {
+  if (sessionsDrawerOpen === open) return;
+  sessionsDrawerOpen = open;
+  notifyState();
+}
+
+export function setFilesDrawerOpen(open: boolean) {
+  if (filesDrawerOpen === open) return;
+  filesDrawerOpen = open;
+  notifyState();
+}
+
+export function useAnyDrawerOpen(): boolean {
+  return useSyncExternalStore(
+    (onStoreChange) => {
+      stateListeners.add(onStoreChange);
+      return () => {
+        stateListeners.delete(onStoreChange);
+      };
+    },
+    () => sessionsDrawerOpen || filesDrawerOpen,
+    () => false,
+  );
+}
 
 /** Request the drawer to open (the subscribing SessionsDrawer opens) */
 export function requestOpenSessionsDrawer() {
