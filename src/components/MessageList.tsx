@@ -60,7 +60,7 @@ function TodoCard({ block }: { block: Extract<UIContentBlock, { type: "toolCall"
       ? `${done}/${tasks.length}${current?.activeForm ? ` · ${current.activeForm}` : ""}`
       : t("toolRunning", { name: "todo" }));
   return (
-    <details className="my-2 rounded-xl border border-line bg-card/60 text-sm">
+    <details className="my-2 rounded-xl border border-line bg-card/70 text-sm shadow-2xs transition-colors dark:border-white/[0.08] dark:bg-card/40">
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 select-none">
         <AgentEyes
           state={block.result?.isError ? "error" : block.result ? "happy" : "working"}
@@ -119,7 +119,7 @@ function AskCard({ block }: { block: Extract<UIContentBlock, { type: "toolCall" 
       : null;
   const questions = args?.questions ?? [];
   return (
-    <details className="my-2 rounded-xl border border-line bg-card/60 text-sm">
+    <details className="my-2 rounded-xl border border-line bg-card/70 text-sm shadow-2xs transition-colors dark:border-white/[0.08] dark:bg-card/40">
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 select-none">
         <AgentEyes state="connecting" size={14} className="text-purple-500/80" animated={false} />
         <span className="font-medium text-ink">ask_user_question</span>
@@ -203,7 +203,13 @@ function GenericToolCard({ block }: { block: ToolCallBlock }) {
   const showResult = hasResult && !(edit && resultIsDiff && !block.result?.isError);
 
   return (
-    <details className="my-2 rounded-xl border border-line bg-card/60 text-sm">
+    <details
+      className={`my-2 rounded-xl border text-sm shadow-2xs transition-colors dark:bg-card/40 ${
+        block.result?.isError
+          ? "border-red-500/30 bg-red-500/5 dark:border-red-500/30"
+          : "border-line bg-card/70 dark:border-white/[0.08]"
+      }`}
+    >
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 select-none">
         <span
           className="flex shrink-0 items-center"
@@ -333,7 +339,10 @@ function ActiveToolCard({ tool }: { tool: ActiveTool }) {
   }, [tool.args]);
   const output = tool.output?.slice(-12_000) ?? "";
   return (
-    <details open className="rounded-xl border border-line bg-card/60 text-sm">
+    <details
+      open
+      className="rounded-xl border border-amber-500/30 bg-amber-500/5 text-sm shadow-2xs transition-colors dark:border-amber-500/25 dark:bg-amber-500/5"
+    >
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 select-none">
         <AgentEyes state="working" size={14} className="text-amber-400" />
         <span className="font-medium text-ink">{tool.toolName}</span>
@@ -381,10 +390,13 @@ function Thinking({
     <details
       open={collapsed ? false : open}
       onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
-      className="chat-message-text my-1.5"
+      className="chat-message-text my-2"
     >
-      <summary className="cursor-pointer text-xs text-faint select-none">thinking…</summary>
-      <div className="mt-1 min-w-0 break-words border-l-2 border-line pl-3 text-muted italic [&_pre]:not-italic [&_code]:not-italic">
+      <summary className="inline-flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-faint transition-colors hover:bg-hover hover:text-muted select-none">
+        <span className="size-1.5 rounded-full bg-accent/70" aria-hidden />
+        <span>thinking…</span>
+      </summary>
+      <div className="mt-1.5 min-w-0 break-words border-l-2 border-accent/25 pl-3 text-muted italic [&_pre]:not-italic [&_code]:not-italic">
         {/* Thinking renders markdown too (bold/code/emphasis); Streamdown
             handles incomplete syntax while streaming. The Shiki plugin is
             withheld while streaming so growing fences are not re-tokenised on
@@ -477,7 +489,7 @@ function CopyButton({ text }: { text: string }) {
     <button
       type="button"
       onClick={() => void copy()}
-      className="flex size-7 items-center justify-center rounded-md border border-line bg-card text-faint shadow-sm transition-colors hover:bg-hover hover:text-ink"
+      className="flex size-7 items-center justify-center rounded-md border border-line bg-card text-faint shadow-2xs transition-colors hover:bg-hover hover:text-ink dark:border-white/[0.08]"
       aria-label={copied ? t("copied") : t("copyMessage")}
       title={copied ? t("copied") : t("copyMessage")}
     >
@@ -493,7 +505,7 @@ function ReuseButton({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="flex size-7 items-center justify-center rounded-md border border-line bg-card text-faint shadow-sm transition-colors hover:bg-hover hover:text-ink"
+      className="flex size-7 items-center justify-center rounded-md border border-line bg-card text-faint shadow-2xs transition-colors hover:bg-hover hover:text-ink dark:border-white/[0.08]"
       aria-label={t("reuseMessage")}
       title={t("reuseMessage")}
     >
@@ -573,7 +585,7 @@ const Message = memo(function Message({
         className="group/message flex min-w-0 scroll-mt-4 flex-col items-end"
         data-msg-index={index}
       >
-        <div className="user-bubble relative min-w-0 max-w-[85%] break-words rounded-2xl bg-bubble px-4 py-2.5 whitespace-pre-wrap text-ink sm:max-w-[75%]">
+        <div className="user-bubble relative min-w-0 max-w-[85%] break-words rounded-2xl bg-bubble px-4 py-2.5 whitespace-pre-wrap text-ink sm:max-w-[75%] shadow-2xs dark:border dark:border-white/[0.06]">
           <div className="chat-message-text"><Blocks blocks={message.content} markdown={false} cwd={cwd} onPreviewFile={onPreviewFile} /></div>
         </div>
         {text && (

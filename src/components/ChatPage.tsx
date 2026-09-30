@@ -27,7 +27,7 @@ import { MobileGitCommitDetail, type MobileGitCommitSelection } from "./MobileGi
 import { FileWorkspaceSidebar, openWorkspacePreview } from "./FileWorkspaceSidebar";
 import { GIT_TAB_ID } from "./FileWorkspaceTabs";
 import { LoadingIndicator } from "./LoadingIndicator";
-import { NewSessionIcon } from "./MorphIcons";
+import { NewSessionButton } from "./NewSessionButton";
 import { ProjectBadge } from "./ProjectBadge";
 import { MessageList } from "./MessageList";
 import {
@@ -149,7 +149,7 @@ export function ChatPage() {
   const resumeEnabled = useResumeEnabled();
   const messageListRef = useRef<HTMLDivElement>(null);
   const [settingsOpenToken, setSettingsOpenToken] = useState(0);
-  const [newSessionBurst, setNewSessionBurst] = useState(0);
+
   const [mobilePreview, setMobilePreview] = useState<MobilePreviewSelection | null>(null);
   const [mobileGitCommit, setMobileGitCommit] = useState<MobileGitCommitSelection | null>(null);
   const closeMobilePreview = useCallback(() => setMobilePreview(null), []);
@@ -252,8 +252,8 @@ export function ChatPage() {
         />
       )}
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas md:my-2 md:mr-2 md:rounded-2xl md:border md:border-line md:shadow-sm">
-        <header className="flex shrink-0 items-center gap-1 px-2.5 py-2">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas md:my-2 md:mr-2 md:rounded-2xl md:border md:border-line md:shadow-sm dark:md:border-white/[0.08] dark:md:shadow-2xl">
+        <header className="flex shrink-0 items-center gap-1 px-2.5 py-2 border-b border-line/40 bg-canvas/80 backdrop-blur-md">
           <SessionsDrawer
             currentSessionFile={snapshot?.sessionFile}
             settingsOpenToken={settingsOpenToken}
@@ -302,21 +302,7 @@ export function ChatPage() {
               />
             </svg>
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              setNewSessionBurst((t) => t + 1);
-              markFreshDraftRequested();
-              chatClient.connect(null, { force: true, agent: getAgentPreference() ?? undefined });
-              void navigate({ to: "/" });
-              chatClient.requestComposerFocus();
-            }}
-            aria-label={t("newSession")}
-            title={t("newSession")}
-            className="flex size-9 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink"
-          >
-            <NewSessionIcon size={19} burstToken={newSessionBurst} />
-          </button>
+          <NewSessionButton cwd={snapshot?.cwd} />
         </header>
         <SessionTabs />
 

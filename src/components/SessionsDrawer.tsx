@@ -162,9 +162,15 @@ function SessionRow({
   return (
     <div
       className={`group relative flex w-full items-center rounded-lg transition-colors ${
-        active ? "bg-selected" : "hover:bg-hover"
+        active ? "bg-selected shadow-2xs" : "hover:bg-hover"
       }`}
     >
+      {active && (
+        <span
+          className="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-accent"
+          aria-hidden
+        />
+      )}
       <button
         type="button"
         onClick={onSelect}

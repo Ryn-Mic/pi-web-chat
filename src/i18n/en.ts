@@ -45,6 +45,7 @@ export type Messages = {
   newSession: string;
   resumeSession: string;
   newSessionInProject: string;
+  newSessionDefault: string;
   renameSession: string;
   deleteSession: string;
   confirmDelete: string;
@@ -344,6 +345,7 @@ export const en: Messages = {
   newSession: "New session",
   resumeSession: "Resume last session",
   newSessionInProject: "New session in this project",
+  newSessionDefault: "New standalone session",
   renameSession: "Rename session",
   deleteSession: "Delete session",
   confirmDelete: "Confirm delete",

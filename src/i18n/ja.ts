@@ -45,6 +45,7 @@ export const ja: Messages = {
   newSession: "新しいセッション",
   resumeSession: "最後のセッションを復元",
   newSessionInProject: "このプロジェクトに新しいセッション",
+  newSessionDefault: "新しい全体セッション",
   renameSession: "セッション名を変更",
   deleteSession: "セッションを削除",
   confirmDelete: "削除の確認",
