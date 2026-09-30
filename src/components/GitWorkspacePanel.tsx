@@ -6,6 +6,7 @@ import {
   useGitCommit,
   useGitLog,
   useGitStatus,
+  useInvalidateGit,
 } from "../lib/api";
 import { chatClient } from "../lib/chat";
 import { formatGitTimestamp, splitCommitDiffByFile } from "../lib/git";
@@ -23,12 +24,12 @@ function statusLetter(file: UIGitFile): string {
   return "M";
 }
 
-function statusClass(file: UIGitFile): string {
-  if (file.kind === "conflicted") return "text-red-500";
-  if (file.kind === "untracked") return "text-amber-500";
-  if (file.kind === "added") return "text-emerald-500";
-  if (file.kind === "deleted") return "text-red-500";
-  return "text-accent";
+function statusBadgeClass(file: UIGitFile): string {
+  if (file.kind === "conflicted") return "bg-red-500/10 text-red-500 dark:bg-red-500/15";
+  if (file.kind === "untracked") return "bg-amber-500/10 text-amber-600 dark:text-amber-400 dark:bg-amber-500/15";
+  if (file.kind === "added") return "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 dark:bg-emerald-500/15";
+  if (file.kind === "deleted") return "bg-red-500/10 text-red-500 dark:bg-red-500/15";
+  return "bg-accent/10 text-accent dark:bg-accent/15";
 }
 
 function GitFileRow({
@@ -54,7 +55,12 @@ function GitFileRow({
   return (
     <div className="flex min-w-0 items-center gap-1 rounded-md px-2 py-1 hover:bg-hover">
       <button type="button" onClick={open} className="flex min-w-0 flex-1 items-center gap-2 text-left text-[12px]" title={file.path}>
-        <span className={`w-3 shrink-0 text-center font-mono font-semibold ${statusClass(file)}`} aria-hidden>{statusLetter(file)}</span>
+        <span
+          className={`flex size-4 shrink-0 items-center justify-center rounded font-mono text-[10px] font-semibold leading-none ${statusBadgeClass(file)}`}
+          aria-hidden
+        >
+          {statusLetter(file)}
+        </span>
         <span className="truncate text-muted">{file.path}</span>
       </button>
       <button
@@ -92,6 +98,7 @@ function FileGroup({
 
 function BranchSection({ cwd, status, branches }: { cwd: string; status: UIGitStatus; branches: UIGitBranch[] }) {
   const t = useT();
+  const invalidateGit = useInvalidateGit();
   const [error, setError] = useState<string | null>(null);
   const [switchingBranch, setSwitchingBranch] = useState<string | null>(null);
   const switchBranch = async (branch: string) => {
@@ -104,9 +111,10 @@ function BranchSection({ cwd, status, branches }: { cwd: string; status: UIGitSt
     setSwitchingBranch(branch);
     try {
       await checkoutGitBranch(cwd, branch);
-      window.location.reload();
+      invalidateGit(cwd);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : t("gitOperationFailed"));
+    } finally {
       setSwitchingBranch(null);
     }
   };
@@ -120,13 +128,20 @@ function BranchSection({ cwd, status, branches }: { cwd: string; status: UIGitSt
             type="button"
             disabled={switchingBranch !== null}
             onClick={() => void switchBranch(branch.name)}
-            className={`flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] transition-colors hover:bg-hover disabled:opacity-50 ${branch.current ? "text-ink" : "text-muted"}`}
+            className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-hover disabled:cursor-wait disabled:opacity-60 ${
+              branch.current ? "bg-selected text-ink font-medium shadow-2xs" : "text-muted"
+            }`}
             title={branch.upstream ? `${branch.name} -> ${branch.upstream}` : branch.name}
           >
             {switchingBranch === branch.name ? (
               <LoadingIndicator label={t("loading")} size="sm" />
             ) : (
-              <span className={`size-1.5 shrink-0 rounded-full ${branch.current ? "bg-emerald-500" : "bg-transparent"}`} aria-hidden />
+              <span
+                className={`size-1.5 shrink-0 rounded-full ${
+                  branch.current ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.5)]" : "bg-transparent"
+                }`}
+                aria-hidden
+              />
             )}
             <span className="truncate">{branch.name}</span>
             <span className="ml-auto shrink-0 font-mono text-[10px] text-faint">{branch.commit}</span>
