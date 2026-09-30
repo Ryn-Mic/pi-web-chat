@@ -1,12 +1,12 @@
-# Agent Note: iOS 26/27 主屏 Web App 顶部系统栏遮挡标题栏
+# Agent Note: iOS 26/27 主屏 Web App 不再把内容铺到状态栏下
 
 Status: implemented
 
 ## Problem
 
-用户把 pi-web-chat 加到主屏幕后（standalone PWA）打开，顶部标题栏（会话列表按钮、Agent 图标、连接徽标、项目名、文件/新建按钮）呈现「像被一层发白蒙版盖住」的样子，且一直如此（非瞬时、与滚动无关）。
+用户把 pi-web-chat 加到主屏幕（standalone PWA）后，顶部标题栏呈现「像被一层发白蒙版盖住」的样子，且一直如此（非瞬时、与滚动无关）。
 
-对用户提供的真机截图做像素分析后确认这不是「发白」而是**模糊**：
+对真机截图做像素分析后确认这是**模糊**而不是「发白」：
 
 | 区域 | 最暗像素 p1 | 最大梯度 maxgrad | >30 梯度占比 |
 | --- | --- | --- | --- |
@@ -14,33 +14,35 @@ Status: implemented
 | 状态栏文字（参考） | 39 | 221.0 | 2.79% |
 | 正文（参考） | 30 | 217.0 | 5.60% |
 
-受影响的带区几乎不存在陡峭边缘（maxgrad 23 vs 正文 217），横向剖面是从 247 平滑过渡到约 193 的平台——这是**大半径模糊 + 提亮**的典型特征，而不是「颜色变浅」。应用代码中不存在任何作用于标题栏的模糊/蒙版/渐变（`grep blur|mask|gradient` 仅命中工具调用行的横向 fade-x、Codex 交互弹层的遮罩、编辑器拖放浮层）。
+受影响带几乎没有陡峭边缘（maxgrad 23 vs 正文 217），横向剖面是从 247 平滑过渡到约 193 的平台——典型的大半径模糊 + 提亮。应用代码里没有任何作用于标题栏的模糊/蒙版/渐变（`blur|mask|gradient` 只命中工具调用行的横向 fade-x、Codex 弹层遮罩、编辑器拖放浮层）。
 
-因此模糊来自系统：iOS 26 起（Liquid Glass）主屏 Web App 的系统状态栏是覆盖在网页内容之上的半透明材质，会对下方内容做模糊与着色（社区已知：WebKit bug 301994「REGRESSION (iOS 26.1): Status bar remains visible in fullscreen mode in Home Screen Web apps」，以及多篇 iOS 26 PWA 讨论）。用户设备 UA 为 `iPhone OS 18_7 … Version/27.0.1`（Safari 把 OS token 冻结在 18_7 反指纹，真实版本看 `Version/`）。
-
-本应用按设计让内容钻到状态栏下面（`apple-mobile-web-app-status-bar-style = black-translucent` + `viewport-fit=cover`），并用 `--safe-top` 预留系统栏高度。`src/lib/viewport.ts` 的 `SAFE_TOP_MAX = 60` 上限是为 44–59px 的旧状态栏写的，iOS 26/27 报出 68 时被截断成 60。
+原因是平台行为：本应用按 `viewport-fit=cover` + `apple-mobile-web-app-status-bar-style: black-translucent` 把网页铺到状态栏下面，而 iOS 26 起（Liquid Glass）主屏 Web App 的状态栏是一层**半透明材质**盖在网页之上，会把下方的像素糊掉。也就是说：只要标题栏落在材质下面，它就会被模糊——这与社区记录一致（WebKit bug 301994「REGRESSION (iOS 26.1): Status bar remains visible in fullscreen mode in Home Screen Web apps」，以及若干 iOS 26 PWA 讨论）。
 
 ## Decision
 
-两个环节，按实测顺序落地：
+**去掉 `viewport-fit=cover`，让 iOS 把 App 排在状态栏下方，从根上去掉「内容位于材质之下」这个前提。**
 
-1. **不再截断平台上报的顶部安全区**：`SAFE_TOP_MAX` 60 → 140。该上限只为防「异常超报」存在，不应把平台真实值砍掉；低于 60 的设备行为完全不变。保留 iOS standalone 且 `env` 报 0 时的 44/20px 兜底。
-2. **iOS 26+ standalone 额外预留 `IOS_STATUS_MATERIAL_EXTRA = 36px`**：0.1.116 上线后用户回读诊断行 `top=68px env=68 screen=912 inner=844 vv=844 standalone`——即 env 诚实上报了 68，我们也照用了 68，但标题栏（page y 72–108）仍在系统材质里发糊，说明材质覆盖范围大于它上报的 inset（截图里模糊带下沿约 100）。因此在 iOS standalone 且 `Version/ ≥ 26`（iOS 26 起 Safari 版本与系统同号，是唯一诚实的代际信号）时，`--safe-top = 上报值 + 36`，本机即为 104，标题栏落到 108 以下。
+- `index.html` 的 viewport meta 不再声明 `viewport-fit=cover`。
+- `src/lib/viewport.ts` 相应删掉所有「顶部预留」逻辑：`STANDALONE_SAFE_TOP_FALLBACK`(44/20)、0.1.117 引入的 `IOS_STATUS_MATERIAL_EXTRA`(36) 与 `safariMajorVersion()`。这些补偿只在 cover 模式下才有意义；不铺到状态栏下之后，`env(safe-area-inset-top)` 就是 0，再补一段就是凭空的空白。
+- 保留底部兜底（`STANDALONE_SAFE_BOTTOM_FALLBACK = 34`）：不铺 cover 时 `env(safe-area-inset-bottom)` 同样归 0，而视图仍延伸到 home indicator 之下，输入框需要这 34px。
+- 状态栏那条带由系统用页面的 `theme-color`/背景（#faf9f5）着色，与本应用画布同色，视觉上是连续的，不会出现异色条。
+- `SAFE_TOP_MAX` 保留（仅作「异常超报」的保护）。
 
-诊断行（设置菜单底部 `top=/env=/screen=/inner=/vv=/standalone|browser`）暂留，用于确认第 2 步的数值；确认后删除。
+依据：`dispatch` 项目的 ios-pwa-viewport-findings（2026-09-15 结案）用真机读数给出同一结论——cover 模式下 `inner 873 = screen 932 − 59`、`safe-t 59`，而改成不铺 cover 后 `safe-t 0`、`fixed; top: 0` 落在时钟正下方；他们的同类 bug 由此关闭。
 
 ## Alternatives considered
 
-- **把 `apple-mobile-web-app-status-bar-style` 改成 `default`（不透明状态栏）** — 让系统预留状态栏、网页不再钻到下面；理论可行，但它同时改掉沉浸式外观，并让 `env(safe-area-inset-top)` 变为 0 从而触发我们自己的 44px 兜底（需再删兜底逻辑），改动面更大且同样只能靠用户真机验证。保留为备选。
-- **从 viewport meta 去掉 `viewport-fit=cover`** — 这是社区里被验证过的同类修复（`dispatch` 项目 2026-09-15 的 ios-pwa-viewport-findings：去掉 cover 后 iOS 把安装版 App 排在状态栏下方，`safe-t` 变为 0、`fixed; top:0` 落在时钟下方）。但同一份记录显示去掉 cover 后 `safe-b` 也变 0、布局一直铺到「玻璃底部」；本应用底部是输入框，`env(safe-area-inset-bottom)` 一旦归零，需要另找 home indicator 的补偿，属于把顶部问题换成底部问题。本轮不采用，若第 2 步仍不奏效再启用。
-- **在 iOS standalone 下直接硬编码一个更大的固定间隙（如 100px 起）** — 不依赖 env，能压过任何材质高度，但会让 iOS 18 等无材质设备白白多出一大段空白；改用「上报值 + 固定增量 + 版本门控」把影响限制在 Liquid Glass 代际。否决纯硬编码。
-- **把顶部栏背景做成不透明** — 材质模糊的是「材质下方的像素」，标题栏图标文字仍在其下方，仍会发虚；不解决图标模糊，否决。
-- **等 Apple 修复 WebKit 回归** — 该回归自 iOS 26.1 起已存在数月，且用户每天在用主屏 App，不能等。否决。
+- **保留 cover，把标题栏往下挪出材质（0.1.117 的做法：`env + 36px`）** — 实测确实能让标题栏不再发糊，但只是把内容移出模糊区，没有消除模糊本身；代价是状态栏与标题栏之间多出一段空白，用户明确指出这是偷懒的规避而不是修复。改为根因修复后放弃。
+- **保留 cover，把 `apple-mobile-web-app-status-bar-style` 改成 `default`（不透明状态栏）** — 不透明状态栏不会模糊下方像素，理论上也能让标题栏变清晰，且保留沉浸式布局。但需要确认 iOS 26 是否真的按 opaque 处理（未验证），并且仍要处理「env 变 0 后的兜底逻辑」这一整套补偿；在无法真机验证的前提下比去掉 cover 更难判断。保留为备选。
+- **把顶部栏背景做成不透明** — 材质模糊的是「材质下方的像素」，标题栏的图标文字仍在其下方，仍会发虚；不解决问题，否决。
+- **继续加固定魔数（例如顶部硬留 100px）** — 不依赖平台语义，能压过任何材质高度，但会在没有材质的设备（iOS 18）上留下大段空白，且永远要跟着系统版本调参；否决。
+- **等 Apple 修复 WebKit 回归** — 该回归自 iOS 26.1 起已存在数月，用户每天使用主屏 App，不能等。否决。
 
 ## Consequences
 
-- iOS 26/27 主屏 App 的标题栏预计落在系统材质下方，不再发糊；顶部栏比之前高约 36px（以一段画布色空白呈现，不会露出被模糊的内容）。
-- 旧设备（`env ≤ 60`、`Version/ < 26`）行为完全不变。
-- 依赖 `Version/` 识别代际：若某个 iOS 26+ 的 standalone UA 不带 `Version/`，增量不会生效（退回当前现状，不会更差）。
-- 设置菜单底部短期内显示一行诊断信息（含 `screen`/`inner` 等），确认后移除；这是临时诊断，不是产品功能。
-- 本轮无法在本地真机复现（Xcode 26 的 Simulator/DeviceHub 未提供可自动化窗口，也没有 iOS 真机），每一轮都必须由用户在手机主屏 App 上验收。
+- 主屏 App 的标题栏不再被系统材质模糊；同时不再需要任何顶部预留，之前那段 36px 的空白一并消失。
+- App 的布局视口从状态栏下方开始：状态栏那条带由系统按页面底色着色，与被应用画布一致。
+- 不使用 `viewport-fit=cover` 的副作用：iOS 在横屏时会留出安全区黑边（不再铺满）。本应用以竖屏为主，接受该代价；这是与「顶部不铺到状态栏下」绑定的取舍。
+- iOS 18 及更早、以及浏览器标签页行为不变（标签页本来就有浏览器自己的 chrome）。
+- 设置菜单底部的临时诊断行（`top=/env=/screen=/inner=/vv=/standalone|browser`）保留最后一轮，用于真机确认 `env=0 / top=0`；确认后删除。
+- 本轮仍无法在本地真机复现（Xcode 26 的 Device Hub 窗口位于副屏、ScreenCaptureKit 抓取失败，驱动拒绝派发像素点击；Library/WebClips 注入也不被 iOS 26 采纳），最终验收依赖用户主屏 App。

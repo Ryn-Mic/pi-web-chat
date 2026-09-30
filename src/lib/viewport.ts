@@ -10,6 +10,10 @@
  * Strategy: keep the app's normal closed viewport and only measure safe areas.
  * #root itself is NOT position:fixed (that can truncate on iOS 26+).
  *
+ * The viewport meta deliberately omits viewport-fit=cover: laying the app out
+ * under the iOS 26 status bar puts the header inside the system's translucent
+ * status material, which blurs it (see the standalone top-clearance note).
+ *
  * Performance notes (measured with Playwright; the original code janked on
  * iOS because every visualViewport scroll/resize fired DOM writes → reflows):
  * - safe areas barely change during a session: measure once, re-measure only
@@ -17,38 +21,10 @@
  * - keyboard movement does not cause any JS reads or writes
  * - safe areas are refreshed only on orientation changes
  */
-// Ceiling for the measured top inset. It only exists to guard against wildly
-// over-reported values; iOS 26+ reports its taller Liquid Glass status bar
-// through env(safe-area-inset-top), well above the 44-59px status bars this
-// constant was originally sized for. Clamping those values places the app
-// header under the system bar, where iOS blurs it.
+/** Guards against a wildly over-reported top inset. */
 const SAFE_TOP_MAX = 140;
 const SAFE_BOTTOM_MAX = 34;
-const STANDALONE_SAFE_TOP_FALLBACK = 44;
-const LEGACY_STANDALONE_SAFE_TOP_FALLBACK = 20;
 const STANDALONE_SAFE_BOTTOM_FALLBACK = 34;
-/**
- * Extra top clearance for the iOS 26 (Liquid Glass) status bar.
- *
- * That revision draws the status bar as a translucent material over the page,
- * and env(safe-area-inset-top) only reports the status-bar height while the
- * material reaches further down: on the reporting device env read 68 and the
- * blurred band ended around 100, so a header padded by exactly env still sat
- * inside the material (max gradient 23 against 217 for body text - blur, not
- * fading). Reserving the difference puts the header below it, at the cost of a
- * slightly taller top bar.
- */
-const IOS_STATUS_MATERIAL_EXTRA = 36;
-
-/**
- * Safari's real version. iOS freezes the "CPU iPhone OS x_y" UA token to blunt
- * fingerprinting (an iOS 27 device reports 18_7), so Version/ is the only
- * honest signal for the Liquid Glass generation.
- */
-function safariMajorVersion(): number {
-  const match = /Version\/(\d+)/.exec(navigator.userAgent);
-  return match ? Number(match[1]) : 0;
-}
 
 function measureEnvPadding(side: "top" | "bottom"): number {
   const el = document.createElement("div");
@@ -115,21 +91,12 @@ export function initViewportLock() {
   let safeBottom: number | null = null;
   const applySafeAreas = (force = false) => {
     if (safeTop === null || force) {
-      const measuredTop = Math.min(Math.max(measureEnvPadding("top"), 0), SAFE_TOP_MAX);
-      // Some iOS home-screen/web-app modes expose a transparent status bar but
-      // report env(safe-area-inset-top) as 0. Reserve the status-bar height
-      // explicitly in that mode; viewport-fit=cover means the app really does
-      // extend behind the translucent status bar.
-      const needsStandaloneFallback = isIosStandalonePortrait() && measuredTop < 1;
-      let top = needsStandaloneFallback
-        ? window.screen.height >= 800
-          ? STANDALONE_SAFE_TOP_FALLBACK
-          : LEGACY_STANDALONE_SAFE_TOP_FALLBACK
-        : measuredTop;
-      // The status material covers more than the inset it reports.
-      if (isIosStandalonePortrait() && safariMajorVersion() >= 26) {
-        top += IOS_STATUS_MATERIAL_EXTRA;
-      }
+      // The document does not use viewport-fit=cover, so iOS reserves the
+      // status bar outside the web view: env(safe-area-inset-top) is 0 and the
+      // app must not add anything on top. Reserving an inset here is what put
+      // the header under the system status material, which blurs whatever sits
+      // beneath it.
+      const top = Math.min(Math.max(measureEnvPadding("top"), 0), SAFE_TOP_MAX);
       if (top !== safeTop) root.style.setProperty("--safe-top", `${top}px`);
       safeTop = top;
     }
