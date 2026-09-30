@@ -713,8 +713,12 @@ lines.on("line", (line) => {
     assert.ok(observeMessages.includes("watchable answer"), "the polled running turn must be visible while observing");
     assert.equal(closed, false, "the socket must stay open while observing");
 
-    const observerCatalog = events.find((event) => event.type === "command_catalog");
-    const observerCommandNames = ((observerCatalog?.commands as Array<{ name?: unknown }> | undefined) ?? [])
+    const observerCatalog = await waitForEventUpTo(
+      events,
+      (event) => event.type === "command_catalog",
+      10_000,
+    );
+    const observerCommandNames = ((observerCatalog.commands as Array<{ name?: unknown }> | undefined) ?? [])
       .map((command) => command.name);
     assert.deepEqual(observerCommandNames, ["settings", "new", "resume", "copy", "diff", "status"]);
     const upgradeStart = events.length;

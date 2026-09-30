@@ -19,6 +19,22 @@ import { afterEach, test } from "node:test";
 
 let child: ChildProcessWithoutNullStreams | undefined;
 let home = "";
+/** Spawned-server output, kept so a startup or auth failure reports why instead of only a status code. */
+let serverLog = "";
+
+function captureServerOutput(process: ChildProcessWithoutNullStreams): void {
+  const append = (chunk: Buffer) => {
+    serverLog += chunk.toString("utf8");
+    if (serverLog.length > 20_000) serverLog = serverLog.slice(-20_000);
+  };
+  process.stdout.on("data", append);
+  process.stderr.on("data", append);
+}
+
+function serverDiagnostics(): string {
+  const status = child ? `exitCode=${child.exitCode ?? "none"} killed=${child.killed}` : "no child";
+  return `${status}; server output tail:\n${serverLog.slice(-1_500) || "(empty)"}`;
+}
 
 async function freePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -47,7 +63,8 @@ async function waitForHealth(baseUrl: string): Promise<void> {
     }
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  const reason = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`server did not become healthy (${reason}); ${serverDiagnostics()}`);
 }
 
 async function login(baseUrl: string): Promise<string> {
@@ -56,8 +73,9 @@ async function login(baseUrl: string): Promise<string> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ token: "test-token" }),
   });
-  assert.equal(res.status, 200);
-  const body = (await res.json()) as { sessionToken?: string };
+  const text = await res.text();
+  assert.equal(res.status, 200, `login rejected (${res.status}): ${text}; ${serverDiagnostics()}`);
+  const body = JSON.parse(text) as { sessionToken?: string };
   assert.equal(typeof body.sessionToken, "string");
   return body.sessionToken;
 }
@@ -109,6 +127,7 @@ async function stopChild(): Promise<void> {
 afterEach(async () => {
   await stopChild();
   child = undefined;
+  serverLog = "";
   if (home) rmSync(home, { recursive: true, force: true });
   home = "";
 });
@@ -139,8 +158,7 @@ test("file APIs require a session token, authorize known cwd, and reject unsafe 
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout.resume();
-  child.stderr.resume();
+  captureServerOutput(child);
   await waitForHealth(baseUrl);
 
   const unauthorized = await fetch(`${baseUrl}/api/tree?cwd=${encodeURIComponent(root)}`);
@@ -386,8 +404,7 @@ test("mobile preview context and preview-content routes", async () => {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout.resume();
-  child.stderr.resume();
+  captureServerOutput(child);
   await waitForHealth(baseUrl);
 
   const sessionToken = await login(baseUrl);
