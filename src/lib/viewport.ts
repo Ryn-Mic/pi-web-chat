@@ -17,7 +17,12 @@
  * - keyboard movement does not cause any JS reads or writes
  * - safe areas are refreshed only on orientation changes
  */
-const SAFE_TOP_MAX = 60;
+// Ceiling for the measured top inset. It only exists to guard against wildly
+// over-reported values; iOS 26+ reports its taller Liquid Glass status bar
+// through env(safe-area-inset-top), well above the 44-59px status bars this
+// constant was originally sized for. Clamping those values places the app
+// header under the system bar, where iOS blurs it.
+const SAFE_TOP_MAX = 140;
 const SAFE_BOTTOM_MAX = 34;
 const STANDALONE_SAFE_TOP_FALLBACK = 44;
 const LEGACY_STANDALONE_SAFE_TOP_FALLBACK = 20;
@@ -40,6 +45,27 @@ function measureEnvPadding(side: "top" | "bottom"): number {
   el.remove();
   const n = Number.parseFloat(raw);
   return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Temporary diagnostics for tuning the iOS 26+ top clearance: the reported
+ * inset alone cannot tell us whether the system bar still covers the header.
+ * Rendered in the settings footer; remove once the clearance is settled.
+ */
+export function viewportDiagnostics(): string {
+  const root = document.documentElement;
+  const standalone =
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.matchMedia("(display-mode: fullscreen)").matches;
+  const vv = window.visualViewport;
+  return [
+    `top=${root.style.getPropertyValue("--safe-top").trim() || "unset"}`,
+    `env=${Math.round(measureEnvPadding("top"))}`,
+    `screen=${window.screen.height}`,
+    `inner=${window.innerHeight}`,
+    `vv=${Math.round(vv?.height ?? 0)}`,
+    standalone ? "standalone" : "browser",
+  ].join(" ");
 }
 
 export function initViewportLock() {
