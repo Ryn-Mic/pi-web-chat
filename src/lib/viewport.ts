@@ -27,6 +27,28 @@ const SAFE_BOTTOM_MAX = 34;
 const STANDALONE_SAFE_TOP_FALLBACK = 44;
 const LEGACY_STANDALONE_SAFE_TOP_FALLBACK = 20;
 const STANDALONE_SAFE_BOTTOM_FALLBACK = 34;
+/**
+ * Extra top clearance for the iOS 26 (Liquid Glass) status bar.
+ *
+ * That revision draws the status bar as a translucent material over the page,
+ * and env(safe-area-inset-top) only reports the status-bar height while the
+ * material reaches further down: on the reporting device env read 68 and the
+ * blurred band ended around 100, so a header padded by exactly env still sat
+ * inside the material (max gradient 23 against 217 for body text - blur, not
+ * fading). Reserving the difference puts the header below it, at the cost of a
+ * slightly taller top bar.
+ */
+const IOS_STATUS_MATERIAL_EXTRA = 36;
+
+/**
+ * Safari's real version. iOS freezes the "CPU iPhone OS x_y" UA token to blunt
+ * fingerprinting (an iOS 27 device reports 18_7), so Version/ is the only
+ * honest signal for the Liquid Glass generation.
+ */
+function safariMajorVersion(): number {
+  const match = /Version\/(\d+)/.exec(navigator.userAgent);
+  return match ? Number(match[1]) : 0;
+}
 
 function measureEnvPadding(side: "top" | "bottom"): number {
   const el = document.createElement("div");
@@ -99,11 +121,15 @@ export function initViewportLock() {
       // explicitly in that mode; viewport-fit=cover means the app really does
       // extend behind the translucent status bar.
       const needsStandaloneFallback = isIosStandalonePortrait() && measuredTop < 1;
-      const top = needsStandaloneFallback
+      let top = needsStandaloneFallback
         ? window.screen.height >= 800
           ? STANDALONE_SAFE_TOP_FALLBACK
           : LEGACY_STANDALONE_SAFE_TOP_FALLBACK
         : measuredTop;
+      // The status material covers more than the inset it reports.
+      if (isIosStandalonePortrait() && safariMajorVersion() >= 26) {
+        top += IOS_STATUS_MATERIAL_EXTRA;
+      }
       if (top !== safeTop) root.style.setProperty("--safe-top", `${top}px`);
       safeTop = top;
     }
