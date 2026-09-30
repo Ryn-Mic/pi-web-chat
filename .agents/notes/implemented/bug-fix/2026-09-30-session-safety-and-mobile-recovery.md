@@ -38,7 +38,8 @@ restart 在停止 daemon 前校验目标，失败保留现有服务。聊天静�
 - Pi JSONL entry 与 Codex native item 为 UI 消息提供稳定 ID。Codex 水合代次约束分页，滑动窗口显式重置客户端历史，过期响应不安装。
 - 每文件共享扫描任务，扫描缓冲为 256 KiB；Git 使用异步子进程、literal pathspec 和 cwd 相对路径，部分暂存状态不重复转换同一文件路径。
 - PWA 缓存按 emitted dependency graph 决定，包含聊天共享依赖并排除预览独占 chunk、worker 与 CSS。聊天静态闭包约 1.30 MiB，precache 约 3.31 MiB；门禁分别为 2 MiB 和 6 MiB。
-- 本机 Node 24.16.0 下 npm test 360/360、typecheck、notes:check、build、pack:check、npm pack --dry-run --ignore-scripts 与 diff 检查通过。包为 6.79 MiB packed / 20.65 MiB unpacked / 226 files。
+- 本机 Node 24.16.0 下 npm test 361/361、typecheck、notes:check、build、pack:check、npm pack --dry-run --ignore-scripts 与 diff 检查通过。包为 6.79 MiB packed / 20.65 MiB unpacked / 226 files。
+- 首轮 CI 暴露两个 daemon 预检测试对工作区 dist 的依赖。改为临时安装夹具并加入无构建时保持 daemon 状态的回归；完整测试在无 dist 的临时干净检出副本中再次 361/361 通过，生产 build 前置检查与 CI 顺序保留。
 - Playwright Chromium 13/13，通过真实 HTTP 与隔离文件/Git/PWA，并用确定性 Agent 帧覆盖移动宽度下的返回、父重渲染、失败重试、跨 tab 滚动、窗口滑动、断线恢复及授权导致的卸载。未验证真实 iPhone/WebKit/Android 设备。
 - 本次未安装依赖、更新全局安装、重启生产、合并 main 或发布。只读检查 127.0.0.1:3141 健康、运行 v0.1.120；该运行版本与本次 v0.1.121 构建区分。
 
