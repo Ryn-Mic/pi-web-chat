@@ -242,7 +242,7 @@ export function ChatPage() {
     else setMobilePreview(file);
   }, []);
 
-  // #root is the flex/dvh shell; fill it (no position:fixed — iOS 26 safe).
+  // Fill the document-height flex shell; native keyboard panning owns the viewport.
   return (
     <div className="flex h-full min-h-0 w-full flex-1 bg-sidebar">
       {sidebarPinned && (
@@ -253,7 +253,7 @@ export function ChatPage() {
       )}
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-canvas md:my-2 md:mr-2 md:rounded-2xl md:border md:border-line md:shadow-sm">
-        <header className="flex shrink-0 items-center gap-1 px-2.5 py-2 pt-[calc(max(0.5rem,var(--safe-top))+0.25rem)]">
+        <header className="flex shrink-0 items-center gap-1 px-2.5 py-2">
           <SessionsDrawer
             currentSessionFile={snapshot?.sessionFile}
             settingsOpenToken={settingsOpenToken}

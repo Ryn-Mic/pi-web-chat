@@ -44,11 +44,8 @@
 }
 
 :root {
-  --safe-top: 0px;
-  --safe-bottom: 0px;
   --composer-pad-x: 0.75rem;
   --composer-pad-top: 0.5rem;
-  --composer-safe-bottom-max: 34px;
 
   /* light — Claude's warm ivory */
   --c-canvas: #faf9f5;
@@ -107,8 +104,8 @@
 }
 
 /*
- * Keep the document within the visible browser height. iOS can still pan its
- * visual viewport for the keyboard; #root stays in normal flow.
+ * Use the document viewport in normal flow. The browser owns keyboard resize
+ * and focus panning; visual-viewport changes do not reposition the app.
  */
 html,
 body {
@@ -122,14 +119,11 @@ body {
 }
 
 body {
-  position: fixed;
-  inset: 0;
-  height: var(--app-viewport-height, 100%);
   @apply bg-canvas text-ink antialiased;
 }
 
 #root {
-  /* Fill the visible height without adding a second viewport offset. */
+  /* Fill the document-height shell without an app-controlled viewport offset. */
   height: 100%;
   max-height: 100%;
   display: flex;
@@ -140,9 +134,8 @@ body {
 @media (max-width: 640px) {
   textarea,
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
-    /* Prevent iOS focus zoom, which also pans a fixed app away from the
-       keyboard. Utility classes elsewhere may specify a smaller desktop size,
-       so this needs to win on mobile. */
+    /* Prevent iOS focus zoom. Utility classes elsewhere may specify a smaller
+       desktop size, so this needs to win on mobile. */
     font-size: 16px !important;
   }
 
@@ -402,20 +395,11 @@ body {
   background: transparent;
 }
 
-/*
- * Bottom bar: floor padding + capped home-indicator inset.
- */
+/* Ordinary spacing only; the browser owns the keyboard and system insets. */
 .composer-bar {
   padding-top: var(--composer-pad-top);
   padding-left: var(--composer-pad-x);
   padding-right: var(--composer-pad-x);
-  padding-bottom: max(
-    0.5rem,
-    min(var(--composer-safe-bottom-max), var(--safe-bottom, env(safe-area-inset-bottom, 0px)))
-  );
-}
-/* The keyboard already covers the home indicator; keep only normal spacing. */
-html.ua-keyboard-open .composer-bar {
   padding-bottom: 0.5rem;
 }
 
@@ -474,7 +458,7 @@ html.ua-keyboard-open .composer-bar {
 
 /* Fullscreen tables start below the app header instead of covering it. */
 [data-streamdown="table-fullscreen"] {
-  top: max(3.25rem, calc(var(--safe-top) + 2.75rem)) !important;
+  top: 3.25rem !important;
   background-color: var(--c-canvas) !important;
 }
 [data-streamdown="table-fullscreen"] > div > div:first-child {
