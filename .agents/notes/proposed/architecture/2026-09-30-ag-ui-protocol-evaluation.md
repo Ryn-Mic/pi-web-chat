@@ -58,6 +58,18 @@ pi-web-chat 目前的「agent ↔ 前端」边界是本项目自定义的：`sha
 | `CodexInteractionHost` 的审批/elicitation 交互 | `interrupt` / `resume`（含 MUST 级契约与 reason taxonomy） | 规范比我们现写的更严谨，**值得反向借鉴**（尤其是「不得把被中断的 run 报告为成功」这类不变量） |
 | 会话/分支/fork、多会话并发、cwd 约束 | 不在协议范围（`threadId`/`runId` 只是标识） | 仍归本项目 |
 
+### AG-UI 覆盖到哪一层（关键边界）
+
+把整条链拆成 `源数据 → 解析/归一 → 事件词汇 → 传输 → 前端渲染`，AG-UI 只覆盖 **「事件词汇 → 传输」** 这一段。它**不是**「JSONL → 统一渲染格式」的转换层：
+
+- **不解析源格式**：pi 的 JSONL、codex app-server 的 turns/items、cometix 的 Claude 风格 JSONL，仍要有人解析、配对 `toolCall↔toolResult`、抽取 reasoning/usage——这正是 `server/serialize.ts`、`server/codex.ts`、`server/session-history.ts` 现在做的事。AG-UI 在「已经结构化的事件」之后才开始生效。
+- **不提供历史/分页/索引**：规范文本里没有 pagination 概念；会话列表、活动分支、倒序分块读历史都不在协议范围。
+- **不提供会话状态存储**：AG-UI 的会话状态是**客户端往返**的——`messages` 跨 run 累积、由下一次 `RunAgentInput` 带回；`MESSAGES_SNAPSHOT` 只是生产者「重述它拥有的完整消息集合」。服务端**转写库**这一角色仍然属于本项目。
+- **adapter 不会消失**：AG-UI 生态自身就是「一个框架一份 integration」（LangGraph / CrewAI / ADK / Claude Agent SDK 各自维护适配器）；pi、codex、cometix 都不在支持列表里，仍需各写一份。
+- **它的 middleware 不是中间件层**：指「事件格式可宽松匹配 + 传输无关」的兼容层，位于 processing model 的前置阶段（middleware before enforcement），不承担翻译职责。
+
+因此：能替换的只有 **`ServerEvent` 这一层的词汇与生命周期**（且前提是各后端改写为 emit AG-UI 事件）；`serialize/session-history/session-index/replay` 这些「重」的部分一点也省不掉。
+
 ### 落地形态（若要接入）
 
 1. **只做词汇对齐（低成本、推荐先做）**：新增后端时，adapter 输出的事件按 AG-UI 家族命名与生命周期组织（内部类型可保留本项目形状），使「后端 → 内部事件」的映射成为唯一差异面。
