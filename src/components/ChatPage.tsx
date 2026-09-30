@@ -27,6 +27,7 @@ import { MobileGitCommitDetail, type MobileGitCommitSelection } from "./MobileGi
 import { FileWorkspaceSidebar, openWorkspacePreview } from "./FileWorkspaceSidebar";
 import { GIT_TAB_ID } from "./FileWorkspaceTabs";
 import { LoadingIndicator } from "./LoadingIndicator";
+import { FolderTreeIcon } from "./MorphIcons";
 import { NewSessionButton } from "./NewSessionButton";
 import { ProjectBadge } from "./ProjectBadge";
 import { MessageList } from "./MessageList";
@@ -294,13 +295,7 @@ export function ChatPage() {
             aria-pressed={isDesktop ? filesPanelOpen : undefined}
             className="flex size-9 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink"
           >
-            <svg viewBox="0 0 24 24" className="size-5 fill-none stroke-current stroke-[1.8]" aria-hidden>
-              <path
-                d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6Z"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
+            <FolderTreeIcon open={isDesktop ? filesPanelOpen : false} size={18} className="text-current" />
           </button>
           <NewSessionButton cwd={snapshot?.cwd} />
         </header>

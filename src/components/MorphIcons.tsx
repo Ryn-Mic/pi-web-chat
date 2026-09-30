@@ -75,6 +75,28 @@ export function SidebarToggleIcon({
   );
 }
 
+/** Document / text file icon */
+export function FileItemIcon({
+  size = 14,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <MorphIcon
+      icon={MORPH_ICON_PATHS.fileText}
+      size={size}
+      strokeWidth={1.7}
+      spring="snappy"
+      reducedMotion="user"
+      className={`shrink-0 text-faint ${className}`}
+      aria-hidden
+      focusable="false"
+    />
+  );
+}
+
 /** File directory folder icon that smoothly morphs between closed and open state */
 export function FolderTreeIcon({
   open = false,

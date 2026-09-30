@@ -678,7 +678,7 @@ export function EmptyStateHero({ cwd, agent }: { cwd?: string; agent: UIAgentKin
             key={item.icon}
             type="button"
             onClick={() => handleSelectStarter(item.prompt)}
-            className="group flex flex-col rounded-xl border border-line bg-card/70 p-3 text-center transition-all hover:border-accent/40 hover:bg-hover hover:shadow-xs active:scale-[0.99] sm:text-left"
+            className="group flex flex-col rounded-xl border border-line bg-card/70 p-3 text-center transition-all hover:border-accent/40 hover:bg-hover hover:-translate-y-0.5 hover:shadow-xs active:scale-[0.99] dark:border-white/[0.08] dark:bg-card/50 dark:hover:border-accent/40 dark:hover:bg-card/80 sm:text-left"
           >
             <div className="grid w-full grid-cols-[17px_minmax(0,1fr)_17px] items-center gap-2 sm:flex">
               <StarterPromptIcon kind={item.icon} />
