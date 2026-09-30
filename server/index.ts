@@ -49,6 +49,7 @@ import type {
   UIGitCommit,
   UIGitCommitDetail,
   UIGitDiff,
+  UIMessage,
 } from "../shared/protocol.ts";
 import { createSnapshotDelta } from "../shared/snapshot.ts";
 import { auth, authStartupInfo } from "./auth.ts";
@@ -159,6 +160,23 @@ const profile = PROFILE
       process.stderr.write(`[profile] createEntry ${label}: ${ms.toFixed(1)}ms\n`);
     }
   : undefined;
+// A hydrated Codex turn page can dwarf anything a browser should receive in a
+// single frame: one real 216 MB rollout hydrated to 7220 messages / ~124 MB,
+// which makes mobile Safari kill the page ("A problem repeatedly occurred").
+// Browsers therefore get a bounded tail window plus cursor-based paging — the
+// same contract Pi sessions already use through snapshotMessageOffset.
+const CODEX_TAIL_MESSAGES = 120;
+/** Older hydrated messages served per history page. */
+const CODEX_PAGE_MESSAGES = 120;
+/**
+ * The live tail may grow past the initial window before it slides. A slide
+ * turns the next delta into a full tail replacement (dropping already-loaded
+ * older pages), so slides stay rare but still bound a long running turn.
+ */
+const CODEX_TAIL_HIGH_WATER = CODEX_TAIL_MESSAGES * 2;
+/** Prefix for cursors that address the in-memory hydrated page. */
+const CODEX_PAGE_CURSOR_PREFIX = "page:";
+
 const sessionSummaryIndex = new SessionSummaryIndex(join(getAgentDir(), "sessions"));
 const codexAppServer = new CodexAppServerClient({
   cwd: AGENT_CWD,
@@ -288,7 +306,16 @@ interface SessionEntry {
   codexNative?: boolean;
   codexContext?: UIContextUsage | null;
   codexAgentStarted?: boolean;
+  /** Hydrated turn page; browsers only ever receive a bounded tail of it. */
   codexMessages: unknown[];
+  /**
+   * Serialized projection of `codexMessages` (tool results merged into their
+   * calls). Snapshots and history pages both slice this array so paging can
+   * never split a tool call from its result. Invalidated when the page changes.
+   */
+  codexUi: UIMessage[] | null;
+  /** App-server cursor for turns older than the hydrated page (opaque). */
+  codexStreamCursor: string | null;
   clients: Set<WebSocket>;
   unsubscribe?: () => void;
   lastActive: number;
@@ -528,6 +555,13 @@ function appendCodexState(entry: SessionEntry, state: CodexSessionState): void {
 function appendCodexMessage(entry: SessionEntry, message: Record<string, unknown>, completedAt?: number): void {
   if (!entry.codexNative) entry.runtime.session.sessionManager.appendMessage(message as never);
   entry.codexMessages.push(message);
+  entry.codexUi = null;
+  // Bound a long running turn once it passes the high-water mark; sliding on
+  // every append would make each delta a full tail replacement.
+  const ui = codexUiMessages(entry);
+  if (ui.length - entry.snapshotMessageOffset > CODEX_TAIL_HIGH_WATER) {
+    setCodexWindow(entry, ui.length - CODEX_TAIL_MESSAGES);
+  }
   if (message.role === "assistant") recordMessageCompletion(message, completedAt ?? Date.now());
   const file = entry.runtime.session.sessionFile;
   if (file) sessionSummaryIndex.invalidate(file);
@@ -601,14 +635,61 @@ function parseDraftConnectionId(value: string | null): string | undefined {
     : undefined;
 }
 
+/**
+ * Cursors we mint for the in-memory hydrated page look like `page:120`;
+ * app-server cursors are opaque strings. The prefix lets the history endpoint
+ * tell them apart without a second query parameter.
+ */
+function codexPageCursor(offset: number): string {
+  return CODEX_PAGE_CURSOR_PREFIX + String(offset);
+}
+
+function parseCodexPageCursor(cursor: string | null): number | null {
+  if (!cursor?.startsWith(CODEX_PAGE_CURSOR_PREFIX)) return null;
+  const value = Number(cursor.slice(CODEX_PAGE_CURSOR_PREFIX.length));
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function codexUiMessages(entry: SessionEntry): UIMessage[] {
+  if (!entry.codexUi) entry.codexUi = serializeMessages(entry.codexMessages);
+  return entry.codexUi;
+}
+
+/**
+ * Point the browser's fixed tail window at `offset` inside the hydrated page.
+ * Messages before the window stay reachable through `page:` cursors, and turns
+ * before the hydrated page through the app-server cursor.
+ */
+function setCodexWindow(entry: SessionEntry, offset: number): void {
+  entry.snapshotMessageOffset = offset;
+  if (offset > 0) {
+    entry.historyCursor = codexPageCursor(offset);
+    entry.historyHasMore = true;
+  } else {
+    entry.historyCursor = entry.codexStreamCursor;
+    entry.historyHasMore = entry.codexStreamCursor !== null;
+  }
+}
+
+/** Re-anchor the tail window to the last CODEX_TAIL_MESSAGES of the page. */
+function applyCodexTailWindow(entry: SessionEntry): void {
+  setCodexWindow(entry, Math.max(0, codexUiMessages(entry).length - CODEX_TAIL_MESSAGES));
+}
+
 /** Rebuild the browser's fixed tail window from the runtime's current leaf. */
 function refreshEntryFileState(entry: SessionEntry) {
   entry.externalDecoder = new AppendedJsonlDecoder();
   const file = entry.runtime.session.sessionFile;
   if (!file) {
-    entry.snapshotMessageOffset = 0;
-    entry.historyCursor = null;
-    entry.historyHasMore = false;
+    // Native Codex sessions have no Pi JSONL; their window is anchored to the
+    // hydrated app-server page, so re-anchor it instead of exposing everything.
+    if (entry.agent === "codex") {
+      applyCodexTailWindow(entry);
+    } else {
+      entry.snapshotMessageOffset = 0;
+      entry.historyCursor = null;
+      entry.historyHasMore = false;
+    }
     entry.lastFileStat = undefined;
     return;
   }
@@ -729,6 +810,8 @@ async function createEntry(
     codexNative: !!canonicalCodexThreadId,
     codexContext: null,
     codexMessages: agent === "codex" ? [...runtime.session.messages] : [],
+    codexUi: null,
+    codexStreamCursor: null,
     clients: new Set(),
     lastActive: Date.now(),
     // Only sessions opened with an explicit id are published immediately.
@@ -1084,7 +1167,9 @@ function buildSnapshot(entry: SessionEntry): UISnapshot {
           }
         : null;
   const cwd = entryCwd(entry);
-  const allMessages = serializeMessages(entryMessages(entry));
+  const allMessages = entry.agent === "codex"
+    ? codexUiMessages(entry)
+    : serializeMessages(entryMessages(entry));
   const messages = allMessages.slice(entry.snapshotMessageOffset);
   return {
     messages,
@@ -1239,12 +1324,12 @@ function handleCodexEvent(entry: SessionEntry, event: CodexSessionEvent): void {
   switch (event.type) {
     case "history": {
       entry.codexMessages = [...event.messages];
-      // The app-server cursor starts before the entire hydrated turn page.
-      // Keep that page intact; slicing inside it would make omitted messages
-      // unreachable from the cursor.
-      entry.snapshotMessageOffset = 0;
-      entry.historyCursor = event.cursor;
-      entry.historyHasMore = event.cursor !== null;
+      entry.codexUi = null;
+      // The hydrated page can be arbitrarily large, so browsers get a tail
+      // window; `page:` cursors walk the rest of the page and the app-server
+      // cursor (which starts before the whole page) continues past it.
+      entry.codexStreamCursor = event.cursor;
+      applyCodexTailWindow(entry);
       entry.activeTools.clear();
       for (const tool of event.activeTools) entry.activeTools.set(tool.toolCallId, tool.toolName);
       entry.codexAgentStarted = event.isStreaming;
@@ -2937,11 +3022,28 @@ const httpServer = createServer(async (req, res) => {
           const loaded = await acquireEntry(id);
           const cursor = url.searchParams.get("cursor");
           if (!cursor) {
+            // Mirror the snapshot contract: never more than the tail window.
             res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
             res.end(JSON.stringify({
-              messages: serializeMessages(loaded.codexMessages),
+              messages: codexUiMessages(loaded).slice(loaded.snapshotMessageOffset),
               cursor: loaded.historyCursor,
               hasMore: loaded.historyHasMore,
+            }));
+            return;
+          }
+          const pageOffset = parseCodexPageCursor(cursor);
+          if (pageOffset !== null) {
+            // Walk the hydrated page backwards, then hand over to the
+            // app-server cursor for turns older than the page.
+            const ui = codexUiMessages(loaded);
+            const end = Math.min(pageOffset, ui.length);
+            const from = Math.max(0, end - CODEX_PAGE_MESSAGES);
+            const next = from > 0 ? codexPageCursor(from) : loaded.codexStreamCursor;
+            res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+            res.end(JSON.stringify({
+              messages: ui.slice(from, end),
+              cursor: next,
+              hasMore: from > 0 || next !== null,
             }));
             return;
           }
