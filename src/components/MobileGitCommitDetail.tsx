@@ -1,9 +1,10 @@
-import { useEffect, useRef } from "react";
 import { useGitCommit } from "../lib/api";
 import { requestOpenFilesDrawer } from "../lib/drawer";
 import { useT } from "../lib/i18n";
+import { useMobileHistoryLayer } from "../lib/mobile-history-layer";
 import { GitCommitContent } from "./GitWorkspacePanel";
 import { LoadingIndicator } from "./LoadingIndicator";
+import { DismissActionIcon, NavigationActionIcon } from "./MorphIcons";
 
 export interface MobileGitCommitSelection {
   cwd: string;
@@ -20,23 +21,11 @@ export function MobileGitCommitDetail({
   onClose(): void;
 }) {
   const t = useT();
-  const historyLayerRef = useRef(false);
+  const closeHistoryLayer = useMobileHistoryLayer(onClose);
   const { data, isPending, isError } = useGitCommit(selection.cwd, selection.hash);
 
-  useEffect(() => {
-    history.pushState({ ...(history.state ?? {}), gitCommitDetail: true }, "");
-    historyLayerRef.current = true;
-    const handlePopState = () => {
-      historyLayerRef.current = false;
-      onClose();
-    };
-    window.addEventListener("popstate", handlePopState);
-    return () => window.removeEventListener("popstate", handlePopState);
-  }, [onClose]);
-
   const close = () => {
-    if (historyLayerRef.current && history.state?.gitCommitDetail) history.back();
-    else onClose();
+    closeHistoryLayer();
     requestAnimationFrame(() => selection.trigger?.focus());
   };
   const backToGit = () => {
@@ -54,7 +43,7 @@ export function MobileGitCommitDetail({
           aria-label={t("backToGit")}
           title={t("backToGit")}
         >
-          <span aria-hidden>‹</span>
+          <NavigationActionIcon direction="back" size={20} />
         </button>
         <div className="min-w-0 flex-1 px-2">
           <h2 className="truncate font-mono text-sm font-semibold text-accent" title={selection.hash}>{selection.hash.slice(0, 7)}</h2>
@@ -66,7 +55,7 @@ export function MobileGitCommitDetail({
           aria-label={t("closeCommit")}
           title={t("closeCommit")}
         >
-          <span aria-hidden>×</span>
+          <DismissActionIcon size={20} />
         </button>
       </header>
       <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-3 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">

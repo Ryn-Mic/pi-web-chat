@@ -172,26 +172,22 @@ function finalizeInfo(state: FileState): UISessionInfo {
   return info;
 }
 
-async function readRange(path: string, start: number, end: number): Promise<Buffer> {
-  if (end <= start) return Buffer.alloc(0);
-  const file = await open(path, "r");
+const SUMMARY_READ_CHUNK_BYTES = 256 * 1024;
+
+async function scanRange(state: FileState, start: number, end: number): Promise<void> {
+  if (end <= start) return;
+  const file = await open(state.path, "r");
   try {
-    const buffer = Buffer.allocUnsafe(end - start);
-    let bytesRead = 0;
-    while (bytesRead < buffer.length) {
-      const result = await file.read(
-        buffer,
-        bytesRead,
-        buffer.length - bytesRead,
-        start + bytesRead,
-      );
-      if (result.bytesRead === 0) break;
-      bytesRead += result.bytesRead;
+    const buffer = Buffer.allocUnsafe(Math.min(SUMMARY_READ_CHUNK_BYTES, end - start));
+    let position = start;
+    while (position < end) {
+      const { bytesRead } = await file.read(buffer, 0, Math.min(buffer.length, end - position), position);
+      if (bytesRead === 0) break;
+      applyChunk(state, buffer.subarray(0, bytesRead));
+      position += bytesRead;
     }
-    return buffer.subarray(0, bytesRead);
-  } finally {
-    await file.close();
-  }
+    state.scannedBytes = position;
+  } finally { await file.close(); }
 }
 
 async function mapBatches<T, R>(items: T[], worker: (item: T) => Promise<R>): Promise<R[]> {
@@ -205,6 +201,8 @@ async function mapBatches<T, R>(items: T[], worker: (item: T) => Promise<R>): Pr
 /** In-memory, append-aware index for JSONL files below the pi sessions directory. */
 export class SessionSummaryIndex {
   private readonly cache = new Map<string, FileState>();
+  private readonly inFlight = new Map<string, Promise<UISessionInfo | null>>();
+  private epoch = 0;
   private byId = new Map<string, string>();
 
   constructor(private readonly sessionsDir: string) {}
@@ -232,7 +230,18 @@ export class SessionSummaryIndex {
     return nested.flat();
   }
 
-  private async refreshFile(path: string): Promise<UISessionInfo | null> {
+  private refreshFile(path: string): Promise<UISessionInfo | null> {
+    const pending = this.inFlight.get(path);
+    if (pending) return pending;
+    const refresh = this.scanFile(path).finally(() => {
+      if (this.inFlight.get(path) === refresh) this.inFlight.delete(path);
+    });
+    this.inFlight.set(path, refresh);
+    return refresh;
+  }
+
+  private async scanFile(path: string): Promise<UISessionInfo | null> {
+    const epoch = this.epoch;
     let fileStat;
     try {
       fileStat = await stat(path);
@@ -255,8 +264,7 @@ export class SessionSummaryIndex {
       ? cached
       : createState(path, fileStat.ino, fileStat.size, fileStat.mtimeMs);
     const start = appendOnly ? state.scannedBytes : 0;
-    const chunk = await readRange(path, start, fileStat.size);
-    applyChunk(state, chunk);
+    await scanRange(state, start, fileStat.size);
     // The SDK also accepts a valid final JSON entry without a trailing newline.
     if (state.pending.trim()) {
       try {
@@ -269,8 +277,7 @@ export class SessionSummaryIndex {
     state.ino = fileStat.ino;
     state.size = fileStat.size;
     state.mtimeMs = fileStat.mtimeMs;
-    state.scannedBytes = fileStat.size;
-    this.cache.set(path, state);
+    if (epoch === this.epoch) this.cache.set(path, state);
     return state.headerSeen ? finalizeInfo(state) : null;
   }
 
@@ -307,6 +314,10 @@ export class SessionSummaryIndex {
   }
 
   invalidate(path?: string) {
+    this.epoch += 1;
+    // A new refresh must not reuse a scan started before invalidation.
+    if (path) this.inFlight.delete(path);
+    else this.inFlight.clear();
     if (path) {
       this.cache.delete(path);
       for (const [id, indexedPath] of this.byId) {

@@ -259,6 +259,14 @@ test("new manager can query and stop a verified pre-instance daemon", async () =
     assert.equal(existsSync(join(stateDir, "pi-web-chat.pid")), true);
     unlinkSync(join(stateDir, "pi-web-chat.instance"));
 
+    assert.deepEqual(JSON.parse(runManager(stateDir,
+      `process.stdout.write(JSON.stringify(manager.preflightRestart("${port}", "127.0.0.1")));`)), { ok: true });
+    const invalidTarget = JSON.parse(runManager(stateDir,
+      'process.stdout.write(JSON.stringify(manager.preflightRestart("65536", "127.0.0.1")));'));
+    assert.equal(invalidTarget.ok, false);
+    assert.equal(existsSync(join(stateDir, "pi-web-chat.pid")), true);
+    assert.equal(runManager(stateDir, "process.stdout.write(String(manager.readPid()));"), String(child.pid));
+
     const stopped = JSON.parse(
       runManager(
         stateDir,
@@ -311,6 +319,10 @@ test("readiness does not accept another live server's health response", async ()
   const stateDir = mkdtempSync(join(tmpdir(), "pi-web-other-state-"));
   const { child, port } = await spawnLegacyServer(root);
   try {
+    const preflight = JSON.parse(runManager(stateDir,
+      `process.stdout.write(JSON.stringify(manager.preflightRestart("${port}", "127.0.0.1")));`));
+    assert.equal(preflight.ok, false);
+    assert.match(preflight.error, /already in use by another process/);
     const result = JSON.parse(
       runManager(
         stateDir,

@@ -40,6 +40,8 @@ export type UIContentBlock =
   | { type: "image"; dataUrl?: string };
 
 export interface UIMessage {
+  /** Stable source identity across pagination, tool completion and reconnects. */
+  id?: string;
   role: "user" | "assistant" | "custom";
   content: UIContentBlock[];
   errorMessage?: string;
@@ -227,6 +229,8 @@ export interface UISnapshotDelta {
   revision: number;
   from: number;
   messages: UIMessage[];
+  /** The server moved the history boundary; discard pages from the old window. */
+  resetHistory?: boolean;
   snapshot: UISnapshotMetadata;
 }
 

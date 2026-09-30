@@ -52,6 +52,8 @@ export type Messages = {
   emptySession: string;
   messageCount: string;
   loadEarlierMessages: string;
+  historyLoadFailed: string;
+  requestCannotSend: string;
   noSavedSessions: string;
   noProject: string;
   sessionList: string;
@@ -274,6 +276,7 @@ export type Messages = {
   accessToken: string;
   accessTokenPlaceholder: string;
   twoFactorCode: string;
+  twoFactorSetupHint: string;
   logout: string;
 };
 
@@ -329,6 +332,8 @@ export const en: Messages = {
   emptySession: "(empty session)",
   messageCount: "{count} messages",
   loadEarlierMessages: "Load earlier messages",
+  historyLoadFailed: "Couldn't load earlier messages. Try again.",
+  requestCannotSend: "Couldn't send this request. Shorten the message or remove some attachments, then try again.",
   noSavedSessions: "No saved sessions",
   noProject: "No project",
   sessionList: "Session list",
@@ -543,5 +548,6 @@ export const en: Messages = {
   accessToken: "Access token",
   accessTokenPlaceholder: "Paste your access token",
   twoFactorCode: "2FA code (6 digits)",
+  twoFactorSetupHint: "First setup: add the secret from ~/.pi/web-chat/2fa.secret on the server to your authenticator.",
   logout: "Sign out",
 };

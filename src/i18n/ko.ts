@@ -52,6 +52,8 @@ export const ko: Messages = {
   emptySession: "(빈 세션)",
   messageCount: "메시지 {count}",
   loadEarlierMessages: "이전 메시지 불러오기",
+  historyLoadFailed: "이전 메시지를 불러오지 못했습니다. 다시 시도하세요.",
+  requestCannotSend: "요청을 보낼 수 없습니다. 메시지를 줄이거나 첨부 파일을 일부 삭제한 후 다시 시도하세요.",
   noSavedSessions: "저장된 세션 없음",
   noProject: "프로젝트 없음",
   sessionList: "세션 목록",
@@ -266,5 +268,6 @@ export const ko: Messages = {
   accessToken: "액세스 토큰",
   accessTokenPlaceholder: "액세스 토큰 붙여넣기",
   twoFactorCode: "2FA 코드 (6자리)",
+  twoFactorSetupHint: "최초 설정: 서버의 ~/.pi/web-chat/2fa.secret에 있는 비밀 키를 인증 앱에 추가하세요.",
   logout: "로그아웃",
 };

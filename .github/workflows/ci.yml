@@ -43,8 +43,14 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Install browser for regression tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser regressions
+        run: npm run test:e2e
+
       - name: Pack check
-        run: npm run pack:check
+        run: node scripts/check-pack-size.mjs
 
       - name: Inspect npm package
-        run: npm pack --dry-run
+        run: npm pack --dry-run --ignore-scripts

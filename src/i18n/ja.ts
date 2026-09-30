@@ -52,6 +52,8 @@ export const ja: Messages = {
   emptySession: "(空のセッション)",
   messageCount: "メッセージ {count}",
   loadEarlierMessages: "以前のメッセージを読み込む",
+  historyLoadFailed: "以前のメッセージを読み込めませんでした。再試行してください。",
+  requestCannotSend: "このリクエストを送信できません。メッセージを短くするか、添付ファイルを減らして再試行してください。",
   noSavedSessions: "保存されたセッションはありません",
   noProject: "プロジェクトなし",
   sessionList: "セッション一覧",
@@ -266,5 +268,6 @@ export const ja: Messages = {
   accessToken: "アクセストークン",
   accessTokenPlaceholder: "アクセストークンを貼り付け",
   twoFactorCode: "2FAコード (6桁)",
+  twoFactorSetupHint: "初回設定：サーバーの ~/.pi/web-chat/2fa.secret にある秘密鍵を認証アプリに追加してください。",
   logout: "ログアウト",
 };

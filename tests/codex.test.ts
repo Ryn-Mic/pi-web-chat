@@ -461,6 +461,14 @@ test("CodexSession resumes and hydrates initialTurnsPage in chronological order"
     assert.deepEqual(history.messages.map((message) => message.role), ["user", "assistant"]);
     assert.equal((history.messages[0]?.content as Array<{ text?: string }>)[0]?.text, "old question");
     assert.equal((history.messages[1]?.content as Array<{ text?: string }>)[0]?.text, "new answer");
+    process.notify("item/completed", {
+      threadId: "thr_saved",
+      item: { id: "assistant_new", type: "agentMessage", text: "new answer" },
+    });
+    await nextTask();
+    const completed = events.find((event) => event.type === "message" && event.message.role === "assistant");
+    assert.ok(completed && completed.type === "message");
+    assert.equal(completed.message.id, history.messages[1]?.id, "live and hydrated native items retain one identity");
     assert.equal(session.currentModel, "gpt-history");
     assert.equal(session.currentEffort, "high");
   } finally {

@@ -13,6 +13,7 @@ import { chatClient, type ActiveTool } from "../lib/chat";
 import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
 import { buildEditDiffFromArgs, isUnifiedDiff } from "../lib/diff";
 import { useT } from "../lib/i18n";
+import { messageKeys } from "../lib/message-identity";
 import { sameToolCallBlock, todoCallSummary, type ToolCallBlock } from "../lib/toolCall";
 import {
   formatTurnCompletedAt,
@@ -23,7 +24,7 @@ import { LoadingIndicator } from "./LoadingIndicator";
 import { AgentEyes } from "./AgentEyes";
 import { AgentIcon } from "./AgentIcon";
 import { DiffView } from "./DiffView";
-import { CopyActionIcon } from "./MorphIcons";
+import { CopyActionIcon, FolderTreeIcon, NavigationActionIcon, StarterPromptIcon } from "./MorphIcons";
 import {
   Markdown,
   PlainTextFileLinks,
@@ -496,10 +497,7 @@ function ReuseButton({ onClick }: { onClick: () => void }) {
       aria-label={t("reuseMessage")}
       title={t("reuseMessage")}
     >
-      <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2" aria-hidden>
-        <path d="M9 14 4 9l5-5" strokeLinecap="round" strokeLinejoin="round" />
-        <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
+      <NavigationActionIcon direction="reuse" size={14} />
     </button>
   );
 }
@@ -609,25 +607,25 @@ export function EmptyStateHero({ cwd, agent }: { cwd?: string; agent: UIAgentKin
   const t = useT();
   const starterPrompts = [
     {
-      icon: "🔍",
+      icon: "search" as const,
       title: t("starterTitleExplore"),
       desc: t("starterExploreCodebase"),
       prompt: t("starterExploreCodebase"),
     },
     {
-      icon: "🌿",
+      icon: "git" as const,
       title: t("starterTitleGit"),
       desc: t("starterReviewGit"),
       prompt: t("starterReviewGit"),
     },
     {
-      icon: "🧪",
+      icon: "tests" as const,
       title: t("starterTitleTests"),
       desc: t("starterWriteTests"),
       prompt: t("starterWriteTests"),
     },
     {
-      icon: "⚡",
+      icon: "performance" as const,
       title: t("starterTitlePerf"),
       desc: t("starterOptimizePerf"),
       prompt: t("starterOptimizePerf"),
@@ -657,21 +655,21 @@ export function EmptyStateHero({ cwd, agent }: { cwd?: string; agent: UIAgentKin
       </h2>
       {projectFolder && (
         <div className="mt-1.5 flex items-center gap-1.5 rounded-full border border-line bg-card/60 px-2.5 py-0.5 font-mono text-[11px] text-muted">
-          <span className="opacity-70">📁</span>
+          <FolderTreeIcon size={12} />
           <span className="truncate max-w-xs">{projectFolder}</span>
         </div>
       )}
 
       <div className="mt-6 grid w-full max-w-xl grid-cols-1 gap-2.5 sm:grid-cols-2 text-left">
-        {starterPrompts.map((item, i) => (
+        {starterPrompts.map((item) => (
           <button
-            key={i}
+            key={item.icon}
             type="button"
             onClick={() => handleSelectStarter(item.prompt)}
             className="group flex flex-col rounded-xl border border-line bg-card/70 p-3 transition-all hover:border-accent/40 hover:bg-hover hover:shadow-xs active:scale-[0.99]"
           >
             <div className="flex items-center gap-2">
-              <span className="text-base">{item.icon}</span>
+              <StarterPromptIcon kind={item.icon} />
               <span className="text-xs font-semibold text-ink group-hover:text-accent transition-colors">
                 {item.title}
               </span>
@@ -695,6 +693,7 @@ export function MessageList({
   isStreaming,
   historyHasMore,
   historyLoading,
+  historyError = false,
   onLoadOlder,
   containerRef,
   cwd,
@@ -709,6 +708,7 @@ export function MessageList({
   isStreaming: boolean;
   historyHasMore: boolean;
   historyLoading: boolean;
+  historyError?: boolean;
   onLoadOlder: () => Promise<boolean>;
   /** Scroll container (owned externally for message-anchor jumps) */
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -717,16 +717,23 @@ export function MessageList({
   onPreviewFile?: PreviewMessageFile;
 }) {
   const t = useT();
+  const keys = useMemo(() => messageKeys(messages), [messages]);
   const chatFontSize = useChatFontSize();
   const stickToBottom = useRef(true);
   const previousScrollHeight = useRef(0);
   const pendingBottomSnap = useRef(false);
   const bottomSnapBaseline = useRef(0);
   const touchStartY = useRef<number | null>(null);
+  const mounted = useRef(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const chatStyle = {
     "--chat-font-size": `${chatFontSizePixels(chatFontSize)}px`,
   } as CSSProperties;
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const loadOlder = async () => {
     const container = containerRef.current;
@@ -739,7 +746,9 @@ export function MessageList({
     if (!loaded) return;
     requestAnimationFrame(() => {
       const current = containerRef.current;
-      if (!current) return;
+      // A tab switch reuses containerRef for a different MessageList. Its late
+      // page belongs to the captured container, never the new active tab.
+      if (!mounted.current || !container || current !== container || !container.isConnected) return;
       current.scrollTop = previousTop + (current.scrollHeight - previousHeight);
       previousScrollHeight.current = current.scrollHeight;
     });
@@ -862,7 +871,8 @@ export function MessageList({
       >
         <div className="mx-auto flex min-w-0 max-w-3xl flex-col gap-4 px-3 py-4 sm:gap-5 sm:px-4 sm:py-5 min-h-full">
           {historyHasMore && (
-            <div className="flex justify-center">
+            <div className="flex flex-col items-center gap-2">
+              {historyError && <p role="status" className="text-xs text-red-500">{t("historyLoadFailed")}</p>}
               <button
                 type="button"
                 onClick={() => void loadOlder()}
@@ -879,7 +889,7 @@ export function MessageList({
           )}
           {messages.map((m, i) => (
             <Message
-              key={i}
+              key={keys[i]}
               message={m}
               index={m.role === "user" ? i : undefined}
               isTurnComplete={isAssistantTurnComplete(messages, i, isStreaming)}
@@ -921,9 +931,7 @@ export function MessageList({
           {isStreaming && (
             <span className="size-2 animate-pulse rounded-full bg-accent" aria-hidden />
           )}
-          <svg viewBox="0 0 24 24" className="size-3.5 fill-none stroke-current stroke-2" aria-hidden>
-            <path d="M12 5v14M19 12l-7 7-7-7" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          <NavigationActionIcon direction="down" size={14} />
           <span>{isStreaming ? t("generatingResponse") : t("scrollToBottom")}</span>
         </button>
       )}

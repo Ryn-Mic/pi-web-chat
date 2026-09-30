@@ -235,7 +235,7 @@ daemon 状态文件位于 `~/.pi/web-chat/`：
 - 访问令牌：`~/.pi/web-chat/token`
 - TOTP 密钥：`~/.pi/web-chat/2fa.secret`（默认启用）
 
-登录页会提供首次 TOTP 绑定二维码。除健康检查与认证入口外，聊天、会话、文件、Git 等业务 API 与 WebSocket 都需要登录；移动端预览使用短期 capability，文件与 Git 路由仅允许访问 Web Chat 已识别的项目根目录。
+首次使用时，在服务器本机打开 `~/.pi/web-chat/2fa.secret`，将密钥手动添加到认证器，再使用访问令牌和六位验证码登录。密钥文件权限为 `0600`；服务日志和 HTTP 接口不会输出令牌或第二因素密钥。除健康检查与认证入口外，聊天、会话、文件、Git 等业务 API 与 WebSocket 都需要登录；移动端预览使用短期 capability，文件与 Git 路由仅允许访问 Web Chat 已识别的项目根目录。
 
 > [!WARNING]
 > 应用自身不负责 TLS。局域网以外访问时，请使用 Caddy、nginx、Tailscale Serve 等可信反向代理或隧道终止 HTTPS。不要在公网明文 HTTP 上传输令牌或 TOTP 验证码。

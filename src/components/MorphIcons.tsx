@@ -2,6 +2,31 @@ import { useEffect, useState } from "react";
 import { MorphIcon } from "morphicons/react";
 import { MORPH_ICON_PATHS } from "../lib/morph-icons";
 
+/** Navigation and message actions share centralized paths and motion preferences. */
+export function NavigationActionIcon({
+  direction,
+  size = 16,
+  className = "",
+}: {
+  direction: "back" | "down" | "reuse";
+  size?: number;
+  className?: string;
+}) {
+  const path = direction === "back" ? "chevronLeft" : direction === "down" ? "arrowDown" : "reuse";
+  return (
+    <MorphIcon icon={MORPH_ICON_PATHS[path]} size={size} strokeWidth={2}
+      spring="snappy" reducedMotion="user" className={`shrink-0 ${className}`} aria-hidden focusable="false" />
+  );
+}
+
+export function StarterPromptIcon({ kind }: { kind: "search" | "git" | "tests" | "performance" }) {
+  const path = kind === "search" ? "search" : kind === "git" ? "gitBranch" : kind === "tests" ? "check" : "sparkle";
+  return (
+    <MorphIcon icon={MORPH_ICON_PATHS[path]} size={17} strokeWidth={1.8}
+      spring="snappy" reducedMotion="user" className="shrink-0 text-accent" aria-hidden focusable="false" />
+  );
+}
+
 /** Settings trigger icon that smoothly morphs between gear and close state */
 export function SettingsTriggerIcon({
   open = false,

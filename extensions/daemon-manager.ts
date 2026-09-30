@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
+import { isIP } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeAgentBinaryEnvironment } from "./agent-binaries.ts";
@@ -474,6 +475,9 @@ export function readPid(): number | null {
 }
 
 export function startServer(port: string, host: string, token?: string): StartResult {
+  const invalidTarget = validateLaunchTarget(port, host);
+  if (invalidTarget) return { ok: false, error: invalidTarget };
+  host = host.replace(/^\[|\]$/g, "");
   if (!existsSync(SERVER)) {
     return {
       ok: false,
@@ -580,10 +584,7 @@ function sleepSync(ms: number): void {
 
 /** Check whether something is already listening on the given host:port. */
 function isPortListening(port: string, host: string): boolean {
-  const target =
-    host === "0.0.0.0" || host === "::" || host === "[::]" || host === "localhost"
-      ? "127.0.0.1"
-      : host.replace(/^\[|\]$/g, "");
+  const target = probeHost(host);
   const script = `
 const net = require("net");
 const s = net.connect(Number(process.argv[1]), process.argv[2]);
@@ -599,6 +600,55 @@ s.setTimeout(800, () => { s.destroy(); process.exit(1); });
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Reject malformed launch arguments before any managed state can be changed. */
+export function validateLaunchTarget(port: string, host: string): string | undefined {
+  if (!/^\d+$/.test(port) || !Number.isSafeInteger(Number(port)) || Number(port) < 1 || Number(port) > 65535) {
+    return "port must be an integer between 1 and 65535";
+  }
+  const address = host.replace(/^\[|\]$/g, "");
+  if (!address || (isIP(address) === 0 && !/^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.?$/.test(address))) {
+    return "host must be an IP address or hostname";
+  }
+  if ((host.includes("[") || host.includes("]")) && !(host.startsWith("[") && host.endsWith("]") && isIP(address) === 6)) {
+    return "host must be an IP address or hostname";
+  }
+  return undefined;
+}
+
+/** A failed target preflight must leave the current daemon serving requests. */
+export function preflightRestart(port: string, host: string): { ok: true } | { ok: false; error: string } {
+  const invalidTarget = validateLaunchTarget(port, host);
+  if (invalidTarget) return { ok: false, error: invalidTarget };
+  if (!existsSync(SERVER)) return { ok: false, error: "build missing (dist/index.js); rebuild before restarting" };
+  const bindProbe = `
+const net = require("node:net");
+const server = net.createServer();
+server.once("error", error => { process.stdout.write(error.code || "BIND_FAILED"); process.exit(1); });
+server.listen({ port: Number(process.argv[1]), host: process.argv[2], exclusive: true }, () => server.close());
+`;
+  try {
+    execFileSync(process.execPath, ["-e", bindProbe, port, host.replace(/^\[|\]$/g, "")], {
+      encoding: "utf8", timeout: 3_000, stdio: ["ignore", "pipe", "ignore"],
+    });
+    return { ok: true };
+  } catch (error) {
+    const code = String((error as { stdout?: string }).stdout ?? "").trim();
+    if (code === "EADDRINUSE") {
+      const current = verifyManagedServer();
+      const listeners = pidsOnPort(port);
+      const health = readManagedHealth(port, host);
+      const targetPid = current?.instanceId
+        ? managedHealthPid(health, current.instanceId)
+        : current ? legacyManagedHealthPid(health, current.pid, listeners) : null;
+      if (current && targetPid === current.pid && listeners.length > 0 && listeners.every((pid) => pid === current.pid)) {
+        return { ok: true };
+      }
+      return { ok: false, error: `port ${port} is already in use by another process; current daemon was preserved` };
+    }
+    return { ok: false, error: `cannot bind ${urlFor(port, host)}${code ? ` (${code})` : ""}; current daemon was preserved` };
   }
 }
 
@@ -698,9 +748,8 @@ function isProcessAlive(pid: number): boolean {
 }
 
 function probeHost(host: string): string {
-  if (host === "0.0.0.0" || host === "::" || host === "[::]" || host === "localhost") {
-    return "127.0.0.1";
-  }
+  if (host === "0.0.0.0") return "127.0.0.1";
+  if (host === "::" || host === "[::]") return "::1";
   if (host.startsWith("[") && host.endsWith("]")) return host.slice(1, -1);
   return host;
 }
@@ -889,6 +938,12 @@ export function parseWebOptions(
     };
   }
 
+  if (action === "start" || action === "restart") {
+    const error = validateLaunchTarget(port, host);
+    if (error) return { error };
+    port = String(Number(port));
+    host = host.replace(/^\[|\]$/g, "");
+  }
   return { action, port, host, portExplicit, hostExplicit, token };
 }
 

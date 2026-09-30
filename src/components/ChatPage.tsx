@@ -110,6 +110,7 @@ export function ChatPage() {
     historicalMessages,
     historyHasMore,
     historyLoading,
+    historyError,
     streamText,
     streamThinking,
     streamThinkingComplete,
@@ -151,6 +152,8 @@ export function ChatPage() {
   const [newSessionBurst, setNewSessionBurst] = useState(0);
   const [mobilePreview, setMobilePreview] = useState<MobilePreviewSelection | null>(null);
   const [mobileGitCommit, setMobileGitCommit] = useState<MobileGitCommitSelection | null>(null);
+  const closeMobilePreview = useCallback(() => setMobilePreview(null), []);
+  const closeMobileGitCommit = useCallback(() => setMobileGitCommit(null), []);
 
   // URL → connection ("/" is a draft without an id yet; the server sends
   // session_bound on the first input)
@@ -336,12 +339,18 @@ export function ChatPage() {
               isStreaming={isStreaming}
               historyHasMore={historyHasMore}
               historyLoading={historyLoading}
+              historyError={historyError}
               onLoadOlder={() => chatClient.loadOlderMessages()}
               containerRef={messageListRef}
               cwd={snapshot?.cwd}
               agent={snapshot?.agent ?? getAgentPreference() ?? "pi"}
               onPreviewFile={previewMessageFile}
             />
+            {connection !== "connected" && (
+              <div role="status" className="shrink-0 border-t border-line bg-card px-4 py-2 text-xs text-muted">
+                {t("connectionLost")}
+              </div>
+            )}
             {(updateAvailable || serverRestartRequired) && (
               <div
                 role="status"
@@ -453,13 +462,13 @@ export function ChatPage() {
           selection={mobilePreview}
           theme={theme}
           locale={locale}
-          onClose={() => setMobilePreview(null)}
+          onClose={closeMobilePreview}
         />
       )}
       {mobileGitCommit && (
         <MobileGitCommitDetail
           selection={mobileGitCommit}
-          onClose={() => setMobileGitCommit(null)}
+          onClose={closeMobileGitCommit}
         />
       )}
     </div>

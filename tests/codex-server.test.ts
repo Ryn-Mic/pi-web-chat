@@ -851,6 +851,16 @@ lines.on("line", (line) => {
     else respond({ data: [pageTurn()], nextCursor: "older-turns" });
     return;
   }
+  if (message.method === "turn/start") {
+    const threadId = message.params?.threadId;
+    const turn = { id: "live-turn", status: "inProgress", items: [] };
+    respond({ turn });
+    setTimeout(() => {
+      process.stdout.write(JSON.stringify({ method: "turn/started", params: { threadId, turn } }) + "\\n");
+      for (let i = 0; i < 130; i += 1) process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId, item: { id: "live-" + i, type: "agentMessage", text: "live " + i } } }) + "\\n");
+    }, 5);
+    return;
+  }
   if (message.method === "model/list") { respond({ data: [], nextCursor: null }); return; }
   if (message.method === "remoteControl/status/read") { respond({ status: "disabled" }); return; }
   if (message.method === "thread/unsubscribe") { respond({}); return; }
@@ -916,16 +926,21 @@ lines.on("line", (line) => {
     // ones must stay behind a cursor instead of riding along with the snapshot.
     assert.equal(snapshot.messages.length, 120, "the tail window caps the first snapshot");
     assert.equal(snapshot.history?.hasMore, true);
-    assert.equal(snapshot.history?.cursor, "page:480");
+    assert.match(snapshot.history?.cursor ?? "", /^page:\d+:480$/);
     assert.equal(snapshotTexts[0], "m-480", "the snapshot carries the newest window");
     assert.equal(snapshotTexts.at(-1), "m-599");
 
     const historyUrl = `${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/history`;
+    assert.equal(new Set(snapshot.messages.map((message) => (message as { id?: string }).id)).size, snapshot.messages.length);
+    for (const [cursor, status] of [["page:bad", 400], ["page:0:480", 409]] as const) {
+      assert.equal((await fetch(`${historyUrl}?cursor=${cursor}`, { headers: authHeaders })).status, status);
+    }
+
     const withoutCursor = await fetch(historyUrl, { headers: authHeaders });
     assert.equal(withoutCursor.status, 200);
     const mirror = await withoutCursor.json() as PageShape;
     assert.equal(mirror.messages.length, 120, "a cursorless history read mirrors the tail window");
-    assert.equal(mirror.cursor, "page:480");
+    assert.equal(mirror.cursor, snapshot.history?.cursor);
 
     // Walk the cursor chain: the rest of the hydrated page, then the app-server
     // cursor for turns older than it.
@@ -958,6 +973,13 @@ lines.on("line", (line) => {
         ...Array.from({ length: PAGE_ITEMS }, (_, index) => `m-${String(index).padStart(3, "0")}`),
       ],
     );
+    ws.send(JSON.stringify({ type: "prompt", text: "grow the live window", requestId: "tail-slide" }));
+    const slide = await waitForEvent(events, (event) => event.type === "snapshot_delta" && (event.delta as { resetHistory?: boolean } | undefined)?.resetHistory === true);
+    const delta = slide.delta as { messages: unknown[]; snapshot: { history?: { cursor: string | null; hasMore: boolean } } };
+    assert.equal(delta.messages.length, 120, "a slide replaces the visible tail atomically");
+    assert.equal(delta.snapshot.history?.hasMore, true);
+    assert.notEqual(delta.snapshot.history?.cursor, snapshot.history?.cursor);
+
   } finally {
     ws?.terminate();
     await stopChild(child);

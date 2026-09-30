@@ -157,3 +157,21 @@ test("retains a torn tail until a later append completes it", async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("concurrent cold and append refreshes count entries exactly once", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-web-index-concurrent-"));
+  const file = sessionFile(root, "concurrent");
+  // Multiple chunks and UTF-8 text exercise decoder ownership while reads yield.
+  const entries = Array.from({ length: 2500 }, (_, i) => message(`m${i}`, null, "user", "中文".repeat(100), "2025-01-01T00:01:00.000Z"));
+  writeFileSync(file, line(header("concurrent")) + entries.map(line).join(""));
+  try {
+    const index = new SessionSummaryIndex(root);
+    const cold = await Promise.all(Array.from({ length: 20 }, () => index.list()));
+    assert.ok(cold.every((list) => list[0]?.messageCount === 2500));
+    appendFileSync(file, entries.slice(0, 100).map(line).join(""));
+    const appended = await Promise.all(Array.from({ length: 20 }, () => index.list()));
+    assert.ok(appended.every((list) => list[0]?.messageCount === 2600));
+    assert.equal((await index.list())[0]?.messageCount, 2600);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

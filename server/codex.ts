@@ -276,38 +276,41 @@ function userItemContent(item: Record<string, unknown>): Record<string, unknown>
 
 function itemMessages(item: Record<string, unknown>, timestamp?: number): Record<string, unknown>[] {
   const type = item.type;
+  const id = itemId(item);
   if (type === "userMessage") {
     const content = userItemContent(item);
-    return content.length ? [{ role: "user", content, timestamp }] : [];
+    return content.length ? [{ id, role: "user", content, timestamp }] : [];
   }
   if (type === "agentMessage") {
     const text = typeof item.text === "string" ? item.text : "";
-    return text ? [{ role: "assistant", content: [{ type: "text", text }], timestamp }] : [];
+    return text ? [{ id, role: "assistant", content: [{ type: "text", text }], timestamp }] : [];
   }
   if (type === "reasoning") {
     const summary = Array.isArray(item.summary) ? item.summary.filter((v): v is string => typeof v === "string") : [];
     const content = Array.isArray(item.content) ? item.content.filter((v): v is string => typeof v === "string") : [];
     const text = [...summary, ...content].filter(Boolean).join("\n");
-    return text ? [{ role: "assistant", content: [{ type: "thinking", thinking: text }], timestamp }] : [];
+    return text ? [{ id, role: "assistant", content: [{ type: "thinking", thinking: text }], timestamp }] : [];
   }
   if (type === "plan") {
     const text = typeof item.text === "string" ? item.text : "";
-    return text ? [{ role: "assistant", content: [{ type: "thinking", thinking: text }], timestamp }] : [];
+    return text ? [{ id, role: "assistant", content: [{ type: "thinking", thinking: text }], timestamp }] : [];
   }
   if (type === "enteredReviewMode" || type === "exitedReviewMode" || type === "contextCompaction") {
     const text = type === "contextCompaction" ? "Context compacted" : String(item.review ?? type);
-    return [{ role: "assistant", content: [{ type: "thinking", thinking: text }], timestamp }];
+    return [{ id, role: "assistant", content: [{ type: "thinking", thinking: text }], timestamp }];
   }
   const tool = itemTool(item);
   if (!tool) return [];
   const diff = type === "fileChange" ? fileChangeDiff(item) : "";
   return [
     {
+      id,
       role: "assistant",
       content: [{ type: "toolCall", id: tool.id, name: tool.name, arguments: tool.args }],
       timestamp,
     },
     {
+      id: `${id}:result`,
       role: "toolResult",
       toolCallId: tool.id,
       content: itemResultText(item),
@@ -1845,7 +1848,7 @@ export class CodexSession {
         this.lastAssistantTextValue = text;
         this.emitEvent({
           type: "message",
-          message: { role: "assistant", content: [{ type: "text", text }], timestamp: Date.now() },
+          message: { id, role: "assistant", content: [{ type: "text", text }], timestamp: Date.now() },
           ...(completedAt ? { completedAt } : {}),
         });
       }

@@ -25,7 +25,7 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { WebSocketServer, type WebSocket } from "ws";
-import QRCode from "qrcode";
+import { boundedPromptRequestId, CLIENT_COMMAND_MAX_BYTES, parseClientCommand } from "./client-command.ts";
 import type {
   ClientCommand,
   ServerEvent,
@@ -77,6 +77,7 @@ import {
   getActiveTodo,
   getOptimisticActiveTodo,
   recordMessageCompletion,
+  recordMessageIdentity,
   recordSessionMessageCompletions,
   serializeMessages,
 } from "./serialize.ts";
@@ -316,6 +317,7 @@ interface SessionEntry {
   codexUi: UIMessage[] | null;
   /** App-server cursor for turns older than the hydrated page (opaque). */
   codexStreamCursor: string | null;
+  codexHistoryGeneration: number;
   clients: Set<WebSocket>;
   unsubscribe?: () => void;
   lastActive: number;
@@ -556,16 +558,15 @@ function appendCodexMessage(entry: SessionEntry, message: Record<string, unknown
   if (!entry.codexNative) entry.runtime.session.sessionManager.appendMessage(message as never);
   entry.codexMessages.push(message);
   entry.codexUi = null;
+  if (message.role === "assistant") recordMessageCompletion(message, completedAt ?? Date.now());
   // Bound a long running turn once it passes the high-water mark; sliding on
   // every append would make each delta a full tail replacement.
   const ui = codexUiMessages(entry);
-  if (ui.length - entry.snapshotMessageOffset > CODEX_TAIL_HIGH_WATER) {
-    setCodexWindow(entry, ui.length - CODEX_TAIL_MESSAGES);
-  }
-  if (message.role === "assistant") recordMessageCompletion(message, completedAt ?? Date.now());
+  const resetHistory = ui.length - entry.snapshotMessageOffset > CODEX_TAIL_HIGH_WATER;
+  if (resetHistory) setCodexWindow(entry, ui.length - CODEX_TAIL_MESSAGES);
   const file = entry.runtime.session.sessionFile;
   if (file) sessionSummaryIndex.invalidate(file);
-  broadcastSnapshot(entry);
+  broadcastSnapshot(entry, undefined, resetHistory);
 }
 
 /**
@@ -636,18 +637,20 @@ function parseDraftConnectionId(value: string | null): string | undefined {
 }
 
 /**
- * Cursors we mint for the in-memory hydrated page look like `page:120`;
+ * Cursors we mint for the in-memory hydrated page look like `page:generation:120`;
  * app-server cursors are opaque strings. The prefix lets the history endpoint
  * tell them apart without a second query parameter.
  */
-function codexPageCursor(offset: number): string {
-  return CODEX_PAGE_CURSOR_PREFIX + String(offset);
+function codexPageCursor(entry: SessionEntry, offset: number): string {
+  return `${CODEX_PAGE_CURSOR_PREFIX}${entry.codexHistoryGeneration}:${offset}`;
 }
 
-function parseCodexPageCursor(cursor: string | null): number | null {
-  if (!cursor?.startsWith(CODEX_PAGE_CURSOR_PREFIX)) return null;
-  const value = Number(cursor.slice(CODEX_PAGE_CURSOR_PREFIX.length));
-  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+function parseCodexPageCursor(cursor: string | null): { generation: number; offset: number } | null {
+  const match = cursor?.match(/^page:(\d+):(\d+)$/);
+  if (!match) return null;
+  const generation = Number(match[1]);
+  const offset = Number(match[2]);
+  return Number.isSafeInteger(generation) && Number.isSafeInteger(offset) ? { generation, offset } : null;
 }
 
 function codexUiMessages(entry: SessionEntry): UIMessage[] {
@@ -663,7 +666,7 @@ function codexUiMessages(entry: SessionEntry): UIMessage[] {
 function setCodexWindow(entry: SessionEntry, offset: number): void {
   entry.snapshotMessageOffset = offset;
   if (offset > 0) {
-    entry.historyCursor = codexPageCursor(offset);
+    entry.historyCursor = codexPageCursor(entry, offset);
     entry.historyHasMore = true;
   } else {
     entry.historyCursor = entry.codexStreamCursor;
@@ -812,6 +815,7 @@ async function createEntry(
     codexMessages: agent === "codex" ? [...runtime.session.messages] : [],
     codexUi: null,
     codexStreamCursor: null,
+    codexHistoryGeneration: 0,
     clients: new Set(),
     lastActive: Date.now(),
     // Only sessions opened with an explicit id are published immediately.
@@ -1247,10 +1251,11 @@ function sendEventsSince(entry: SessionEntry, ws: WebSocket, afterSeq: number): 
  * cheap, including the tool-result case where one older assistant message is
  * rebuilt and everything before it remains shared.
  */
-function broadcastSnapshot(entry: SessionEntry, override?: Partial<UISnapshot>) {
+function broadcastSnapshot(entry: SessionEntry, override?: Partial<UISnapshot>, resetHistory = false) {
   const previous = entry.lastSnapshot ?? buildSnapshot(entry);
   const next = { ...buildSnapshot(entry), ...override };
   const delta = createSnapshotDelta(previous, next, entry.snapshotRevision);
+  if (resetHistory) delta.resetHistory = true;
   entry.snapshotRevision = delta.revision;
   entry.lastSnapshot = next;
   broadcastSessionEvent(entry, { type: "snapshot_delta", delta });
@@ -1323,18 +1328,25 @@ function handleCodexEvent(entry: SessionEntry, event: CodexSessionEvent): void {
   const broadcast = (payload: SessionEventPayload) => broadcastSessionEvent(entry, payload);
   switch (event.type) {
     case "history": {
+      const previousUi = codexUiMessages(entry);
+      const previousOffset = entry.snapshotMessageOffset;
       entry.codexMessages = [...event.messages];
       entry.codexUi = null;
       // The hydrated page can be arbitrarily large, so browsers get a tail
       // window; `page:` cursors walk the rest of the page and the app-server
       // cursor (which starts before the whole page) continues past it.
       entry.codexStreamCursor = event.cursor;
-      applyCodexTailWindow(entry);
+      const nextUi = codexUiMessages(entry);
+      const originChanged = previousUi.length === 0 || previousUi.some((message, index) => message.id !== nextUi[index]?.id);
+      if (event.reset || originChanged) entry.codexHistoryGeneration += 1;
+      if (event.reset || originChanged || nextUi.length - previousOffset > CODEX_TAIL_HIGH_WATER) applyCodexTailWindow(entry);
+      else setCodexWindow(entry, previousOffset);
+      const resetHistory = originChanged || previousOffset !== entry.snapshotMessageOffset;
       entry.activeTools.clear();
       for (const tool of event.activeTools) entry.activeTools.set(tool.toolCallId, tool.toolName);
       entry.codexAgentStarted = event.isStreaming;
       if (event.reset) broadcastFullSnapshotReset(entry);
-      else broadcastSnapshot(entry, { isStreaming: event.isStreaming });
+      else broadcastSnapshot(entry, { isStreaming: event.isStreaming }, resetHistory);
       break;
     }
     case "thread_ready": {
@@ -1846,10 +1858,19 @@ function bindSession(entry: SessionEntry) {
         }
         break;
       }
-      case "message_end":
+      case "message_end": {
         recordMessageCompletion(event.message);
-        broadcastSnapshot(entry);
+        // SDK listeners run before the JSONL entry is appended. Read its id
+        // after persistence so live and paginated messages share one identity.
+        queueMicrotask(() => {
+          const manager = entry.runtime.session.sessionManager;
+          const leafId = manager.getLeafId();
+          const leaf = leafId ? manager.getEntry(leafId) : undefined;
+          if (leaf?.type === "message" && leaf.message === event.message) recordMessageIdentity(event.message, `pi:${leaf.id}`);
+          broadcastSnapshot(entry);
+        });
         break;
+      }
       case "tool_execution_start": {
         entry.activeTools.set(event.toolCallId, event.toolName);
         const activeTodo =
@@ -1920,6 +1941,7 @@ async function handleCommand(cmd: ClientCommand, ws: WebSocket) {
     // otherwise a fast prompt can accidentally continue the source thread.
     await pendingFork.catch(() => {});
   }
+  if (!socketAuthenticated(ws)) return;
   const entry = wsEntry.get(ws);
   if (!entry) return;
   entry.lastActive = Date.now();
@@ -2673,23 +2695,23 @@ async function handleGitRequest(
   };
   try {
     if (req.method === "GET" && url.pathname === "/api/git/status") {
-      send(getGitStatus(cwd) satisfies UIGitStatus);
+      send(await getGitStatus(cwd) satisfies UIGitStatus);
       return true;
     }
     if (req.method === "GET" && url.pathname === "/api/git/branches") {
-      send(getGitBranches(cwd) satisfies UIGitBranch[]);
+      send(await getGitBranches(cwd) satisfies UIGitBranch[]);
       return true;
     }
     if (req.method === "GET" && url.pathname === "/api/git/log") {
-      send(getGitLog(cwd, Number(url.searchParams.get("limit") ?? "50")) satisfies UIGitCommit[]);
+      send(await getGitLog(cwd, Number(url.searchParams.get("limit") ?? "50")) satisfies UIGitCommit[]);
       return true;
     }
     if (req.method === "GET" && url.pathname === "/api/git/commit") {
-      send(getGitCommit(cwd, url.searchParams.get("hash") ?? "") satisfies UIGitCommitDetail);
+      send(await getGitCommit(cwd, url.searchParams.get("hash") ?? "") satisfies UIGitCommitDetail);
       return true;
     }
     if (req.method === "GET" && url.pathname === "/api/git/diff") {
-      send(getGitDiff(cwd, url.searchParams.get("path") ?? "", url.searchParams.get("staged") === "1") satisfies UIGitDiff);
+      send(await getGitDiff(cwd, url.searchParams.get("path") ?? "", url.searchParams.get("staged") === "1") satisfies UIGitDiff);
       return true;
     }
     if (req.method === "POST" && url.pathname === "/api/git/checkout") {
@@ -2701,16 +2723,16 @@ async function handleGitRequest(
         res.end(JSON.stringify({ error: "invalid JSON body", code: "invalid" }));
         return true;
       }
-      if (typeof body.branch !== "string") {
+      if (!body || typeof body !== "object" || typeof body.branch !== "string") {
         res.writeHead(400, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "branch is required", code: "invalid" }));
         return true;
       }
-      const status = checkoutGitBranch(cwd, body.branch) satisfies UIGitStatus;
-      gitBranchCache.delete(cwd);
-      gitBranchCache.delete(status.root);
+      const status = await checkoutGitBranch(cwd, body.branch) satisfies UIGitStatus;
+      gitBranchCache.clear();
       for (const entry of entries.values()) {
-        if (resolve(entry.runtime.cwd) === resolve(cwd)) broadcastSnapshot(entry);
+        const withinRoot = relative(status.root, entryCwd(entry));
+        if (withinRoot !== ".." && !withinRoot.startsWith("../") && !withinRoot.startsWith("/")) broadcastSnapshot(entry);
       }
       send(status);
       return true;
@@ -2753,6 +2775,10 @@ async function handleAuthRequest(
       sendJson(400, { error: "invalid JSON body" });
       return;
     }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      sendJson(400, { error: "invalid JSON body" });
+      return;
+    }
     const token = typeof body.token === "string" ? body.token : "";
     const totp = typeof body.totp === "string" ? body.totp : undefined;
     const result = auth.login(token, totp);
@@ -2775,26 +2801,13 @@ async function handleAuthRequest(
     return;
   }
 
-  // 2FA secret/QR re-fetch — needs the raw token (enrolling an authenticator app locally)
+  // Pair only on the server itself; neither factor may disclose the other.
   if (url.pathname === "/api/auth/setup" && req.method === "GET") {
-    const rawToken = url.searchParams.get("token") ?? "";
-    if (!auth.verifyRawToken(rawToken)) {
-      sendJson(401, { error: "invalid token" });
+    if (!auth.validSession(sessionTokenFromRequest(req))) {
+      sendJson(401, { error: "authentication required" });
       return;
     }
-    const otpauth = auth.otpauthUrl();
-    let qr = "";
-    try {
-      qr = await QRCode.toDataURL(otpauth, { width: 220, margin: 1 });
-    } catch {
-      /* return the otpauth URL even if QR generation fails */
-    }
-    sendJson(200, {
-      twoFactorEnabled: auth.twoFactorEnabled,
-      secret: auth.totpSecret,
-      otpauthUrl: otpauth,
-      qr,
-    });
+    sendJson(410, { error: "Set up your authenticator using the local ~/.pi/web-chat/2fa.secret file on the server." });
     return;
   }
 
@@ -3031,14 +3044,24 @@ const httpServer = createServer(async (req, res) => {
             }));
             return;
           }
-          const pageOffset = parseCodexPageCursor(cursor);
-          if (pageOffset !== null) {
+          const pageCursor = parseCodexPageCursor(cursor);
+          if (cursor.startsWith(CODEX_PAGE_CURSOR_PREFIX) && !pageCursor) {
+            res.writeHead(400, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: "invalid history cursor" }));
+            return;
+          }
+          if (pageCursor !== null) {
+            if (pageCursor.generation !== loaded.codexHistoryGeneration) {
+              res.writeHead(409, { "content-type": "application/json" });
+              res.end(JSON.stringify({ error: "history changed; reload the current snapshot" }));
+              return;
+            }
             // Walk the hydrated page backwards, then hand over to the
             // app-server cursor for turns older than the page.
             const ui = codexUiMessages(loaded);
-            const end = Math.min(pageOffset, ui.length);
+            const end = Math.min(pageCursor.offset, ui.length);
             const from = Math.max(0, end - CODEX_PAGE_MESSAGES);
-            const next = from > 0 ? codexPageCursor(from) : loaded.codexStreamCursor;
+            const next = from > 0 ? codexPageCursor(loaded, from) : loaded.codexStreamCursor;
             res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
             res.end(JSON.stringify({
               messages: ui.slice(from, end),
@@ -3485,7 +3508,22 @@ const httpServer = createServer(async (req, res) => {
   }
 });
 
-const wss = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({ noServer: true, maxPayload: CLIENT_COMMAND_MAX_BYTES });
+const socketSessionTokens = new Map<WebSocket, string>();
+auth.onSessionRevoked((token) => {
+  previewContextStore.deleteBySessionToken(token);
+  for (const [socket, sessionToken] of socketSessionTokens) {
+    if (sessionToken === token) socket.close(1008, "Session expired or signed out");
+  }
+});
+
+function socketAuthenticated(ws: WebSocket, touch = true): boolean {
+  if (ws.readyState !== ws.OPEN) return false;
+  const token = socketSessionTokens.get(ws) ?? "";
+  const valid = touch ? auth.validSession(token) : auth.isSessionValid(token);
+  if (!valid) ws.close(1008, "Session expired or signed out");
+  return valid;
+}
 
 // Heartbeat: browsers auto-pong server pings at the WebSocket layer, so a
 // socket that misses pongs is provably dead at the protocol level. Without it,
@@ -3495,6 +3533,7 @@ const wss = new WebSocketServer({ noServer: true });
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const wssHeartbeat = setInterval(() => {
   for (const client of wss.clients) {
+    if (!socketAuthenticated(client, false)) continue;
     const alive = (client as WebSocket & { isAlive?: boolean }).isAlive;
     if (!alive) {
       client.terminate();
@@ -3528,6 +3567,9 @@ wss.on("connection", (ws, req) => {
     (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
   });
   const query = new URL(req.url ?? "/ws", "http://localhost").searchParams;
+  socketSessionTokens.set(ws, query.get("token") ?? "");
+  // Protocol errors (oversized or invalid frames) belong to this socket.
+  ws.on("error", () => ws.close());
   const requested = query.get("session");
   const cwd = query.get("cwd") ?? undefined;
   const requestedAgent = parseAgentKind(query.get("agent"));
@@ -3541,25 +3583,31 @@ wss.on("connection", (ws, req) => {
   const queue: ClientCommand[] = [];
   let ready = false;
 
-  ws.on("message", (raw) => {
-    let cmd: ClientCommand;
-    try {
-      cmd = JSON.parse(raw.toString());
-    } catch {
-      return;
-    }
-    // Commands arriving before the session bind is complete are queued briefly
-    if (!ready) {
-      queue.push(cmd);
-      return;
-    }
+  const dispatch = (cmd: ClientCommand) => {
     handleCommand(cmd, ws).catch((err) => {
+      if (ws.readyState !== ws.OPEN) return;
       sendTo(ws, {
         type: "error",
         message: String(err instanceof Error ? err.message : err),
         requestId: cmd.type === "prompt" ? cmd.requestId : undefined,
       });
     });
+  };
+  ws.on("message", (raw) => {
+    if (!socketAuthenticated(ws)) return;
+    let cmd: ClientCommand | null = null;
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw.toString()); cmd = parseClientCommand(parsed); } catch { /* invalid JSON */ }
+    if (!cmd) {
+      sendTo(ws, { type: "error", message: "Invalid command", requestId: boundedPromptRequestId(parsed) });
+      return;
+    }
+    if (!ready) {
+      if (queue.length >= 64) { ws.close(1008, "Too many pending commands"); return; }
+      queue.push(cmd);
+      return;
+    }
+    dispatch(cmd);
   });
 
   let preloaded = false;
@@ -3569,7 +3617,7 @@ wss.on("connection", (ws, req) => {
     // reconstructs the full agent context in the background.
     if (requested && !nativeCodexThreadId(requested) && !entries.has(requested)) {
       const path = await resolveSessionPath(requested);
-      if (path && ws.readyState === ws.OPEN) {
+      if (path && socketAuthenticated(ws, false)) {
         try {
           const page = readSessionHistoryPage(path);
           sendTo(ws, { type: "session_bound", sessionId: requested });
@@ -3598,6 +3646,7 @@ wss.on("connection", (ws, req) => {
       }
     }
     const safeCwd = requested ? undefined : await authorizedSessionCwd(cwd);
+    if (!socketAuthenticated(ws, false)) throw new Error("authentication required");
     return acquireEntry(requested, safeCwd, requestedAgent, requestedDraft);
   };
 
@@ -3634,7 +3683,7 @@ wss.on("connection", (ws, req) => {
       }
       return;
     }
-    if (ws.readyState !== ws.OPEN) return;
+    if (!socketAuthenticated(ws, false)) return;
     if (bindTimer !== null) {
       clearTimeout(bindTimer);
       bindTimer = null;
@@ -3654,19 +3703,13 @@ wss.on("connection", (ws, req) => {
     else sendEventsSince(entry, ws, since);
     sendCommandCatalog(entry, ws);
     ready = true;
-    for (const cmd of queue.splice(0)) {
-      handleCommand(cmd, ws).catch((err) => {
-        sendTo(ws, {
-          type: "error",
-          message: String(err instanceof Error ? err.message : err),
-          requestId: cmd.type === "prompt" ? cmd.requestId : undefined,
-        });
-      });
-    }
+    for (const cmd of queue.splice(0)) dispatch(cmd);
   };
   void bindSession();
 
   ws.on("close", () => {
+    socketSessionTokens.delete(ws);
+    queue.length = 0;
     if (bindTimer !== null) {
       clearTimeout(bindTimer);
       bindTimer = null;
@@ -3721,13 +3764,13 @@ httpServer.listen(PORT, HOST, () => {
     /* state files are auxiliary — the server still works without them */
   }
   if (auth.twoFactorEnabled) {
-    console.log(`pi-web-chat auth: access token = ${auth.token}  (file: ${authStartupInfo().tokenFile})`);
+    console.log(`pi-web-chat auth: access token file: ${authStartupInfo().tokenFile}`);
     console.log(`pi-web-chat auth: 2FA(TOTP) enabled — secret: ${authStartupInfo().secretFile}`);
     console.log(
       `pi-web-chat auth: login needs the token + a 2FA code from your authenticator app`,
     );
   } else {
-    console.log(`pi-web-chat auth: 2FA disabled (PI_WEB_2FA=off), access token = ${auth.token}`);
+    console.log(`pi-web-chat auth: 2FA disabled (PI_WEB_2FA=off), access token file: ${authStartupInfo().tokenFile}`);
   }
 
   // The Codex thread catalog is slow to build from rollout files (seconds on a

@@ -7,9 +7,11 @@ import {
 } from "../lib/file-preview-frame";
 import { useT, type Locale } from "../lib/i18n";
 import { requestOpenFilesDrawer } from "../lib/drawer";
+import { useMobileHistoryLayer } from "../lib/mobile-history-layer";
 import type { Theme } from "../lib/theme";
 import type { PreviewFileSelection } from "./FileTreePanel";
 import { LoadingIndicator } from "./LoadingIndicator";
+import { DismissActionIcon, NavigationActionIcon } from "./MorphIcons";
 
 export interface MobilePreviewSelection extends PreviewFileSelection {
   trigger?: HTMLElement | null;
@@ -28,23 +30,14 @@ export function MobileFilePreview({
 }) {
   const t = useT();
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const historyLayerRef = useRef(false);
+  const closeHistoryLayer = useMobileHistoryLayer(onClose);
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState<PreviewFrameErrorCode | null>(null);
 
   useEffect(() => {
-    history.pushState({ ...(history.state ?? {}), filePreview: true }, "");
-    historyLayerRef.current = true;
-    const handlePopState = () => {
-      historyLayerRef.current = false;
-      onClose();
-    };
-    window.addEventListener("popstate", handlePopState);
-    return () => window.removeEventListener("popstate", handlePopState);
-  }, [onClose]);
-
-  useEffect(() => {
     const controller = new AbortController();
+    setSrc(null);
+    setError(null);
     void fetch("/api/files/preview-context", {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders() },
@@ -80,8 +73,7 @@ export function MobileFilePreview({
   }, []);
 
   const close = () => {
-    if (historyLayerRef.current && history.state?.filePreview) history.back();
-    else onClose();
+    closeHistoryLayer();
     requestAnimationFrame(() => selection.trigger?.focus());
   };
   const backToFiles = () => {
@@ -99,7 +91,7 @@ export function MobileFilePreview({
           aria-label={t("backToFiles")}
           title={t("backToFiles")}
         >
-          <span aria-hidden>‹</span>
+          <NavigationActionIcon direction="back" size={20} />
         </button>
         <div className="min-w-0 flex-1 truncate px-2 text-sm font-medium text-ink" title={selection.path}>
           {selection.name}
@@ -111,13 +103,13 @@ export function MobileFilePreview({
           aria-label={t("closePreview")}
           title={t("closePreview")}
         >
-          <span aria-hidden>×</span>
+          <DismissActionIcon size={20} />
         </button>
       </header>
       <div className="min-h-0 flex-1 pb-[env(safe-area-inset-bottom)]">
         {error ? (
           <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted">
-            Preview unavailable: {error}
+            {t("filePreviewFailed", { name: selection.name })}
           </div>
         ) : src ? (
           <iframe

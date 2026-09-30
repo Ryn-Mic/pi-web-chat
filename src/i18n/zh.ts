@@ -53,6 +53,8 @@ export const zh: Messages = {
   emptySession: "（空会话）",
   messageCount: "{count} 条消息",
   loadEarlierMessages: "加载更早消息",
+  historyLoadFailed: "更早消息加载失败，请重试。",
+  requestCannotSend: "无法发送此请求，请缩短消息或移除部分附件后重试。",
   noSavedSessions: "没有已保存的会话",
   noProject: "无项目",
   sessionList: "会话列表",
@@ -265,5 +267,6 @@ export const zh: Messages = {
   accessToken: "访问令牌",
   accessTokenPlaceholder: "粘贴访问令牌",
   twoFactorCode: "2FA 验证码（6 位）",
+  twoFactorSetupHint: "首次使用：在服务器本机将 ~/.pi/web-chat/2fa.secret 中的密钥添加到认证器。",
   logout: "退出登录",
 };

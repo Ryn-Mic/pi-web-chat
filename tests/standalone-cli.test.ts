@@ -31,6 +31,7 @@ function daemonDefaults(): Partial<StandaloneCliDependencies> {
     readManagedServerStatus: () => null,
     describeServer: (port, host, pid) => `http://${host}:${port} (pid ${pid})`,
     resolveLaunchTarget: (parsed) => ({ port: parsed.port, host: parsed.host }),
+    preflightRestart: () => ({ ok: true }),
     startServer: (port, host) => ({
       ok: true,
       port,
@@ -152,6 +153,46 @@ test("standalone managed restart requires an explicit port before stopping", () 
   assert.equal(runStandaloneCli(["restart"], deps, captured.io), 1);
   assert.match(captured.errors.join("\n"), /pi-web-chat 3141 restart/);
   assert.equal(stops, 0);
+});
+
+test("standalone restart rejects invalid ports and hosts before stopping", () => {
+  let stops = 0;
+  let preflights = 0;
+  const deps = {
+    ...daemonDefaults(),
+    preflightRestart: () => { preflights++; return { ok: true as const }; },
+    stopServer: () => { stops++; return { stopped: true as const, pid: 42 }; },
+  };
+  for (const argv of [["0", "restart"], ["65536", "restart"], ["3141", "restart", "--host", "http://localhost"]]) {
+    assert.equal(runStandaloneCli(argv, deps, captureIO().io), 1);
+  }
+  assert.equal(stops, 0);
+  assert.equal(preflights, 0);
+});
+
+test("standalone restart preflights the preserved bind before stop", () => {
+  const actions: string[] = [];
+  const captured = captureIO();
+  const deps = {
+    ...daemonDefaults(),
+    resolveLaunchTarget: () => ({ port: "3242", host: "0.0.0.0" }),
+    preflightRestart: (port: string, host: string) => {
+      actions.push(`preflight ${host}:${port}`);
+      return { ok: false as const, error: "port occupied" };
+    },
+    stopServer: () => { actions.push("stop"); return { stopped: true as const, pid: 42 }; },
+    startServer: () => { actions.push("start"); return { ok: false as const, error: "unexpected start" }; },
+  };
+  assert.equal(runStandaloneCli(["3242", "restart"], deps, captured.io), 1);
+  assert.deepEqual(actions, ["preflight 0.0.0.0:3242"]);
+  assert.match(captured.errors.join("\n"), /port occupied/);
+});
+
+test("standalone token rotation reports its protected file without exposing the token", () => {
+  const captured = captureIO();
+  assert.equal(runStandaloneCli(["rftoken"], daemonDefaults(), captured.io), 0);
+  assert.match(captured.out.join("\n"), /stored in \/tmp\/pi-web-chat-token/);
+  assert.doesNotMatch(captured.out.join("\n"), /new-token/);
 });
 
 test("standalone restart preserves the previous host resolved before state cleanup", () => {

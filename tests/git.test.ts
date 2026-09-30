@@ -10,6 +10,7 @@ import {
   getGitBranches,
   getGitCommit,
   getGitLog,
+  getGitDiff,
   getGitStatus,
   GitCommandError,
   parseGitStatus,
@@ -50,25 +51,25 @@ test("parseGitStatus handles branch header and staged, changed, untracked files"
   assert.deepEqual(status.untracked.map((file) => file.path), ["new.txt"]);
 });
 
-test("git status, branches, log and commit detail use structured repository data", () => {
+test("git status, branches, log and commit detail use structured repository data", async () => {
   fixture();
-  const status = getGitStatus(root);
+  const status = await getGitStatus(root);
   assert.equal(status.branch, "feature/test");
   assert.equal(status.isDirty, true);
   assert.deepEqual(status.untracked.map((file) => file.path), ["untracked.txt"]);
-  assert.deepEqual(getGitBranches(root).map((branch) => branch.name), ["feature/test", "main"]);
-  const log = getGitLog(root);
+  assert.deepEqual((await getGitBranches(root)).map((branch) => branch.name), ["feature/test", "main"]);
+  const log = await getGitLog(root);
   assert.equal(log[0]?.subject, "initial commit");
-  const detail = getGitCommit(root, log[0]!.hash);
+  const detail = await getGitCommit(root, log[0]!.hash);
   assert.equal(detail.files[0]?.path, "README.md");
 });
 
-test("checkout refuses dirty worktrees and switches clean local branches", () => {
+test("checkout refuses dirty worktrees and switches clean local branches", async () => {
   fixture();
-  assert.throws(() => checkoutGitBranch(root, "main"), (error: unknown) => error instanceof GitCommandError && error.code === "invalid");
+  await assert.rejects(() => checkoutGitBranch(root, "main"), (error: unknown) => error instanceof GitCommandError && error.code === "invalid");
   rmSync(join(root, "untracked.txt"));
   git("restore", "README.md");
-  const status = checkoutGitBranch(root, "main");
+  const status = await checkoutGitBranch(root, "main");
   assert.equal(status.branch, "main");
 });
 
@@ -83,8 +84,50 @@ test("commit diff splits into file-sized patches and timestamps use yy/m/d", () 
   );
 });
 
-test("git root rejects a non-repository", () => {
+test("git root rejects a non-repository", async () => {
   root = mkdtempSync(join(tmpdir(), "pi-not-git-"));
   mkdirSync(join(root, "nested"));
-  assert.throws(() => assertGitRoot(join(root, "nested")), (error: unknown) => error instanceof GitCommandError && error.code === "not-repository");
+  await assert.rejects(() => assertGitRoot(join(root, "nested")), (error: unknown) => error instanceof GitCommandError && error.code === "not-repository");
+});
+
+
+test("subdirectory paths round-trip through status, diff and commit details", async () => {
+  fixture();
+  const nested = join(root, "app");
+  mkdirSync(nested);
+  writeFileSync(join(nested, "nested.txt"), "before\n");
+  git("add", "app/nested.txt");
+  git("commit", "-qm", "nested file");
+  writeFileSync(join(nested, "nested.txt"), "after\n");
+  const status = await getGitStatus(nested);
+  assert.deepEqual(status.unstaged.map((file) => file.path), ["nested.txt"]);
+  assert.match((await getGitDiff(nested, status.unstaged[0]!.path)).diff, /\+after/);
+  const detail = await getGitCommit(nested, git("rev-parse", "HEAD").trim());
+  assert.deepEqual(detail.files.map((file) => file.path), ["nested.txt"]);
+  assert.doesNotMatch(detail.diff, /diff --git a\/README/);
+  await assert.rejects(() => getGitDiff(nested, "../README.md"), GitCommandError);
+  assert.equal((await getGitDiff(nested, ":(top)README.md")).diff, "", "pathspec syntax cannot escape the session cwd");
+});
+
+test("commit file names preserve tabs and newlines", async () => {
+  fixture();
+  const name = "tab\tline\n.txt";
+  writeFileSync(join(root, name), "content\n");
+  git("add", name);
+  git("commit", "-qm", "unusual file name");
+  const detail = await getGitCommit(root, git("rev-parse", "HEAD").trim());
+  assert.equal(detail.files[0]?.path, name);
+});
+
+
+test("partially staged paths are normalized once", async () => {
+  fixture();
+  const nested = join(root, "app");
+  mkdirSync(nested);
+  writeFileSync(join(nested, "partial.txt"), "staged\n");
+  git("add", "app/partial.txt");
+  writeFileSync(join(nested, "partial.txt"), "unstaged\n");
+  const status = await getGitStatus(nested);
+  assert.equal(status.staged[0]?.path, "partial.txt");
+  assert.equal(status.unstaged[0]?.path, "partial.txt");
 });
