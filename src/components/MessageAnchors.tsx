@@ -3,19 +3,15 @@ import { createPortal } from "react-dom";
 import type { UIMessage, UIMessageAnchor } from "../../shared/protocol";
 import { setModalOverlayOpen } from "../lib/drawer";
 import { localeTag, useLocale, useT } from "../lib/i18n";
-import { computeVisibleTicks, firstLoadedUserOrdinal, messageIndexForUserOrdinal, viewportUserOrdinal } from "../lib/message-anchors";
+import { computeVisibleTicks, firstLoadedUserOrdinal, messageIndexForUserOrdinal, TAIL_EPSILON_PX, viewportUserOrdinal } from "../lib/message-anchors";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { DismissActionIcon } from "./MorphIcons";
 
-function relativeAge(timestamp: number, locale: ReturnType<typeof useLocale>): string {
+function relativeAge(timestamp: number, formatter: Intl.RelativeTimeFormat): string {
   const age = Math.max(0, Date.now() - timestamp);
   const minute = 60_000;
   const hour = 60 * minute;
   const day = 24 * hour;
-  const formatter = new Intl.RelativeTimeFormat(localeTag(locale), {
-    numeric: "always",
-    style: "short",
-  });
 
   if (age < hour) return formatter.format(-Math.max(1, Math.floor(age / minute)), "minute");
   if (age < day) return formatter.format(-Math.floor(age / hour), "hour");
@@ -83,6 +79,10 @@ export function MessageTimelineTicks({
 }: MessageTimelineTicksProps) {
   const t = useT();
   const locale = useLocale();
+  const relativeFormatter = useMemo(
+    () => new Intl.RelativeTimeFormat(localeTag(locale), { numeric: "always", style: "short" }),
+    [locale],
+  );
   const rootRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
@@ -96,6 +96,8 @@ export function MessageTimelineTicks({
 
   const requestVersion = useRef(0);
   const autoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Loaded user-message count the current anchor index was read against. */
+  const indexedUserCountRef = useRef<number | null>(null);
 
   // Dragging / Scrubbing state
   const isScrubbingRef = useRef(false);
@@ -132,6 +134,30 @@ export function MessageTimelineTicks({
     (ordinal: number) => userEntries[ordinal - firstLoadedOrdinal] ?? null,
     [firstLoadedOrdinal, userEntries],
   );
+
+  /**
+   * Rendered user bubbles keyed by transcript index. The nodes are stable for as
+   * long as their message stays mounted, so the map is rebuilt when the loaded
+   * page changes instead of running a `querySelector` per entry on every scroll
+   * frame. A detached first node means the map outlived its DOM and is rebuilt.
+   */
+  const userNodeMapRef = useRef<{ map: Map<number, HTMLElement>; first: HTMLElement } | null>(null);
+  const userNodes = useCallback((): Map<number, HTMLElement> | null => {
+    const container = containerRef.current;
+    if (!container) return null;
+    const cached = userNodeMapRef.current;
+    if (cached && cached.map.size === userEntries.length && cached.first.isConnected) {
+      return cached.map;
+    }
+    const map = new Map<number, HTMLElement>();
+    for (const el of container.querySelectorAll<HTMLElement>("[data-msg-index]")) {
+      const index = Number(el.dataset.msgIndex);
+      if (Number.isSafeInteger(index) && !map.has(index)) map.set(index, el);
+    }
+    if (map.size === 0) return null;
+    userNodeMapRef.current = { map, first: map.values().next().value! };
+    return map;
+  }, [containerRef, userEntries.length]);
 
   // Initialize current visible ordinal to latest user message when available
   const [currentVisibleOrdinal, setCurrentVisibleOrdinal] = useState<number>(() => {
@@ -176,8 +202,11 @@ export function MessageTimelineTicks({
     setPendingOrdinal(null);
     setLoadFailed(false);
     setFailedAnchor(null);
+    indexedUserCountRef.current = null;
     clearTimer();
-  }, [sessionId, clearTimer, userEntries]);
+    // Only a session switch resets the widget. A new message must not collapse an
+    // open flyout or throw away the anchor index that is still valid for it.
+  }, [sessionId, clearTimer]);
 
   useEffect(() => {
     if (hide) {
@@ -215,16 +244,20 @@ export function MessageTimelineTicks({
     if (!container || userEntries.length === 0) return;
 
     // 1. Viewport pinned to the end: the newest question is authoritative.
-    const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 60;
+    const isAtBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight <= TAIL_EPSILON_PX;
     if (isAtBottom) {
       setCurrentVisibleOrdinal(totalUserCount);
       return;
     }
 
+    const nodes = userNodes();
+    if (!nodes) return;
+
     const containerTop = container.getBoundingClientRect().top;
     const offsets: { ordinal: number; top: number }[] = [];
     for (const entry of userEntries) {
-      const el = container.querySelector<HTMLElement>(`[data-msg-index="${entry.index}"]`);
+      const el = nodes.get(entry.index);
       if (!el) continue;
       const rect = el.getBoundingClientRect();
       // A collapsed/hidden message has a zero rect and no reading position.
@@ -233,7 +266,7 @@ export function MessageTimelineTicks({
     }
 
     setCurrentVisibleOrdinal(viewportUserOrdinal(offsets) ?? firstLoadedOrdinal);
-  }, [containerRef, firstLoadedOrdinal, totalUserCount, userEntries]);
+  }, [containerRef, firstLoadedOrdinal, totalUserCount, userEntries, userNodes]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -265,6 +298,7 @@ export function MessageTimelineTicks({
   const requestAnchors = useCallback(() => {
     if (indexLoading) return;
     const version = requestVersion.current;
+    const loadedCountAtRequest = userEntries.length;
     setIndexLoading(true);
     setLoadFailed(false);
     setFailedAnchor(null);
@@ -276,11 +310,12 @@ export function MessageTimelineTicks({
           return;
         }
         setAnchors(result);
+        indexedUserCountRef.current = loadedCountAtRequest;
       })
       .finally(() => {
         if (requestVersion.current === version) setIndexLoading(false);
       });
-  }, [indexLoading, onLoadMessageAnchors]);
+  }, [indexLoading, onLoadMessageAnchors, userEntries.length]);
 
   // Pre-fetch anchor count when history exists
   useEffect(() => {
@@ -288,6 +323,15 @@ export function MessageTimelineTicks({
       requestAnchors();
     }
   }, [historyHasMore, anchors, indexLoading, requestAnchors]);
+
+  // A newly loaded user message makes the index stale by one. Only a loaded-count
+  // change refreshes it, so streaming updates and history prepends do not refetch
+  // the index once per message.
+  useEffect(() => {
+    if (anchors === null || indexLoading) return;
+    if (indexedUserCountRef.current === userEntries.length) return;
+    requestAnchors();
+  }, [anchors, indexLoading, requestAnchors, userEntries.length]);
 
   const scrollToOrdinal = useCallback(
     (targetOrdinal: number, smooth = true) => {
@@ -668,7 +712,7 @@ export function MessageTimelineTicks({
                         className="shrink-0 text-[11px] text-faint tabular-nums"
                         title={new Date(anchor.timestamp).toLocaleString(localeTag(locale))}
                       >
-                        {relativeAge(anchor.timestamp, locale)}
+                        {relativeAge(anchor.timestamp, relativeFormatter)}
                       </span>
                     )}
                   </span>

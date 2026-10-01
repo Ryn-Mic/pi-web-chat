@@ -24,6 +24,7 @@ import { AgentEyes } from "./AgentEyes";
 import { AgentIcon } from "./AgentIcon";
 import { DiffView } from "./DiffView";
 import { MessageTimelineTicks } from "./MessageAnchors";
+import { TAIL_EPSILON_PX } from "../lib/message-anchors";
 import { CopyActionIcon, FolderTreeIcon, NavigationActionIcon, StarterPromptIcon } from "./MorphIcons";
 import {
   Markdown,
@@ -728,7 +729,12 @@ function ProcessDisclosure({
   );
 }
 
-function AssistantTurn({
+/**
+ * Memoized so a streaming turn cannot re-render every settled turn in a long
+ * transcript: `turn` only changes when the loaded page or the streaming
+ * lifecycle changes, and `live` is a fresh object for the active turn alone.
+ */
+const AssistantTurn = memo(function AssistantTurn({
   turn,
   cwd,
   onPreviewFile,
@@ -792,7 +798,7 @@ function AssistantTurn({
       {turn.noticesAfter.map((entry) => renderMessage(entry))}
     </>
   );
-}
+});
 
 export function EmptyStateHero({ cwd, agent }: { cwd?: string; agent: UIAgentKind }) {
   const t = useT();
@@ -1005,7 +1011,7 @@ export function MessageList({
     const el = containerRef.current;
     if (!el) return;
     const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const atBottom = distanceToBottom <= 24;
+    const atBottom = distanceToBottom <= TAIL_EPSILON_PX;
     if (atBottom) {
       stickToBottom.current = true;
       setIsAtBottom(true);

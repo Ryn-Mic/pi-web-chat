@@ -47,6 +47,13 @@ export function firstLoadedUserOrdinal(
 export const VIEWPORT_ANCHOR_TOLERANCE_PX = 24;
 
 /**
+ * Distance to the end of the transcript (px) at which the newest question is
+ * authoritative. Shared by the tick highlight and the scroll-to-bottom
+ * affordance so both agree on when the viewport counts as "at the end".
+ */
+export const TAIL_EPSILON_PX = 24;
+
+/**
  * The user message a viewport is anchored to: the last one whose top edge has
  * reached the top of the viewport, in document order. Prompts below the fold
  * never win, so the prompt just scrolled to stays current while its answer is
