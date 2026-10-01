@@ -23,7 +23,6 @@ import { LoadingIndicator } from "./LoadingIndicator";
 import { AgentEyes } from "./AgentEyes";
 import { AgentIcon } from "./AgentIcon";
 import { DiffView } from "./DiffView";
-import { PromptNavigator } from "./MessageAnchors";
 import { CopyActionIcon, FolderTreeIcon, NavigationActionIcon, StarterPromptIcon } from "./MorphIcons";
 import {
   Markdown,
@@ -559,6 +558,54 @@ function AssistantTurnFooter({
   );
 }
 
+const UserMessageBubble = memo(function UserMessageBubble({
+  message,
+  index,
+  cwd,
+  onPreviewFile,
+}: {
+  message: UIMessage;
+  index?: number;
+  cwd?: string;
+  onPreviewFile?: PreviewMessageFile;
+}) {
+  const text = copyableText(message.content);
+  const [activeActions, setActiveActions] = useState(false);
+  const handleReuse = () => {
+    if (text) chatClient.refillComposer(text);
+    setActiveActions(false);
+  };
+
+  return (
+    <div
+      className="group/message relative flex min-w-0 scroll-mt-4 flex-col items-end"
+      data-msg-index={index}
+    >
+      <div
+        onClick={() => setActiveActions((prev) => !prev)}
+        className="user-bubble relative min-w-0 max-w-[88%] break-words rounded-2xl rounded-tr-md border border-line/60 bg-card px-3.5 py-2.5 whitespace-pre-wrap text-ink shadow-2xs transition-all cursor-pointer sm:cursor-auto sm:max-w-[78%] sm:px-4 sm:py-3 dark:border-white/[0.08] dark:bg-[#2d2d2a] dark:shadow-sm"
+      >
+        <div className="chat-message-text select-text">
+          <Blocks blocks={message.content} markdown={false} cwd={cwd} onPreviewFile={onPreviewFile} />
+        </div>
+      </div>
+
+      {text && (
+        <div
+          className={`mt-1 flex items-center gap-1 transition-all duration-200 ${
+            activeActions
+              ? "opacity-100 translate-y-0"
+              : "opacity-0 -translate-y-1 pointer-events-none sm:group-hover/message:opacity-100 sm:group-hover/message:translate-y-0 sm:group-hover/message:pointer-events-auto sm:focus-within:opacity-100 sm:focus-within:pointer-events-auto"
+          }`}
+        >
+          <CopyButton text={text} />
+          <ReuseButton onClick={handleReuse} />
+        </div>
+      )}
+    </div>
+  );
+});
+
 const Message = memo(function Message({
   message,
   index,
@@ -581,20 +628,12 @@ const Message = memo(function Message({
   const text = copyableText(content);
   if (message.role === "user") {
     return (
-      <div
-        className="group/message flex min-w-0 scroll-mt-4 flex-col items-end"
-        data-msg-index={index}
-      >
-        <div className="user-bubble relative min-w-0 max-w-[85%] break-words rounded-2xl bg-bubble px-4 py-2.5 whitespace-pre-wrap text-ink sm:max-w-[75%] shadow-2xs dark:border dark:border-white/[0.06]">
-          <div className="chat-message-text"><Blocks blocks={message.content} markdown={false} cwd={cwd} onPreviewFile={onPreviewFile} /></div>
-        </div>
-        {text && (
-          <MessageActions
-            text={text}
-            onReuse={() => chatClient.refillComposer(text)}
-          />
-        )}
-      </div>
+      <UserMessageBubble
+        message={message}
+        index={index}
+        cwd={cwd}
+        onPreviewFile={onPreviewFile}
+      />
     );
   }
   return (
@@ -823,10 +862,6 @@ export function MessageList({
   agent,
   onPreviewFile,
   hideScrollButton = false,
-  hidePromptNavigator = false,
-  sessionId,
-  onLoadMessageAnchors,
-  onLoadHistoryThroughUserMessage,
 }: {
   messages: UIMessage[];
   streamText: string;
@@ -844,13 +879,6 @@ export function MessageList({
   agent: UIAgentKind;
   onPreviewFile?: PreviewMessageFile;
   hideScrollButton?: boolean;
-  hidePromptNavigator?: boolean;
-  sessionId?: string | null;
-  onLoadMessageAnchors?: () => Promise<import("../../shared/protocol").UIMessageAnchor[] | null>;
-  onLoadHistoryThroughUserMessage?: (
-    ordinal: number,
-    totalUserMessages: number,
-  ) => Promise<boolean>;
 }) {
   const t = useT();
   // Keep live content visible even if its lifecycle snapshot arrives out of order.
@@ -1043,21 +1071,6 @@ export function MessageList({
           <NavigationActionIcon direction="down" size={16} />
         </button>
       )}
-
-      {/* Floating prompt navigator (jump to previous/next question) */}
-      <PromptNavigator
-        sessionId={sessionId ?? null}
-        messages={messages}
-        historyHasMore={historyHasMore}
-        historyLoading={historyLoading}
-        onLoadMessageAnchors={onLoadMessageAnchors ?? (() => chatClient.loadMessageAnchors())}
-        onLoadHistoryThroughUserMessage={
-          onLoadHistoryThroughUserMessage ??
-          ((ordinal, total) => chatClient.loadHistoryThroughUserMessage(ordinal, total))
-        }
-        containerRef={containerRef}
-        hide={hidePromptNavigator}
-      />
     </div>
   );
 }
