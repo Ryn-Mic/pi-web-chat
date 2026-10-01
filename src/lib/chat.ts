@@ -15,9 +15,10 @@ import type {
   UIMessage,
   UISnapshot,
 } from "../../shared/protocol";
+import { SESSION_NOT_FOUND_CLOSE_CODE } from "../../shared/protocol";
 import { applySnapshotDelta } from "../../shared/snapshot";
 import { serializeClientCommand } from "../../shared/client-command";
-import { authHeaders, checkAuth } from "./auth";
+import { authHeaders, checkAuth, getAuthStatus, getSessionCacheScope, subscribeAuthChanges } from "./auth";
 import {
   clearComposerDraft,
   type SubmittedComposerPrompt,
@@ -628,11 +629,17 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         /* ignore */
       }
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (!this.isCurrentSocket(ws, version)) return;
       this.ws = null;
       this.clearStreamBuffer();
       if (this.intentionalClose) return;
+      if (event?.code === SESSION_NOT_FOUND_CLOSE_CODE) {
+        this.clearReconnectTimer();
+        this.clearDisconnectTimer();
+        this.update({ connection: "disconnected", lastError: this.state.lastError ?? "Session not found" });
+        return;
+      }
 
       // Soft state while retrying — don't flash red on first paint / brief blips.
       if (this.state.connection === "connected") {
@@ -697,7 +704,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
     this.pendingSteers.clear();
     this.optimisticSubmitted = null;
     this.restorePromptRequestId = null;
-    this.update({ restorePrompt: null });
+    this.update({ ...createInitialState(), connection: "disconnected" });
     this.closeSocket();
     this.onDispose?.();
   }
@@ -1303,6 +1310,16 @@ class ChatWorkspaceClient {
         mergePreviewWorkspace(losing, surviving),
     },
   );
+
+  private authScope = getSessionCacheScope();
+
+  constructor() {
+    subscribeAuthChanges(() => {
+      const scope = getSessionCacheScope();
+      if (scope !== this.authScope || getAuthStatus() === "unauthenticated") this.workspace.clear();
+      this.authScope = scope;
+    });
+  }
 
   get state(): ChatState {
     return this.workspace.getActiveClient()?.state ?? this.emptyState;

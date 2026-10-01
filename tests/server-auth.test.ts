@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test, type TestContext } from "node:test";
 import { WebSocket } from "ws";
 import { CLIENT_COMMAND_MAX_TEXT_LENGTH } from "../shared/client-command.ts";
+import { SESSION_NOT_FOUND_CLOSE_CODE } from "../shared/protocol.ts";
 
 // auth has a production singleton. Isolate its initial import as well as every
 // test instance, without changing HOME or touching the real ~/.pi state.
@@ -160,6 +161,23 @@ async function freePort(): Promise<number> {
   });
 }
 
+async function rawRequest(port: number, target: string, upgrade = false): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, "127.0.0.1");
+    let response = "";
+    const timer = setTimeout(() => { socket.destroy(); reject(new Error("raw request timed out")); }, 2_000);
+    socket.once("connect", () => {
+      const headers = upgrade
+        ? "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        : "Connection: close\r\n";
+      socket.write(`GET ${target} HTTP/1.1\r\nHost: localhost\r\n${headers}\r\n`);
+    });
+    socket.on("data", (chunk) => { response += chunk.toString(); });
+    socket.once("end", () => { clearTimeout(timer); socket.destroy(); resolve(response); });
+    socket.once("error", (error) => { clearTimeout(timer); reject(error); });
+  });
+}
+
 async function stopChild(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise<void>((resolve) => {
@@ -210,6 +228,10 @@ await import("./server/index.ts");`;
       PI_WEB_TEST_STATE_DIR: stateDir,
       PI_WEB_TEST_CLOCK_FILE: clockFile,
       PI_CODING_AGENT_DIR: agentDir,
+      PI_CODING_AGENT_SESSION_DIR: join(agentDir, "sessions"),
+      PI_WEB_DAEMON_MANAGED: "0",
+      PI_WEB_CODEX_BIN: join(fixture, "unused-codex"),
+      PI_WEB_CODEX_STARTED_MARKER: join(fixture, "codex-must-not-start"),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -225,6 +247,14 @@ await import("./server/index.ts");`;
     try { return (await fetch(`${baseUrl}/api/health`)).ok; }
     catch { return false; }
   }, "isolated auth server did not become healthy");
+
+  for (const upgrade of [false, true]) {
+    for (const target of ["//[", "http://["]) {
+      assert.match(await rawRequest(port, target, upgrade), /^HTTP\/1\.1 400/);
+      assert.equal((await fetch(`${baseUrl}/api/health`)).status, 200);
+      assert.equal(child.exitCode, null, "malformed URLs must not stop the service");
+    }
+  }
 
   for (const [value, expectedStatus] of [[null, 400], [[], 400], [1, 400], [{ token: null }, 401], [{ token: accessToken, totp: 1 }, 401]] as const) {
     const response = await fetch(`${baseUrl}/api/auth/login`, {
@@ -254,6 +284,19 @@ await import("./server/index.ts");`;
   assert.equal(output.includes(accessToken), false);
   assert.equal(output.includes(localAuth.totpSecret), false);
   assert.equal(output.includes(localTotp), false);
+
+  const missing = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${encodeURIComponent(sessionToken)}&session=missing-pi-session`);
+  sockets.push(missing);
+  const missingEvents: Array<Record<string, unknown>> = [];
+  let missingCloseCode: number | undefined;
+  missing.on("message", (raw) => { missingEvents.push(JSON.parse(raw.toString())); });
+  missing.once("close", (code) => { missingCloseCode = code; });
+  await waitUntil(() => missingCloseCode !== undefined, "missing Pi session did not terminate binding");
+  assert.equal(missingCloseCode, SESSION_NOT_FOUND_CLOSE_CODE);
+  assert.ok(missingEvents.some((event) => event.type === "error" && event.message === "Session not found"));
+  assert.equal(missingEvents.some((event) => event.type === "session_bound" || event.type === "snapshot"), false);
+  const emptyState = await (await fetch(`${baseUrl}/api/state`, { headers })).json() as { activeSessions: unknown[] };
+  assert.deepEqual(emptyState.activeSessions, [], "an explicit missing id must not create a replacement runtime");
 
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${encodeURIComponent(sessionToken)}&agent=pi&cwd=${encodeURIComponent(project)}`);
   sockets.push(ws);
