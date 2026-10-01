@@ -1741,7 +1741,8 @@ test("read-only observer refreshes when only tool details change", async () => {
 });
 
 test("scheduled observer polls contain an upstream failure and recover on the next tick", async (t) => {
-  t.mock.timers.enable({ apis: ["setInterval"] });
+  // The observer reschedules a timeout per tick (fast while a turn runs).
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
   let listCalls = 0;
   const process = new FakeRpcProcess((request, fake) => {
     if (request.method === "initialize") fake.respond(request, {});

@@ -5,7 +5,7 @@ import { activityEyeState, activityEyeTone, connectionActivity } from "../lib/ac
 import { getAgentPreference } from "../lib/agent";
 import { AgentEyes } from "./AgentEyes";
 import { AgentIcon } from "./AgentIcon";
-import { chatClient, useChat } from "../lib/chat";
+import { chatClient, useChatPick } from "../lib/chat";
 import { requestOpenFilesDrawer, requestOpenSessionsDrawer, useAnyDrawerOpen, useModalOverlayOpen } from "../lib/drawer";
 import { activatePreview } from "../lib/file-preview";
 import { setFilesPanelOpen, useFilesPanelOpen } from "../lib/filetree";
@@ -100,6 +100,29 @@ function CodexConnectionBadge({ state }: { state: UICodexState | undefined }) {
   );
 }
 
+/**
+ * Fields the page shell reads. Streaming text/thinking/tools are deliberately
+ * absent: `MessageList` subscribes to those itself, so a stream delta no longer
+ * re-renders the whole page (header, drawers, panels, composer).
+ */
+const CHAT_PAGE_KEYS = [
+  "connection",
+  "sessionId",
+  "snapshot",
+  "historicalMessages",
+  "historyHasMore",
+  "historyLoading",
+  "historyError",
+  "updateAvailable",
+  "serverRestartRequired",
+  "lastError",
+  "optimisticMessages",
+  "lastNotice",
+  "commandIntent",
+  "updateVersion",
+  "updateNotes",
+] as const;
+
 export function ChatPage() {
   const t = useT();
   const theme = useTheme();
@@ -112,10 +135,6 @@ export function ChatPage() {
     historyHasMore,
     historyLoading,
     historyError,
-    streamText,
-    streamThinking,
-    streamThinkingComplete,
-    activeTools,
     updateAvailable,
     serverRestartRequired,
     lastError,
@@ -124,8 +143,7 @@ export function ChatPage() {
     commandIntent,
     updateVersion,
     updateNotes,
-  } =
-    useChat();
+  } = useChatPick(CHAT_PAGE_KEYS);
   const isStreaming = snapshot?.isStreaming ?? false;
   const persistedMessages = useMemo(
     () => [...historicalMessages, ...(snapshot?.messages ?? [])],
@@ -321,10 +339,6 @@ export function ChatPage() {
           <Fragment key={activeTabKey}>
             <MessageList
               messages={messages}
-              streamText={streamText}
-              streamThinking={streamThinking}
-              streamThinkingComplete={streamThinkingComplete}
-              activeTools={activeTools}
               isStreaming={isStreaming}
               historyHasMore={historyHasMore}
               historyLoading={historyLoading}

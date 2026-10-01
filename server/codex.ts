@@ -142,6 +142,13 @@ const HISTORY_TURN_LIMIT = 50;
  * thread/resume so the session upgrades to interactive control as soon as the
  * current writer releases the thread. */
 const OBSERVER_POLL_MS = 2_000;
+/**
+ * Observation ticks are two RPCs each (a thread/resume upgrade probe plus a full
+ * turns page). While no turn is running there is nothing to follow, so the
+ * mirror slows down; a turn started by the owning writer is still picked up
+ * within this window.
+ */
+const OBSERVER_IDLE_POLL_MS = 5_000;
 
 function isWriterConflict(error: unknown): boolean {
   return errorMessage(error).includes("already has an active writer");
@@ -845,7 +852,7 @@ export class CodexSession {
   private promptPreparations = 0;
   private interactions = new Map<string, PendingInteraction>();
   private observerModeValue = false;
-  private observerPollTimer: ReturnType<typeof setInterval> | null = null;
+  private observerPollTimer: ReturnType<typeof setTimeout> | null = null;
   private observerPolling = false;
   private observerFingerprint: string | null = null;
   private disposed = false;
@@ -1300,17 +1307,31 @@ export class CodexSession {
       cwd: this.cwdValue,
     });
     await this.pollObserverTurn();
-    this.observerPollTimer = setInterval(() => {
-      void this.pollObserverTurn().catch((error) => {
-        if (this.disposed) return;
-        this.emitEvent({ type: "error", message: "Unable to refresh Codex observer: " + errorMessage(error) });
-      });
-    }, OBSERVER_POLL_MS);
+    this.scheduleObserverPoll();
+  }
+
+  /** Next observation tick: fast while a turn is running, slower while idle. */
+  private scheduleObserverPoll(
+    delay = this.streaming ? OBSERVER_POLL_MS : OBSERVER_IDLE_POLL_MS,
+  ): void {
+    if (this.disposed || !this.observerModeValue || this.observerPollTimer !== null) return;
+    this.observerPollTimer = setTimeout(() => {
+      this.observerPollTimer = null;
+      void this.pollObserverTurn()
+        .then(() => this.scheduleObserverPoll())
+        .catch((error) => {
+          if (!this.disposed) {
+            this.emitEvent({ type: "error", message: "Unable to refresh Codex observer: " + errorMessage(error) });
+          }
+          // A failed read leaves the mirror behind: retry on the fast cadence.
+          this.scheduleObserverPoll(OBSERVER_POLL_MS);
+        });
+    }, delay);
   }
 
   private stopObserverPolling(): void {
     if (this.observerPollTimer !== null) {
-      clearInterval(this.observerPollTimer);
+      clearTimeout(this.observerPollTimer);
       this.observerPollTimer = null;
     }
     this.observerPolling = false;

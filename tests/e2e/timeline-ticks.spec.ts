@@ -1,4 +1,4 @@
-import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
+import { expect, test, type Locator, type Page, type WebSocketRoute } from "@playwright/test";
 import type { UIMessage, UISnapshot } from "../../shared/protocol";
 
 const PROJECT_ROOT = "/tmp/pi-web-chat-file-preview-e2e/project";
@@ -179,6 +179,32 @@ async function activeTickOrdinal(page: Page): Promise<number | null> {
     .first()
     .getAttribute("data-ordinal");
   return raw === null ? null : Number(raw);
+}
+
+/**
+ * Open the full question outline. The flyout auto-collapses after 2s of
+ * inactivity, so a stalled machine can drop it between the hover and the click;
+ * reopen and retry instead of depending on that race.
+ */
+async function openQuestionOutline(page: Page, nav: Locator, count: number): Promise<Locator> {
+  const flyout = nav.locator(".animate-in");
+  const footer = flyout.getByText(`Questions outline · (${count})`);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (!(await flyout.isVisible().catch(() => false))) {
+      await nav.locator(".group\\/ticks").click();
+    }
+    await expect(flyout).toBeVisible();
+    await flyout.hover();
+    try {
+      await footer.click({ timeout: 1500 });
+      const outline = page.getByRole("dialog", { name: "Questions outline" });
+      await expect(outline).toBeVisible();
+      return outline;
+    } catch {
+      // Auto-collapsed before the click landed: try again.
+    }
+  }
+  throw new Error("question outline did not open");
 }
 
 /** Visible tick ordinals in track order (top → bottom). */
@@ -400,13 +426,7 @@ test("timeline ticks: a jump lands on its target inside a long transcript", asyn
   await expect.poll(() => activeTickOrdinal(page)).toBe(60);
 
   // Long transcripts skip off-screen replies; the jump must still land exactly.
-  await nav.locator(".group\\/ticks").click();
-  const flyout = nav.locator(".animate-in");
-  await expect(flyout).toBeVisible();
-  await flyout.hover();
-  await flyout.getByText("Questions outline · (60)").click();
-  const outline = page.getByRole("dialog", { name: "Questions outline" });
-  await expect(outline).toBeVisible();
+  const outline = await openQuestionOutline(page, nav, 60);
   await outline.getByText("Question #5 from user about topic 5").click();
 
   await expect.poll(() => loadedPromptTopDistance(page, 5)).toBeLessThanOrEqual(24);

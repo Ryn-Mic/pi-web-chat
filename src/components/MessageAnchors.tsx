@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import type { UIMessage, UIMessageAnchor } from "../../shared/protocol";
 import { setModalOverlayOpen } from "../lib/drawer";
@@ -54,6 +54,13 @@ export interface MessageTimelineTicksProps {
     totalUserMessages: number,
   ) => Promise<boolean>;
   containerRef: RefObject<HTMLDivElement | null>;
+  /**
+   * Called before a jump scrolls the transcript. The message list uses it to
+   * stop following the tail: an auto-follow re-pin during the jump animation
+   * would cancel the scroll and leave the highlight on the target while the
+   * viewport sits at the bottom.
+   */
+  onAnchorJump?: () => void;
   hide?: boolean;
 }
 
@@ -67,7 +74,7 @@ export interface MessageTimelineTicksProps {
  * - Automatically collapses after 2 seconds of inactivity;
  * - Direct jumping to message nodes with anchor flash animation.
  */
-export function MessageTimelineTicks({
+export const MessageTimelineTicks = memo(function MessageTimelineTicks({
   sessionId,
   messages,
   historyHasMore,
@@ -75,6 +82,7 @@ export function MessageTimelineTicks({
   onLoadMessageAnchors,
   onLoadHistoryThroughUserMessage,
   containerRef,
+  onAnchorJump,
   hide = false,
 }: MessageTimelineTicksProps) {
   const t = useT();
@@ -158,6 +166,44 @@ export function MessageTimelineTicks({
     userNodeMapRef.current = { map, first: map.values().next().value! };
     return map;
   }, [containerRef, userEntries.length]);
+
+  /**
+   * Absolute content offsets of every loaded prompt, rebuilt only when the
+   * content height or the loaded page changes. Scrolling never moves a prompt
+   * inside the content, so the per-frame work stays at integer comparisons and
+   * the scroll handler stops reading layout once the offsets are cached.
+   */
+  const userOffsetCacheRef = useRef<
+    { height: number; count: number; offsets: { ordinal: number; offset: number }[] } | null
+  >(null);
+  const userOffsets = useCallback(
+    (container: HTMLDivElement): { ordinal: number; offset: number }[] | null => {
+      const height = container.scrollHeight;
+      const cached = userOffsetCacheRef.current;
+      if (cached && cached.height === height && cached.count === userEntries.length) {
+        return cached.offsets;
+      }
+      const nodes = userNodes();
+      if (!nodes) return null;
+      const containerTop = container.getBoundingClientRect().top;
+      const scrollTop = container.scrollTop;
+      const offsets: { ordinal: number; offset: number }[] = [];
+      for (const entry of userEntries) {
+        const el = nodes.get(entry.index);
+        if (!el) continue;
+        const rect = el.getBoundingClientRect();
+        // A collapsed/hidden message has a zero rect and no reading position.
+        if (rect.height === 0) continue;
+        offsets.push({
+          ordinal: firstLoadedOrdinal + entry.ordinal - 1,
+          offset: rect.top - containerTop + scrollTop,
+        });
+      }
+      userOffsetCacheRef.current = { height, count: userEntries.length, offsets };
+      return offsets;
+    },
+    [firstLoadedOrdinal, userEntries, userNodes],
+  );
 
   // Initialize current visible ordinal to latest user message when available
   const [currentVisibleOrdinal, setCurrentVisibleOrdinal] = useState<number>(() => {
@@ -251,22 +297,11 @@ export function MessageTimelineTicks({
       return;
     }
 
-    const nodes = userNodes();
-    if (!nodes) return;
+    const offsets = userOffsets(container);
+    if (!offsets) return;
 
-    const containerTop = container.getBoundingClientRect().top;
-    const offsets: { ordinal: number; top: number }[] = [];
-    for (const entry of userEntries) {
-      const el = nodes.get(entry.index);
-      if (!el) continue;
-      const rect = el.getBoundingClientRect();
-      // A collapsed/hidden message has a zero rect and no reading position.
-      if (rect.height === 0) continue;
-      offsets.push({ ordinal: firstLoadedOrdinal + entry.ordinal - 1, top: rect.top - containerTop });
-    }
-
-    setCurrentVisibleOrdinal(viewportUserOrdinal(offsets) ?? firstLoadedOrdinal);
-  }, [containerRef, firstLoadedOrdinal, totalUserCount, userEntries, userNodes]);
+    setCurrentVisibleOrdinal(viewportUserOrdinal(offsets, container.scrollTop) ?? firstLoadedOrdinal);
+  }, [containerRef, firstLoadedOrdinal, totalUserCount, userEntries.length, userOffsets]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -285,6 +320,7 @@ export function MessageTimelineTicks({
     const index = messageIndexForUserOrdinal(messages, anchors.length, pendingOrdinal);
     if (index === null) return;
     const frame = requestAnimationFrame(() => {
+      onAnchorJump?.();
       scrollToMessage(containerRef, index, true);
       setPendingOrdinal(null);
       setLoadingOrdinal(null);
@@ -293,7 +329,7 @@ export function MessageTimelineTicks({
       clearTimer();
     });
     return () => cancelAnimationFrame(frame);
-  }, [anchors, containerRef, messages, pendingOrdinal, clearTimer]);
+  }, [anchors, containerRef, messages, onAnchorJump, pendingOrdinal, clearTimer]);
 
   const requestAnchors = useCallback(() => {
     if (indexLoading) return;
@@ -340,6 +376,7 @@ export function MessageTimelineTicks({
       const index = messageIndexForUserOrdinal(messages, total, targetOrdinal);
 
       if (index !== null) {
+        onAnchorJump?.();
         scrollToMessage(containerRef, index, smooth);
         setCurrentVisibleOrdinal(targetOrdinal);
         return;
@@ -365,7 +402,7 @@ export function MessageTimelineTicks({
           setLoadFailed(true);
         });
     },
-    [anchors, containerRef, historyLoading, loadingOrdinal, messages, onLoadHistoryThroughUserMessage, totalUserCount],
+    [anchors, containerRef, historyLoading, loadingOrdinal, messages, onAnchorJump, onLoadHistoryThroughUserMessage, totalUserCount],
   );
 
   const jumpToOrdinal = useCallback(
@@ -725,7 +762,7 @@ export function MessageTimelineTicks({
       )}
     </aside>
   );
-}
+});
 
 export const PromptNavigator = MessageTimelineTicks;
 export const MessageAnchors = MessageTimelineTicks;

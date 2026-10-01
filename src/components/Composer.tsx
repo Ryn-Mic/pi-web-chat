@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UIImageAttachment, UIMessage, UIMessageAnchor } from "../../shared/protocol";
-import { chatClient, useChat } from "../lib/chat";
+import { chatClient, useChatField } from "../lib/chat";
 import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
 import { getComposerDraft, setComposerDraft } from "../lib/composer-drafts";
 import { useFileSearch } from "../lib/api";
@@ -177,15 +177,13 @@ export function Composer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const restoredPromptRef = useRef<unknown>(null);
-  const {
-    injectText,
-    focusToken,
-    snapshot,
-    commands,
-    commandIntent,
-    promptStatus,
-    restorePrompt,
-  } = useChat();
+  const injectText = useChatField("injectText");
+  const focusToken = useChatField("focusToken");
+  const snapshot = useChatField("snapshot");
+  const commands = useChatField("commands");
+  const commandIntent = useChatField("commandIntent");
+  const promptStatus = useChatField("promptStatus");
+  const restorePrompt = useChatField("restorePrompt");
   const chatFontSize = useChatFontSize();
   const context = snapshot?.context;
   const contextPercent = context?.percent ?? null;

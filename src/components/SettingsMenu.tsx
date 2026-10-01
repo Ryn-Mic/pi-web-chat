@@ -22,7 +22,7 @@ import {
   type GrokTheme,
   type GrokPersona,
 } from "../lib/grok-theme";
-import { chatClient, useChat } from "../lib/chat";
+import { chatClient, useChatField } from "../lib/chat";
 import {
   chatFontSizePixels,
   setChatFontSize,
@@ -183,7 +183,7 @@ function Toggle({
 
 export function SettingsMenu({ openToken = 0 }: { openToken?: number }) {
   const t = useT();
-  const { snapshot } = useChat();
+  const snapshot = useChatField("snapshot");
   const agentPreference = useAgentPreference();
   const preference = useThemePreference();
   const locale = useLocale();

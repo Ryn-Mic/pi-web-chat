@@ -1,3 +1,5 @@
+import { statSync } from "node:fs";
+
 import type { UIMessageAnchor } from "../shared/protocol.ts";
 
 const MAX_PREVIEW_CHARS = 240;
@@ -153,4 +155,52 @@ export async function createCodexUserMessageAnchors(
   } while (cursor);
 
   return anchors;
+}
+
+/** `mtime:size` of a session file; `missing` when it cannot be read. */
+export function sessionFileStamp(path: string): string {
+  try {
+    const stat = statSync(path);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return "missing";
+  }
+}
+
+export interface SessionAnchorCache {
+  read(path: string, build: () => UIMessageAnchor[]): Promise<UIMessageAnchor[]>;
+  size(): number;
+}
+
+/**
+ * Cached, file-stamped anchor index reads.
+ *
+ * `createSessionUserMessageAnchors` walks the entire active branch, so serving
+ * it per request re-scans a long transcript every time the question flyout or
+ * the full outline is opened, and a session that is not open in memory pays a
+ * full `SessionManager.open` first. An appended message is the only writer for
+ * a loaded session, so an (mtime, size) stamp invalidates exactly.
+ */
+export function createSessionAnchorCache(limit = 64): SessionAnchorCache {
+  const cache = new Map<string, { stamp: string; anchors: UIMessageAnchor[] }>();
+  return {
+    async read(path: string, build: () => UIMessageAnchor[]): Promise<UIMessageAnchor[]> {
+      const stamp = sessionFileStamp(path);
+      const cached = cache.get(path);
+      if (cached && cached.stamp === stamp) {
+        // Refresh recency for the eviction order.
+        cache.delete(path);
+        cache.set(path, cached);
+        return cached.anchors;
+      }
+      const anchors = build();
+      cache.set(path, { stamp, anchors });
+      if (cache.size > limit) {
+        const oldest = cache.keys().next().value;
+        if (oldest !== undefined) cache.delete(oldest);
+      }
+      return anchors;
+    },
+    size: () => cache.size,
+  };
 }

@@ -1,6 +1,6 @@
 import { Dialog } from "@base-ui-components/react/dialog";
 import { useForkPoints } from "../lib/api";
-import { chatClient, useChat } from "../lib/chat";
+import { chatClient, useChatField } from "../lib/chat";
 import { useT } from "../lib/i18n";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { DIALOG_BACKDROP_CLASS, DIALOG_POPUP_CLASS, PRIMARY_BUTTON_CLASS, SECONDARY_BUTTON_CLASS } from "./ui";
@@ -14,7 +14,9 @@ export function ForkDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const t = useT();
-  const { sessionId, snapshot, pendingInteractions } = useChat();
+  const sessionId = useChatField("sessionId");
+  const snapshot = useChatField("snapshot");
+  const pendingInteractions = useChatField("pendingInteractions");
   const isCodex = snapshot?.agent === "codex";
   const hasCodexThread = !!snapshot?.codex?.threadId && !!sessionId;
   const codexUnavailable =

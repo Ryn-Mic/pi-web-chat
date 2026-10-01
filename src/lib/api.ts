@@ -120,7 +120,10 @@ export function useGitStatus(cwd: string | undefined, enabled = true) {
     queryFn: () => fetchJson<UIGitStatus>(`/api/git/status?cwd=${encodeURIComponent(cwd ?? "")}`),
     enabled: enabled && !!cwd,
     staleTime: 2_000,
-    refetchInterval: enabled && cwd ? 5_000 : false,
+    // `git status` spawns a git process server-side, so the open panel polls on a
+    // slow cadence; window focus refetches immediately and every mutation path
+    // invalidates this query explicitly.
+    refetchInterval: enabled && cwd ? 15_000 : false,
   });
 }
 

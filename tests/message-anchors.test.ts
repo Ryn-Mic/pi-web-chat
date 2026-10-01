@@ -67,29 +67,35 @@ test("derives the global ordinal of the first loaded user message", () => {
 });
 
 test("viewportUserOrdinal anchors to the last prompt that reached the top edge", () => {
+  // Absolute content offsets: prompts start at 0 / 600 / 1200 inside the content.
+  const offsets = [
+    { ordinal: 1, offset: 0 },
+    { ordinal: 2, offset: 600 },
+    { ordinal: 3, offset: 1200 },
+  ];
+
   // A prompt pinned to the top by scrollIntoView({ block: "start" }) is itself,
   // not the following prompt that happens to sit near the middle of the screen.
-  assert.equal(
-    viewportUserOrdinal([{ ordinal: 4, top: -167 }, { ordinal: 5, top: 16 }, { ordinal: 6, top: 198 }]),
-    5,
-  );
+  assert.equal(viewportUserOrdinal(offsets, 584), 2);
 
   // Prompts below the fold never win, so an answer in progress keeps its own prompt.
-  assert.equal(
-    viewportUserOrdinal([{ ordinal: 1, top: -720 }, { ordinal: 2, top: -140 }, { ordinal: 3, top: 380 }]),
-    2,
-  );
+  assert.equal(viewportUserOrdinal(offsets, 900), 2);
+
+  // Scrolling until the next prompt reaches the top edge promotes it.
+  assert.equal(viewportUserOrdinal(offsets, 1200), 3);
+  assert.equal(viewportUserOrdinal(offsets, 5000), 3);
 
   // Still at the very top of the transcript.
-  assert.equal(viewportUserOrdinal([{ ordinal: 1, top: 16 }, { ordinal: 2, top: 300 }]), 1);
+  assert.equal(viewportUserOrdinal([{ ordinal: 1, offset: 16 }, { ordinal: 2, offset: 300 }], 0), 1);
 
-  // Nothing has reached the top edge yet.
-  assert.equal(viewportUserOrdinal([{ ordinal: 1, top: 120 }]), null);
-  assert.equal(viewportUserOrdinal([]), null);
+  // Nothing has reached the top edge yet (e.g. only a history loader is above).
+  assert.equal(viewportUserOrdinal([{ ordinal: 1, offset: 120 }], 0), null);
+  assert.equal(viewportUserOrdinal([], 0), null);
 
-  // Unmeasurable (collapsed) entries are ignored rather than treated as topmost.
+  // Unmeasurable entries are ignored rather than treated as topmost.
   assert.equal(
-    viewportUserOrdinal([{ ordinal: 9, top: Number.NaN }, { ordinal: 3, top: -40 }]),
+    viewportUserOrdinal([{ ordinal: 9, offset: Number.NaN }, { ordinal: 3, offset: -40 }], 0),
     3,
   );
+  assert.equal(viewportUserOrdinal([{ ordinal: 1, offset: 0 }], Number.NaN), null);
 });

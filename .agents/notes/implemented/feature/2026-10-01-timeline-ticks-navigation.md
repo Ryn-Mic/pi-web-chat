@@ -39,7 +39,10 @@ Status: implemented
 - **下方提问绝不参与**：位于折叠线以下的提问永远不是当前节点，所以阅读长回答期间所属提问保持高亮，直到下一条提问真正滚过顶边。
 - **零矩形节点必须跳过**：`getBoundingClientRect()` 全 0 的元素（折叠/隐藏）不构成阅读位置，`rect.height === 0` 时忽略。
 - **触底优先**：`scrollHeight - scrollTop - clientHeight <= TAIL_EPSILON_PX`（24px）时直接取全局最新提问，保证“总高度不足一屏”的短会话也高亮最新一条；该常量同时用于消息区“滚底按钮”的可见判定，避免两处对“已到底”给出不同答案。
-- **节点映射缓存**：判定需要每个提问的 `rect.top`。渲染出来的用户气泡在消息存续期间稳定，所以按 `[data-msg-index]` 建立一次 `Map<index, element>`（加载页变化时重建，使用前校验首节点仍 `isConnected`），把每帧 N 次 `querySelector` 降为 0 次，只保留不可避免的 `getBoundingClientRect`。绝不把 `content-visibility` 加在用户气泡上：估算尺寸会直接污染这层测量（见 [被否决的离屏跳过方案](../../rejected/feature/2026-10-02-content-visibility-offscreen-skip.md)）。
+- **纯函数签名随之改变**：`viewportUserOrdinal(offsets, scrollTop, tolerance)` 接收绝对偏移而不是相对视口的 top，判定仍是“文档顺序里最后一个已到达顶边的提问”。
+- **节点映射缓存**：判定需要每个提问的 `rect.top`。渲染出来的用户气泡在消息存续期间稳定，所以按 `[data-msg-index]` 建立一次 `Map<index, element>`（加载页变化时重建，使用前校验首节点仍 `isConnected`），把每帧 N 次 `querySelector` 降为 0 次。绝不把 `content-visibility` 加在用户气泡上：估算尺寸会直接污染这层测量（见 [被否决的离屏跳过方案](../../rejected/feature/2026-10-02-content-visibility-offscreen-skip.md)）。
+- **偏移量缓存（滚动时零布局读取）**：滚动不会改变提问在内容里的位置，所以判定改用提问的**绝对内容偏移**（`rect.top - 容器顶 + scrollTop`）与 `scrollTop` 做整数比较。偏移量只在“内容高度或已加载条数变化”时重建；滚动过程中只是读 `scrollTop`，不再每帧读 N 个 `getBoundingClientRect`。这让滚动判定彻底脱离实时布局。
+- **跳转前停止跟随末尾**：`scrollToOrdinal` 在滚动前调用 `onAnchorJump`，让消息区把 `stickToBottom` 置否。贴底时的自动跟随（ResizeObserver / 消息变更）会在跳转动画期间把容器写回底部，取消跳转并让高亮停在目标而视图还在底部。
 
 ## 浮层与索引的生命周期
 
@@ -57,11 +60,11 @@ Status: implemented
 ## Consequences
 
 - **收益**：既消灭了破坏沉浸感的常驻大药丸，又赋予了用户极致轻盈的代码编辑器缩略图/刻度尺般的高级交互质感；无论多少条消息都保持居中 7 个刻度，单手点开一秒跳步，2 秒自动退回静默；刻度高亮与屏幕上方的提问严格一一对应，长会话（历史分页加载）下也是。
-- **代价**：判定依赖真实 DOM 几何（`data-msg-index` 必须落在可见用户消息上），跳转基准与 `scroll-mt-*` 留白耦合，容差必须随留白调整；节点映射缓存要求用户气泡持续挂载，任何把用户消息改成“离屏卸载/估算尺寸”的优化都必须先改这一层测量；纯函数 `viewportUserOrdinal` 只覆盖“给定偏移量选哪一条”这一段，页面几何仍需 E2E 兜底。
+- **代价**：判定依赖真实 DOM 几何（`data-msg-index` 必须落在可见用户消息上），跳转基准与 `scroll-mt-*` 留白耦合，容差必须随留白调整；偏移量缓存在“内容高度不变但提问位置变化”时不会重建（正常情况下两者同源，容器 resize 只改视口不改内容的绝对偏移），缓存有效性仍以 `scrollHeight` + 已加载条数两个键把关；节点映射缓存要求用户气泡持续挂载，任何把用户消息改成“离屏卸载/估算尺寸”的优化都必须先改这一层测量；纯函数 `viewportUserOrdinal` 只覆盖“给定偏移量选哪一条”这一段，页面几何仍需 E2E 兜底。
 - **验证**：
-  - `tests/message-anchors.test.ts` 算法单元测试：`computeVisibleTicks` 滑窗、`messageIndexForUserOrdinal` 后缀映射、新增 `firstLoadedUserOrdinal` 与 `viewportUserOrdinal`（顶边对齐、下方不参与、零矩形/NaN 忽略）；
+  - `tests/message-anchors.test.ts` 算法单元测试：`computeVisibleTicks` 滑窗、`messageIndexForUserOrdinal` 后缀映射、`firstLoadedUserOrdinal` 与 `viewportUserOrdinal`（绝对偏移 + scrollTop、顶边对齐、下方不参与、NaN 忽略）；
   - `tests/e2e/timeline-ticks.spec.ts` 浏览器自动化端到端测试，覆盖刻度渲染、数量上限、高亮加粗变长、点击展开、点击跳转收起、2 秒无操作自动收拢，以及新增的“高亮刻度 = 视口顶边提问”（短回答几何下前后跳转 + 触底回锚）与“中途开始的 transcript 使用全局序号”（45 问会话只加载 6 条时高亮 45、窗口 39..45、滚到已加载区顶部高亮 40）；
   - 修复前后用同一份可复现 Playwright 用例取证：修复前跳转第 5 问后高亮 6、后缀会话触底高亮 6 且窗口 3..9；修复后分别为 5 与 45/39..45；
-  - 新增 E2E：浮层在收到流式消息后保持展开且索引不重复请求（随后新增提问时恰好刷新一次）；60 轮长会话中从全量大纲跳转到早期提问仍精确落位并把高亮切回该提问；
-  - 全量 425 项单元测试 + 44 项 E2E 测试 100% 通过；
+  - 新增 E2E：浮层在收到流式消息后保持展开且索引不重复请求（随后新增提问时恰好刷新一次）；60 轮长会话中从全量大纲跳转到早期提问仍精确落位并把高亮切回该提问（断言用「与容器顶边的绝对距离」而非带符号差值——带符号时“远在上方”的负值会让“跳转落位”恒真，曾掩盖真实回归）；该用例以 `--repeat-each=4` 重复 24 次全部通过；
+  - 全量 428 项单元测试 + 44 项 E2E 测试 100% 通过；
   - `npm run notes:check` 与 `npm run pack:check` 验证通过。
