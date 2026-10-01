@@ -11,7 +11,7 @@ import { createRoot } from "react-dom/client";
 import { ChatPage } from "./components/ChatPage";
 import { LoginPage } from "./components/LoginPage";
 import { LoadingIndicator } from "./components/LoadingIndicator";
-import { checkAuth, useAuthStatus } from "./lib/auth";
+import { checkAuth, getAuthStatus, getSessionCacheScope, subscribeAuthChanges, useAuthStatus } from "./lib/auth";
 import { installChunkLoadRecovery } from "./lib/chunk-recovery";
 import { initLocale, t } from "./lib/i18n";
 import { initTheme } from "./lib/theme";
@@ -47,14 +47,16 @@ declare module "@tanstack/react-router" {
 }
 
 const queryClient = new QueryClient();
+let queryAuthScope = getSessionCacheScope();
+subscribeAuthChanges(() => {
+  const scope = getSessionCacheScope();
+  if (scope !== queryAuthScope || getAuthStatus() === "unauthenticated") queryClient.clear();
+  queryAuthScope = scope;
+});
 
 /** Auth gate: verify the session token before entering the app (login screen when unauthenticated) */
 function AuthGate() {
   const status = useAuthStatus();
-
-  useEffect(() => {
-    if (status === "unauthenticated") queryClient.removeQueries({ queryKey: ["sessions"] });
-  }, [status]);
 
   useEffect(() => {
     if (status !== "checking") return;

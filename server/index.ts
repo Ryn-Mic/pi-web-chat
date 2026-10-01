@@ -51,6 +51,7 @@ import type {
   UIGitDiff,
   UIMessage,
 } from "../shared/protocol.ts";
+import { SESSION_NOT_FOUND_CLOSE_CODE } from "../shared/protocol.ts";
 import { createSnapshotDelta } from "../shared/snapshot.ts";
 import { auth, authStartupInfo } from "./auth.ts";
 import {
@@ -536,6 +537,10 @@ function sessionIdOf(file?: string): string {
   return i >= 0 ? base.slice(i + 1) : base;
 }
 
+class SessionNotFoundError extends Error {
+  constructor() { super("Session not found"); }
+}
+
 async function resolveSessionPath(id: string): Promise<string | undefined> {
   return sessionSummaryIndex.resolve(id);
 }
@@ -818,6 +823,7 @@ async function createEntry(
     : undefined;
   if (nativeThreadId && !nativeThread) throw new Error("Codex thread not found");
   const path = id && !nativeThreadId ? await resolveSessionPath(id) : undefined;
+  if (id && !nativeThreadId && (!path || !existsSync(path))) throw new SessionNotFoundError();
   // Opening an existing session keeps the old behavior (AGENT_CWD); only
   // brand-new sessions honor the cwd parameter.
   const sessionCwd = nativeThread?.cwd ?? (path ? AGENT_CWD : cwd ? expandHome(cwd) : AGENT_CWD);
@@ -2916,6 +2922,11 @@ async function handleAuthRequest(
 }
 
 
+function parseRequestUrl(requestTarget: string): URL | null {
+  try { return new URL(requestTarget, "http://localhost"); }
+  catch { return null; }
+}
+
 function rawPathnameFromRequestTarget(requestTarget: string): string {
   const absoluteForm = /^[A-Za-z][A-Za-z\d+.-]*:\/\//.exec(requestTarget);
   let pathStart = 0;
@@ -2941,7 +2952,12 @@ function rawPathnameFromRequestTarget(requestTarget: string): string {
 const httpServer = createServer(async (req, res) => {
   const requestTarget = req.url ?? "/";
   const rawPathname = rawPathnameFromRequestTarget(requestTarget);
-  const url = new URL(requestTarget, "http://localhost");
+  const url = parseRequestUrl(requestTarget);
+  if (!url) {
+    res.writeHead(400, { "content-type": "text/plain" });
+    res.end("Bad request");
+    return;
+  }
 
   try {
     // Decode and dispatch the File Viewer namespace before WHATWG-normalized
@@ -3643,7 +3659,11 @@ wss.on("close", () => clearInterval(wssHeartbeat));
 
 // WS handshake validates the session token (?token=)
 httpServer.on("upgrade", (req, socket, head) => {
-  const url = new URL(req.url ?? "/", "http://localhost");
+  const url = parseRequestUrl(req.url ?? "/");
+  if (!url) {
+    socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n", () => socket.destroy());
+    return;
+  }
   if (url.pathname !== "/ws") {
     socket.destroy();
     return;
@@ -3761,6 +3781,11 @@ wss.on("connection", (ws, req) => {
     try {
       entry = await prepareEntry();
     } catch (error) {
+      if (error instanceof SessionNotFoundError) {
+        sendTo(ws, { type: "error", message: error.message });
+        ws.close(SESSION_NOT_FOUND_CLOSE_CODE, error.message);
+        return;
+      }
       if (ws.readyState === ws.OPEN && !bindErrorShown) {
         bindErrorShown = true;
         sendTo(ws, {

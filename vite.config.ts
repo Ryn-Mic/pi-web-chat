@@ -164,7 +164,9 @@ export default defineConfig({
       },
       workbox: {
         // API/WS are not cached (only build assets are precached)
-        navigateFallbackDenylist: [/^\/api\//, /^\/ws/],
+        navigateFallbackAllowlist: [/^\/$/, /^\/s\/[^/?]+\/?$/],
+        navigateFallbackDenylist: [/^\/api(?:\/|$)/, /^\/ws(?:\/|$)/, /^\/file-viewer(?:\/|$)/],
+        importScripts: ["/pwa-cache-cleanup.js"],
         globPatterns: ["**/*.{js,css,html,woff2,svg,png,webmanifest}"],
         globIgnores: [
           "file-viewer/**",
@@ -181,7 +183,10 @@ export default defineConfig({
         // App shell: prefer network so iOS PWAs pick up new deploys
         runtimeCaching: [
           {
-            urlPattern: ({ request }) => request.mode === "navigate",
+            urlPattern: ({ request, url }) => request.mode === "navigate"
+              && url.origin === self.location.origin
+              && url.search === ""
+              && (url.pathname === "/" || url.pathname === "/index.html" || /^\/s\/[^/]+\/?$/.test(url.pathname)),
             handler: "NetworkFirst",
             options: {
               cacheName: "pi-web-html",

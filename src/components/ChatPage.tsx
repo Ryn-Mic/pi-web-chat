@@ -306,8 +306,8 @@ export function ChatPage() {
         {showConnectingOverlay ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
             <LoadingIndicator label={t("connecting")} size="lg" />
-            <p className="text-sm text-muted">
-              {connection === "disconnected" ? t("connectionLost") : t("connectingHint")}
+            <p role={lastError ? "alert" : undefined} className="text-sm text-muted">
+              {lastError ?? (connection === "disconnected" ? t("connectionLost") : t("connectingHint"))}
             </p>
           </div>
         ) : (

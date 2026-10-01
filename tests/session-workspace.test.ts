@@ -64,7 +64,7 @@ function createWorkspace() {
   return { workspace, clients };
 }
 
-function createWorkspaceWithLifecycle(events: string[]) {
+function createWorkspaceWithLifecycle(events: string[], bound?: string[]) {
   const clients: FakeClient[] = [];
   const workspace = new SessionWorkspace<FakeState, FakeClient>(
     (_, onBound) => {
@@ -72,7 +72,7 @@ function createWorkspaceWithLifecycle(events: string[]) {
       clients.push(client);
       return client;
     },
-    undefined,
+    (sessionId) => bound?.push(sessionId),
     {
       onTabClosed: (key) => events.push(`closed:${key}`),
       onTabsMerged: (losing, surviving) =>
@@ -153,6 +153,29 @@ test("closes only the selected client and activates the remaining tab", () => {
     workspace.getTabsSnapshot().map((tab) => tab.sessionId),
     ["session-a"],
   );
+});
+
+test("clearing an authentication namespace disposes every tab and permits fresh clients", () => {
+  const events: string[] = [];
+  const bound: string[] = [];
+  const { workspace, clients } = createWorkspaceWithLifecycle(events, bound);
+  workspace.open("session-a");
+  workspace.open(null);
+  const draftKey = workspace.activeKey;
+  workspace.open("session-b");
+  workspace.clear();
+  assert.equal(workspace.activeKey, null);
+  assert.deepEqual(workspace.getTabsSnapshot(), []);
+  assert.equal(clients.every((client) => client.disposed), true);
+  assert.deepEqual(events, ["closed:session-a", `closed:${draftKey}`, "closed:session-b"]);
+  clients[0].bind("late-old-session");
+  assert.deepEqual(workspace.getTabsSnapshot(), [], "late notifications cannot recreate cleared tabs");
+  workspace.clear();
+  const fresh = workspace.open("session-a");
+  assert.notEqual(fresh, clients[0]);
+  assert.equal(fresh.disposed, false);
+  clients[0].bind("late-old-session-after-login");
+  assert.deepEqual(bound, [], "old-generation callbacks must not overwrite the new login's resume target");
 });
 
 test("keeps unsent composer drafts isolated by session tab", () => {

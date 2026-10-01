@@ -1739,3 +1739,43 @@ test("read-only observer refreshes when only tool details change", async () => {
     await session.dispose();
   }
 });
+
+test("scheduled observer polls contain an upstream failure and recover on the next tick", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  let listCalls = 0;
+  const process = new FakeRpcProcess((request, fake) => {
+    if (request.method === "initialize") fake.respond(request, {});
+    else if (request.method === "thread/read") fake.respond(request, { thread: { id: "thr_observer_retry", cwd: "/tmp/project" } });
+    else if (request.method === "thread/resume") fake.respondError(request, "thread already has an active writer");
+    else if (request.method === "thread/turns/list") {
+      listCalls += 1;
+      if (listCalls === 2) fake.respondError(request, "temporary history failure");
+      else fake.respond(request, { data: [{ id: "observed", status: "inProgress", items: [
+        { type: "agentMessage", id: "observed-text", text: listCalls === 1 ? "initial" : "recovered" },
+      ] }], nextCursor: null });
+    }
+  });
+  const { spawnProcess } = fakeSpawner(() => process);
+  const events: CodexSessionEvent[] = [];
+  const session = new CodexSession({
+    cwd: "/tmp/project", state: { threadId: "thr_observer_retry" }, spawnProcess,
+    onEvent: (event) => events.push(event),
+  });
+  try {
+    await session.connect();
+    t.mock.timers.tick(2_000);
+    await nextTask();
+    assert.equal(listCalls, 2);
+    assert.ok(events.some((event) => event.type === "error" && /temporary history failure/.test(event.message)));
+    assert.equal(session.observerMode, true);
+    assert.equal(session.isStreaming, true, "a transient read must not fabricate turn completion");
+    t.mock.timers.tick(2_000);
+    await nextTask();
+    assert.equal(listCalls, 3);
+    assert.ok(events.some((event) => event.type === "history" && event.messages.some((message) =>
+      (message.content as Array<{ text?: string }> | undefined)?.some((block) => block.text === "recovered"))));
+  } finally {
+    await session.dispose();
+    t.mock.timers.reset();
+  }
+});

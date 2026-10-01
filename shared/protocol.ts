@@ -1,5 +1,8 @@
 /** Shared server <-> client protocol types */
 
+/** An explicit saved session no longer exists; never reconnect it as a draft. */
+export const SESSION_NOT_FOUND_CLOSE_CODE = 4404;
+
 /** Todo 工具의 작업 하나 (toolResult details.tasks 의 부분 집합) */
 export interface UITodoTask {
   id: number;

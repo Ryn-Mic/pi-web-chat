@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ChatClient, chatClient } from "../src/lib/chat.ts";
 import { CLIENT_COMMAND_MAX_BYTES, CLIENT_COMMAND_MAX_TEXT_LENGTH } from "../shared/client-command.ts";
+import { SESSION_NOT_FOUND_CLOSE_CODE } from "../shared/protocol.ts";
+import { getAuthStatus, getSessionToken, setAuthStatus, setSessionToken } from "../src/lib/auth.ts";
+import { getPreviewWorkspaceState, openPreview } from "../src/lib/file-preview.ts";
 import { clearComposerDraft, getComposerDraft, setComposerDraft } from "../src/lib/composer-drafts.ts";
 import type { ClientCommand } from "../shared/protocol.ts";
 
@@ -15,6 +18,29 @@ class FakeWebSocket {
   send(data: string) {
     this.sent.push(data);
   }
+}
+
+class LifecycleWebSocket extends FakeWebSocket {
+  static instances: LifecycleWebSocket[] = [];
+  closed = false;
+  onopen: (() => void) | null = null;
+  onclose: ((event?: { code: number }) => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  constructor(_url?: string) { super(); LifecycleWebSocket.instances.push(this); }
+  close() { this.closed = true; this.readyState = 3; this.onclose?.({ code: 1000 }); }
+}
+
+function installConnectionEnvironment() {
+  const previousLocation = globalThis.location;
+  const previousWebSocket = globalThis.WebSocket;
+  LifecycleWebSocket.instances = [];
+  Object.defineProperty(globalThis, "location", { configurable: true, value: { protocol: "http:", host: "localhost" } });
+  Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: LifecycleWebSocket });
+  return () => {
+    Object.defineProperty(globalThis, "location", { configurable: true, value: previousLocation });
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: previousWebSocket });
+  };
 }
 
 function createConnectedClient() {
@@ -36,6 +62,60 @@ function createConnectedClient() {
     },
   };
 }
+
+test("authentication changes clear sockets, snapshots, composer drafts, and preview workspaces", () => {
+  const restoreEnvironment = installConnectionEnvironment();
+  const previousToken = getSessionToken();
+  const previousStatus = getAuthStatus();
+  try {
+    setSessionToken("fixture-auth-a");
+    setAuthStatus("authenticated");
+    const oldClient = chatClient.connect("auth-session-a");
+    emit(oldClient, { type: "snapshot", seq: 0, revision: 0, snapshot: {
+      messages: [{ role: "user", content: [{ type: "text", text: "private snapshot" }] }], isStreaming: false,
+    } });
+    chatClient.connect("auth-session-b");
+    setComposerDraft("auth-session-a", { text: "private draft", images: [] });
+    openPreview("auth-session-a", "/tmp/project", "private.txt", "private.txt");
+    setAuthStatus("unauthenticated");
+    assert.deepEqual(chatClient.getTabsSnapshot(), []);
+    assert.equal(chatClient.activeTabKey, null);
+    assert.equal(oldClient.state.snapshot, null);
+    assert.equal(LifecycleWebSocket.instances.every((socket) => socket.closed), true);
+    assert.equal(getComposerDraft("auth-session-a").text, "");
+    assert.deepEqual(getPreviewWorkspaceState("auth-session-a").tabs, []);
+    setSessionToken("fixture-auth-b");
+    setAuthStatus("authenticated");
+    const fresh = chatClient.connect("auth-session-a");
+    assert.notEqual(fresh, oldClient);
+    assert.equal(LifecycleWebSocket.instances.length, 3);
+    setSessionToken("fixture-auth-c");
+    assert.deepEqual(chatClient.getTabsSnapshot(), [], "credential replacement is also a namespace boundary");
+    assert.equal(LifecycleWebSocket.instances[2].closed, true);
+  } finally {
+    for (const tab of [...chatClient.getTabsSnapshot()]) chatClient.closeTab(tab.key);
+    setSessionToken(previousToken);
+    setAuthStatus(previousStatus);
+    restoreEnvironment();
+  }
+});
+
+test("a missing-session close is terminal and never schedules a reconnect", () => {
+  const restore = installConnectionEnvironment();
+  const client = new ChatClient();
+  try {
+    client.connect("missing-session");
+    const socket = LifecycleWebSocket.instances[0];
+    socket.onopen?.();
+    emit(client, { type: "error", message: "Session not found" });
+    socket.onclose?.({ code: SESSION_NOT_FOUND_CLOSE_CODE });
+    assert.equal(client.state.connection, "disconnected");
+    assert.equal(client.state.lastError, "Session not found");
+    assert.equal(client.state.sessionId, null);
+    assert.equal((client as unknown as { reconnectTimer: unknown }).reconnectTimer, null);
+    assert.equal((client as unknown as { disconnectTimer: unknown }).disconnectTimer, null);
+  } finally { client.dispose(); restore(); }
+});
 
 test("does not apply a delayed focus request after its tab becomes inactive", async () => {
   const previousWindow = (globalThis as { window?: unknown }).window;
