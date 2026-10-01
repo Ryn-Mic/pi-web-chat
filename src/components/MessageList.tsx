@@ -617,17 +617,19 @@ const Message = memo(function Message({
 function ProcessDisclosure({
   collapsed,
   toolCount,
+  active = false,
   children,
 }: {
   collapsed: boolean;
   toolCount: number;
+  active?: boolean;
   children: React.ReactNode;
 }) {
   const t = useT();
   const [override, setOverride] = useState<{ collapsed: boolean; open: boolean } | null>(null);
   const open = override?.collapsed === collapsed ? override.open : !collapsed;
   return (
-    <details open={open} className="min-w-0" data-execution-process>
+    <details open={open} className="min-w-0 my-1.5" data-execution-process>
       <summary
         onClick={(event) => {
           // Control the native disclosure synchronously: queued toggle events must
@@ -635,13 +637,28 @@ function ProcessDisclosure({
           event.preventDefault();
           setOverride({ collapsed, open: !open });
         }}
-        className="flex min-h-10 cursor-pointer list-none items-center gap-2 rounded-lg px-2 text-xs text-muted transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent select-none [&::-webkit-details-marker]:hidden"
+        className="flex min-h-9 cursor-pointer list-none items-center gap-2 rounded-xl border border-line/60 bg-card/60 px-3 py-1.5 text-xs text-muted shadow-2xs backdrop-blur-xs transition-all hover:border-line hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent select-none dark:border-white/[0.08] dark:bg-card/40 dark:hover:bg-card/60 [&::-webkit-details-marker]:hidden"
       >
-        <NavigationActionIcon direction="down" size={14} className={open ? "" : "-rotate-90"} />
-        <span>{t("executionProcess")}</span>
-        {toolCount > 0 && <span className="text-faint">{t("executionToolCount", { count: toolCount })}</span>}
+        <span
+          className={`flex size-4 shrink-0 items-center justify-center transition-transform duration-200 ${
+            open ? "rotate-0" : "-rotate-90"
+          }`}
+        >
+          <NavigationActionIcon direction="down" size={13} />
+        </span>
+        {active ? (
+          <span className="size-1.5 shrink-0 rounded-full bg-accent animate-pulse" aria-hidden />
+        ) : (
+          <span className="size-1.5 shrink-0 rounded-full bg-faint/60" aria-hidden />
+        )}
+        <span className="font-medium text-ink/90">{t("executionProcess")}</span>
+        {toolCount > 0 && (
+          <span className="ml-auto inline-flex items-center rounded-full bg-bubble px-2 py-0.5 font-mono text-[10px] text-muted dark:bg-white/5 dark:text-muted/90">
+            {t("executionToolCount", { count: toolCount })}
+          </span>
+        )}
       </summary>
-      <div className="flex min-w-0 flex-col gap-3 border-l border-line pl-3 pt-1 sm:gap-4">
+      <div className="ml-2.5 flex min-w-0 flex-col gap-3 border-l-2 border-line/60 pl-3.5 pt-2 pb-1 sm:gap-3.5 dark:border-white/[0.08]">
         {children}
       </div>
     </details>
@@ -687,7 +704,7 @@ function AssistantTurn({
     <>
       {turn.prompt && renderMessage(turn.prompt)}
       {hasProcess && (
-        <ProcessDisclosure collapsed={turn.collapsible} toolCount={toolCount}>
+        <ProcessDisclosure collapsed={turn.collapsible} toolCount={toolCount} active={turn.active}>
           {turn.process.map((entry) => renderMessage(entry))}
           {live?.streamThinking && (
             <Thinking text={live.streamThinking} streaming={!live.streamThinkingComplete} />
