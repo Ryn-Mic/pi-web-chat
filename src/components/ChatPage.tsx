@@ -333,6 +333,9 @@ export function ChatPage() {
               agent={snapshot?.agent ?? getAgentPreference() ?? "pi"}
               onPreviewFile={previewMessageFile}
               hideScrollButton={isAnySidebarOpen}
+              sessionId={sessionId}
+              onLoadMessageAnchors={loadMessageAnchors}
+              onLoadHistoryThroughUserMessage={loadHistoryThroughUserMessage}
             />
             {connection !== "connected" && (
               <div role="status" className="shrink-0 border-t border-line bg-card px-4 py-2 text-xs text-muted">
@@ -433,8 +436,6 @@ export function ChatPage() {
               messages={persistedMessages}
               historyHasMore={historyHasMore}
               historyLoading={historyLoading}
-              onLoadMessageAnchors={loadMessageAnchors}
-              onLoadHistoryThroughUserMessage={loadHistoryThroughUserMessage}
               containerRef={messageListRef}
             />
           </Fragment>

@@ -212,6 +212,9 @@ export const ja: Messages = {
 
   emptyPrompt: "何をお手伝いしましょうか？",
   messageAnchors: "メッセージへ移動",
+  previousQuestion: "前の質問",
+  nextQuestion: "次の質問",
+  questionsList: "質問一覧",
   updateAvailable: "新しいバージョンがあります",
   serverRestartRequired: "Web Chat サーバーの再起動が必要です",
   serverRestartRequiredHint:

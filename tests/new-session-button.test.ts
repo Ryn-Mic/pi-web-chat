@@ -37,7 +37,17 @@ test("drawer state transitions toggle open states safely", () => {
   setModalOverlayOpen(false);
 });
 
-test("scroll down icon path exists in MORPH_ICON_PATHS", () => {
-  assert.ok(MORPH_ICON_PATHS.arrowDown && MORPH_ICON_PATHS.arrowDown.length > 0);
-  assert.ok(MORPH_ICON_PATHS.fileText && MORPH_ICON_PATHS.fileText.length > 0);
+test("question navigator translations exist across all supported locales", () => {
+  assert.ok(en.previousQuestion && en.previousQuestion.length > 0);
+  assert.ok(zh.previousQuestion && zh.previousQuestion.length > 0);
+  assert.ok(ja.previousQuestion && ja.previousQuestion.length > 0);
+  assert.ok(ko.previousQuestion && ko.previousQuestion.length > 0);
+  assert.ok(en.nextQuestion && en.nextQuestion.length > 0);
+  assert.ok(zh.nextQuestion && zh.nextQuestion.length > 0);
+  assert.ok(ja.nextQuestion && ja.nextQuestion.length > 0);
+  assert.ok(ko.nextQuestion && ko.nextQuestion.length > 0);
+  assert.ok(en.questionsList && en.questionsList.length > 0);
+  assert.ok(zh.questionsList && zh.questionsList.length > 0);
+  assert.ok(ja.questionsList && ja.questionsList.length > 0);
+  assert.ok(ko.questionsList && ko.questionsList.length > 0);
 });

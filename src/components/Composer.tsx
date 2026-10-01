@@ -9,7 +9,6 @@ import { extractMentionQuery, replaceMentionToken } from "../lib/mention";
 import { CommandPalette, commandMatches } from "./CommandPalette";
 import { FileMentionPalette } from "./FileMentionPalette";
 import { ForkDialog } from "./ForkDialog";
-import { MessageAnchors } from "./MessageAnchors";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { ModelMenu } from "./ModelMenu";
 import { ActiveTodoBadge, BranchBadge, TodoProgress } from "./ProjectBadge";
@@ -147,8 +146,6 @@ export function Composer({
   messages,
   historyHasMore,
   historyLoading,
-  onLoadMessageAnchors,
-  onLoadHistoryThroughUserMessage,
   containerRef,
   tabKey,
 }: {
@@ -157,12 +154,9 @@ export function Composer({
   messages: UIMessage[];
   historyHasMore: boolean;
   historyLoading: boolean;
-  onLoadMessageAnchors: () => Promise<UIMessageAnchor[] | null>;
-  onLoadHistoryThroughUserMessage: (
-    ordinal: number,
-    totalUserMessages: number,
-  ) => Promise<boolean>;
-  containerRef: React.RefObject<HTMLDivElement | null>;
+  onLoadMessageAnchors?: () => Promise<any>;
+  onLoadHistoryThroughUserMessage?: (...args: any[]) => Promise<any>;
+  containerRef?: React.RefObject<HTMLDivElement | null>;
   tabKey: string;
 }) {
   const t = useT();
@@ -653,16 +647,6 @@ export function Composer({
                 />
               )}
             </div>
-            <MessageAnchors
-              sessionId={sessionId}
-              messages={messages}
-              historyHasMore={historyHasMore}
-              historyLoading={historyLoading}
-              onLoadMessageAnchors={onLoadMessageAnchors}
-              onLoadHistoryThroughUserMessage={onLoadHistoryThroughUserMessage}
-              containerRef={containerRef}
-              compact
-            />
             <button
               type="button"
               onClick={() => {
