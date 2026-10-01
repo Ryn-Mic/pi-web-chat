@@ -219,6 +219,8 @@ export const zh: Messages = {
   dismiss: "关闭",
   attachedImage: "附件图片",
   imagePlaceholder: "[图片]",
+  executionProcess: "执行过程",
+  executionToolCount: "{count} 次工具调用",
   toolRunning: "正在运行 {name}…",
   askAnswerInTerminal: "这需要在 pi 终端中回答 — Web 界面无法回答。",
   copyMessage: "复制消息",
