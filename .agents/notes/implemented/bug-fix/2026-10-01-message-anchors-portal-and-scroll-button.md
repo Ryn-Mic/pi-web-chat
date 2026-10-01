@@ -19,6 +19,10 @@ Status: implemented
    - 在 `src/lib/drawer.ts` 中维护 `modalOverlayOpen` 状态与 `setModalOverlayOpen` 方法；
    - `MessageAnchors` 组件在 `open` 为 true 时同步调用 `setModalOverlayOpen(true)`，使 `useAnyDrawerOpen()` 返回 true；
    - `ChatPage.tsx` 将联动后的 `isAnySidebarOpen`（包含模态浮层）传入 `MessageList` 的 `hideScrollButton`，在弹窗打开期间瞬间隐藏向下滚动按钮，从根源杜绝遮挡。
+3. **准确区分侧边栏抽屉与弹窗遮罩，杜绝胶囊自杀性消失**：
+   - 原先将 `modalOverlayOpen` 合并在 `useAnyDrawerOpen()` 中，并通过单个全局布尔值同时传递给了 `hideScrollButton` 和 `PromptNavigator` 的 `hide` 属性，导致用户点击打开提问大纲时，导航胶囊误认为侧边栏打开而 `return null` 自行销毁；
+   - 将两者解耦：`useAnyDrawerOpen` 专用于抽屉侧边栏，`useModalOverlayOpen` 专用于模态浮层；
+   - `MessageList` 分别接收 `hideScrollButton`（侧边栏或弹窗打开时隐藏滚动按钮）与 `hidePromptNavigator`（仅侧边栏打开时隐藏提问胶囊），点击大纲条目后平滑滚动并自动收起面板。
 
 ## Alternatives considered
 

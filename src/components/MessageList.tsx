@@ -823,6 +823,7 @@ export function MessageList({
   agent,
   onPreviewFile,
   hideScrollButton = false,
+  hidePromptNavigator = false,
   sessionId,
   onLoadMessageAnchors,
   onLoadHistoryThroughUserMessage,
@@ -843,6 +844,7 @@ export function MessageList({
   agent: UIAgentKind;
   onPreviewFile?: PreviewMessageFile;
   hideScrollButton?: boolean;
+  hidePromptNavigator?: boolean;
   sessionId?: string | null;
   onLoadMessageAnchors?: () => Promise<import("../../shared/protocol").UIMessageAnchor[] | null>;
   onLoadHistoryThroughUserMessage?: (
@@ -1054,7 +1056,7 @@ export function MessageList({
           ((ordinal, total) => chatClient.loadHistoryThroughUserMessage(ordinal, total))
         }
         containerRef={containerRef}
-        hide={hideScrollButton}
+        hide={hidePromptNavigator}
       />
     </div>
   );

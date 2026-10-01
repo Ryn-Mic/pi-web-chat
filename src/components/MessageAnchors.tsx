@@ -186,6 +186,7 @@ export function PromptNavigator({
     if (index !== null) {
       scrollToMessage(containerRef, index);
       setCurrentVisibleOrdinal(targetOrdinal);
+      setOpen(false);
       return;
     }
 

@@ -6,7 +6,7 @@ import { getAgentPreference } from "../lib/agent";
 import { AgentEyes } from "./AgentEyes";
 import { AgentIcon } from "./AgentIcon";
 import { chatClient, useChat } from "../lib/chat";
-import { requestOpenFilesDrawer, requestOpenSessionsDrawer, useAnyDrawerOpen } from "../lib/drawer";
+import { requestOpenFilesDrawer, requestOpenSessionsDrawer, useAnyDrawerOpen, useModalOverlayOpen } from "../lib/drawer";
 import { activatePreview } from "../lib/file-preview";
 import { setFilesPanelOpen, useFilesPanelOpen } from "../lib/filetree";
 import { useLocale, useT } from "../lib/i18n";
@@ -202,7 +202,9 @@ export function ChatPage() {
   // shrinking to a mobile width leaves the drawer unreachable by swipe.
   const filesPanelOpen = useFilesPanelOpen();
   const anyDrawerOpen = useAnyDrawerOpen();
+  const modalOverlayOpen = useModalOverlayOpen();
   const isAnySidebarOpen = filesPanelOpen || sidebarPinned || anyDrawerOpen;
+  const hideScrollToBottom = isAnySidebarOpen || modalOverlayOpen;
   const openFilesDrawer = useCallback(() => requestOpenFilesDrawer(), []);
   useRightEdgeSwipe({ enabled: true, onSwipeLeft: openFilesDrawer });
 
@@ -332,7 +334,8 @@ export function ChatPage() {
               cwd={snapshot?.cwd}
               agent={snapshot?.agent ?? getAgentPreference() ?? "pi"}
               onPreviewFile={previewMessageFile}
-              hideScrollButton={isAnySidebarOpen}
+              hideScrollButton={hideScrollToBottom}
+              hidePromptNavigator={isAnySidebarOpen}
               sessionId={sessionId}
               onLoadMessageAnchors={loadMessageAnchors}
               onLoadHistoryThroughUserMessage={loadHistoryThroughUserMessage}
