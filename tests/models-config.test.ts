@@ -1,6 +1,7 @@
 // apiKey masking round-trip: masked reads, key-preserving writes, stale-mask rejection.
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -10,9 +11,8 @@ import {
   writeCustomModels,
 } from "../server/models-config.ts";
 
-const dir = "/tmp/pi-mask-test";
-rmSync(dir, { recursive: true, force: true });
-mkdirSync(dir, { recursive: true });
+const dir = mkdtempSync(join(tmpdir(), "pi-mask-test-"));
+const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = dir;
 
 const file = join(dir, "models.json");
@@ -78,6 +78,23 @@ test("resolveIncomingApiKey restores masked values, passes through new values, r
   assert.equal(resolveIncomingApiKey("openai", undefined), undefined);
 });
 
+test("model configuration creates and replaces private files without leaving temporary secrets", { skip: process.platform === "win32" }, () => {
+  rmSync(file, { force: true });
+  writeCustomModels(providers);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  for (const mode of [0o600, 0o644]) {
+    writeFixture();
+    chmodSync(file, mode);
+    writeCustomModels(readCustomModels().providers);
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+    const stored = JSON.parse(readFileSync(file, "utf8"));
+    assert.equal(stored.providers.openai.apiKey, providers[0].apiKey);
+    assert.equal(readdirSync(dir).some((name) => name.endsWith(".tmp")), false);
+  }
+});
+
 test.after(() => {
   rmSync(dir, { recursive: true, force: true });
+  if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 });

@@ -4,7 +4,8 @@
  * Fields the edit UI doesn't touch (cost, compat, headers, etc.) are preserved
  * via merge.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -253,8 +254,13 @@ export function writeCustomModels(providers: UICustomProvider[]): UICustomProvid
 
   const file = modelsPath();
   mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(out, null, 2)}\n`, "utf8");
-  renameSync(tmp, file);
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(out, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, file);
+  } finally {
+    try { unlinkSync(tmp); } catch { /* renamed or never created */ }
+  }
   return resolved;
 }

@@ -53,6 +53,7 @@ export class SessionWorkspace<
   private readonly listeners = new Set<() => void>();
   private readonly createClient: ClientFactory<Client>;
   private nextDraftId = 1;
+  private generation = 0;
   private activeKeyValue: string | null = null;
   private tabsSnapshot: readonly WorkspaceTab<State>[] = [];
 
@@ -131,6 +132,12 @@ export class SessionWorkspace<
     return this.activeKeyValue;
   }
 
+  /** End an authentication namespace without retaining clients or tab state. */
+  clear(): void {
+    this.generation += 1;
+    for (const key of [...this.clients.keys()]) this.close(key);
+  }
+
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -141,9 +148,12 @@ export class SessionWorkspace<
     // Keep the tab key in a mutable reference for the bound-session callback.
     // Draft tab keys remain stable across session binding and forks.
     const keyRef = { value: key };
+    const generation = this.generation;
     const client = this.createClient(
       sessionId,
-      (boundId) => this.handleBound(keyRef, boundId),
+      (boundId) => {
+        if (generation === this.generation) this.handleBound(keyRef, boundId);
+      },
       key,
     );
     this.clients.set(key, client);

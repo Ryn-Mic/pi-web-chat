@@ -1301,7 +1301,10 @@ export class CodexSession {
     });
     await this.pollObserverTurn();
     this.observerPollTimer = setInterval(() => {
-      void this.pollObserverTurn();
+      void this.pollObserverTurn().catch((error) => {
+        if (this.disposed) return;
+        this.emitEvent({ type: "error", message: "Unable to refresh Codex observer: " + errorMessage(error) });
+      });
     }, OBSERVER_POLL_MS);
   }
 
