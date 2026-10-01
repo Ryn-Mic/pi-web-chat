@@ -211,6 +211,9 @@ export const zh: Messages = {
 
   emptyPrompt: "有什么可以帮您？",
   messageAnchors: "跳转到消息",
+  previousQuestion: "上一问",
+  nextQuestion: "下一问",
+  questionsList: "提问大纲",
   updateAvailable: "有新版本可用",
   serverRestartRequired: "需要重启 Web Chat 服务",
   serverRestartRequiredHint:

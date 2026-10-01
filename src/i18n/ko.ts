@@ -212,6 +212,9 @@ export const ko: Messages = {
 
   emptyPrompt: "무엇을 도와드릴까요?",
   messageAnchors: "메시지로 이동",
+  previousQuestion: "이전 질문",
+  nextQuestion: "다음 질문",
+  questionsList: "질문 목록",
   updateAvailable: "새 버전이 있습니다",
   serverRestartRequired: "Web Chat 서버를 다시 시작해야 합니다",
   serverRestartRequiredHint:

@@ -23,6 +23,7 @@ import { LoadingIndicator } from "./LoadingIndicator";
 import { AgentEyes } from "./AgentEyes";
 import { AgentIcon } from "./AgentIcon";
 import { DiffView } from "./DiffView";
+import { PromptNavigator } from "./MessageAnchors";
 import { CopyActionIcon, FolderTreeIcon, NavigationActionIcon, StarterPromptIcon } from "./MorphIcons";
 import {
   Markdown,
@@ -822,6 +823,9 @@ export function MessageList({
   agent,
   onPreviewFile,
   hideScrollButton = false,
+  sessionId,
+  onLoadMessageAnchors,
+  onLoadHistoryThroughUserMessage,
 }: {
   messages: UIMessage[];
   streamText: string;
@@ -839,6 +843,12 @@ export function MessageList({
   agent: UIAgentKind;
   onPreviewFile?: PreviewMessageFile;
   hideScrollButton?: boolean;
+  sessionId?: string | null;
+  onLoadMessageAnchors?: () => Promise<import("../../shared/protocol").UIMessageAnchor[] | null>;
+  onLoadHistoryThroughUserMessage?: (
+    ordinal: number,
+    totalUserMessages: number,
+  ) => Promise<boolean>;
 }) {
   const t = useT();
   // Keep live content visible even if its lifecycle snapshot arrives out of order.
@@ -1031,6 +1041,21 @@ export function MessageList({
           <NavigationActionIcon direction="down" size={16} />
         </button>
       )}
+
+      {/* Floating prompt navigator (jump to previous/next question) */}
+      <PromptNavigator
+        sessionId={sessionId ?? null}
+        messages={messages}
+        historyHasMore={historyHasMore}
+        historyLoading={historyLoading}
+        onLoadMessageAnchors={onLoadMessageAnchors ?? (() => chatClient.loadMessageAnchors())}
+        onLoadHistoryThroughUserMessage={
+          onLoadHistoryThroughUserMessage ??
+          ((ordinal, total) => chatClient.loadHistoryThroughUserMessage(ordinal, total))
+        }
+        containerRef={containerRef}
+        hide={hideScrollButton}
+      />
     </div>
   );
 }

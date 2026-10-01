@@ -220,6 +220,9 @@ export type Messages = {
   emptyPrompt: string;
   attachedImage: string;
   messageAnchors: string;
+  previousQuestion: string;
+  nextQuestion: string;
+  questionsList: string;
   updateAvailable: string;
   serverRestartRequired: string;
   serverRestartRequiredHint: string;
@@ -514,6 +517,9 @@ export const en: Messages = {
 
   emptyPrompt: "How can I help?",
   messageAnchors: "Jump to message",
+  previousQuestion: "Previous question",
+  nextQuestion: "Next question",
+  questionsList: "Questions outline",
   updateAvailable: "A new version is available",
   serverRestartRequired: "Web Chat server restart required",
   serverRestartRequiredHint:
