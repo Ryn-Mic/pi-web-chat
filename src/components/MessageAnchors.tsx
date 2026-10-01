@@ -3,9 +3,9 @@ import { createPortal } from "react-dom";
 import type { UIMessage, UIMessageAnchor } from "../../shared/protocol";
 import { setModalOverlayOpen } from "../lib/drawer";
 import { localeTag, useLocale, useT } from "../lib/i18n";
-import { messageIndexForUserOrdinal } from "../lib/message-anchors";
+import { computeVisibleTicks, messageIndexForUserOrdinal } from "../lib/message-anchors";
 import { LoadingIndicator } from "./LoadingIndicator";
-import { DismissActionIcon, NavigationActionIcon } from "./MorphIcons";
+import { DismissActionIcon } from "./MorphIcons";
 
 function relativeAge(timestamp: number, locale: ReturnType<typeof useLocale>): string {
   const age = Math.max(0, Date.now() - timestamp);
@@ -22,6 +22,14 @@ function relativeAge(timestamp: number, locale: ReturnType<typeof useLocale>): s
   return formatter.format(-Math.floor(age / day), "day");
 }
 
+function extractUserText(content: UIMessage["content"]): string {
+  return content
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join(" ")
+    .trim();
+}
+
 function scrollToMessage(
   containerRef: RefObject<HTMLDivElement | null>,
   index: number,
@@ -36,7 +44,7 @@ function scrollToMessage(
   target.classList.add("anchor-flash");
 }
 
-export interface PromptNavigatorProps {
+export interface MessageTimelineTicksProps {
   sessionId: string | null;
   messages: UIMessage[];
   historyHasMore: boolean;
@@ -51,9 +59,15 @@ export interface PromptNavigatorProps {
 }
 
 /**
- * Floating prompt navigator (jump to previous/next user question and outline popover).
+ * Timeline ticks on the right edge of the chat viewport representing user message nodes.
+ * Features:
+ * - Up to 7 ticks, centered vertically;
+ * - Current message tick is bolder and longer;
+ * - First tap/click expands message card previews;
+ * - Automatically collapses after 2 seconds of inactivity;
+ * - Direct jumping to message nodes with anchor flash animation.
  */
-export function PromptNavigator({
+export function MessageTimelineTicks({
   sessionId,
   messages,
   historyHasMore,
@@ -62,10 +76,12 @@ export function PromptNavigator({
   onLoadHistoryThroughUserMessage,
   containerRef,
   hide = false,
-}: PromptNavigatorProps) {
+}: MessageTimelineTicksProps) {
   const t = useT();
   const locale = useLocale();
-  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [fullOutlineOpen, setFullOutlineOpen] = useState(false);
   const [anchors, setAnchors] = useState<UIMessageAnchor[] | null>(null);
   const [indexLoading, setIndexLoading] = useState(false);
   const [loadingOrdinal, setLoadingOrdinal] = useState<number | null>(null);
@@ -74,14 +90,19 @@ export function PromptNavigator({
   const [failedAnchor, setFailedAnchor] = useState<UIMessageAnchor | null>(null);
   const [currentVisibleOrdinal, setCurrentVisibleOrdinal] = useState<number>(1);
   const requestVersion = useRef(0);
+  const autoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const userEntries = useMemo(() => {
-    const list: { index: number; ordinal: number }[] = [];
+    const list: { index: number; ordinal: number; text: string }[] = [];
     let count = 0;
     messages.forEach((msg, idx) => {
       if (msg.role === "user") {
         count += 1;
-        list.push({ index: idx, ordinal: count });
+        list.push({
+          index: idx,
+          ordinal: count,
+          text: extractUserText(msg.content),
+        });
       }
     });
     return list;
@@ -89,23 +110,73 @@ export function PromptNavigator({
 
   const totalUserCount = anchors?.length ?? (historyHasMore ? userEntries.length + 1 : userEntries.length);
 
+  const visibleTicks = useMemo(
+    () => computeVisibleTicks(totalUserCount, currentVisibleOrdinal, 7),
+    [totalUserCount, currentVisibleOrdinal],
+  );
+
+  const clearTimer = useCallback(() => {
+    if (autoCloseTimerRef.current) {
+      clearTimeout(autoCloseTimerRef.current);
+      autoCloseTimerRef.current = null;
+    }
+  }, []);
+
+  const resetAutoCloseTimer = useCallback(() => {
+    clearTimer();
+    autoCloseTimerRef.current = setTimeout(() => {
+      setExpanded(false);
+    }, 2000);
+  }, [clearTimer]);
+
+  useEffect(() => {
+    if (expanded) {
+      resetAutoCloseTimer();
+    } else {
+      clearTimer();
+    }
+    return clearTimer;
+  }, [expanded, resetAutoCloseTimer, clearTimer]);
+
   useEffect(() => {
     requestVersion.current += 1;
-    setOpen(false);
+    setExpanded(false);
+    setFullOutlineOpen(false);
     setAnchors(null);
     setIndexLoading(false);
     setLoadingOrdinal(null);
     setPendingOrdinal(null);
     setLoadFailed(false);
     setFailedAnchor(null);
-  }, [sessionId]);
+    clearTimer();
+  }, [sessionId, clearTimer]);
 
   useEffect(() => {
-    setModalOverlayOpen(open);
-    return () => setModalOverlayOpen(false);
-  }, [open]);
+    if (hide) {
+      setExpanded(false);
+      clearTimer();
+    }
+  }, [hide, clearTimer]);
 
-  // Track the user message closest to the top of the viewport
+  useEffect(() => {
+    setModalOverlayOpen(fullOutlineOpen);
+    return () => setModalOverlayOpen(false);
+  }, [fullOutlineOpen]);
+
+  // Click outside listener to collapse expanded card
+  useEffect(() => {
+    if (!expanded) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setExpanded(false);
+        clearTimer();
+      }
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [expanded, clearTimer]);
+
+  // Track user message closest to the top of viewport
   const updateVisibleOrdinal = useCallback(() => {
     const container = containerRef.current;
     if (!container || userEntries.length === 0) return;
@@ -142,10 +213,12 @@ export function PromptNavigator({
       scrollToMessage(containerRef, index);
       setPendingOrdinal(null);
       setLoadingOrdinal(null);
-      setOpen(false);
+      setExpanded(false);
+      setFullOutlineOpen(false);
+      clearTimer();
     });
     return () => cancelAnimationFrame(frame);
-  }, [anchors, containerRef, messages, pendingOrdinal]);
+  }, [anchors, containerRef, messages, pendingOrdinal, clearTimer]);
 
   const requestAnchors = useCallback(() => {
     if (indexLoading) return;
@@ -174,8 +247,6 @@ export function PromptNavigator({
     }
   }, [historyHasMore, anchors, indexLoading, requestAnchors]);
 
-  if (hide || (userEntries.length < 2 && !historyHasMore)) return null;
-
   const jumpToOrdinal = (targetOrdinal: number) => {
     if (loadingOrdinal !== null || historyLoading) return;
     const total = anchors?.length ?? totalUserCount;
@@ -186,7 +257,9 @@ export function PromptNavigator({
     if (index !== null) {
       scrollToMessage(containerRef, index);
       setCurrentVisibleOrdinal(targetOrdinal);
-      setOpen(false);
+      setExpanded(false);
+      setFullOutlineOpen(false);
+      clearTimer();
       return;
     }
 
@@ -211,74 +284,164 @@ export function PromptNavigator({
       });
   };
 
-  const jumpPrev = () => {
-    const prev = Math.max(1, currentVisibleOrdinal - 1);
-    jumpToOrdinal(prev);
-  };
+  const getPromptText = useCallback(
+    (ord: number) => {
+      if (anchors) {
+        const a = anchors.find((item) => item.ordinal === ord);
+        if (a?.text) return a.text;
+      }
+      const local = userEntries.find((item) => item.ordinal === ord);
+      if (local?.text) return local.text;
+      return `#${ord}`;
+    },
+    [anchors, userEntries],
+  );
 
-  const jumpNext = () => {
-    const next = Math.min(totalUserCount, currentVisibleOrdinal + 1);
-    jumpToOrdinal(next);
-  };
-
-  const toggleOutline = () => {
-    const next = !open;
-    setOpen(next);
-    if (next && anchors === null) {
-      requestAnchors();
+  const handleToggleExpand = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!expanded) {
+      setExpanded(true);
+      if (anchors === null && !indexLoading) {
+        requestAnchors();
+      }
+    } else {
+      setExpanded(false);
+      clearTimer();
     }
   };
 
-  const atFirst = currentVisibleOrdinal <= 1 && !historyHasMore;
-  const atLast = currentVisibleOrdinal >= totalUserCount;
+  const handleSelectOrdinal = (ord: number) => {
+    jumpToOrdinal(ord);
+  };
+
+  if (hide || (userEntries.length < 2 && !historyHasMore)) return null;
 
   return (
-    <div className="absolute right-3.5 bottom-4 z-20 flex flex-col items-center rounded-2xl border border-line/70 bg-card/90 p-0.5 shadow-md backdrop-blur-md transition-all sm:right-4 dark:border-white/[0.08] dark:bg-card/80 dark:shadow-xl">
-      <button
-        type="button"
-        disabled={atFirst || loadingOrdinal !== null}
-        onClick={jumpPrev}
-        aria-label={t("previousQuestion")}
-        title={t("previousQuestion")}
-        className="flex size-7 items-center justify-center rounded-xl text-muted transition-colors hover:bg-hover hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
-      >
-        <span className="rotate-180 flex items-center justify-center">
-          <NavigationActionIcon direction="down" size={13} />
-        </span>
-      </button>
+    <aside
+      ref={rootRef}
+      role="navigation"
+      aria-label={t("questionsList")}
+      className="absolute right-1 sm:right-2.5 top-1/2 -translate-y-1/2 z-20 flex items-center select-none pointer-events-auto"
+    >
+      {/* Expanded flyout card */}
+      {expanded && (
+        <div
+          onMouseEnter={resetAutoCloseTimer}
+          onMouseMove={resetAutoCloseTimer}
+          onTouchStart={resetAutoCloseTimer}
+          onWheel={resetAutoCloseTimer}
+          onClick={(e) => e.stopPropagation()}
+          className="absolute right-full mr-2 top-1/2 -translate-y-1/2 w-64 sm:w-72 max-w-[calc(100vw-3.5rem)] flex flex-col rounded-2xl border border-line/70 bg-card/95 p-1.5 shadow-xl backdrop-blur-md dark:border-white/[0.1] dark:bg-[#20201e]/95 animate-in fade-in zoom-in-95 duration-150"
+        >
+          <div className="flex shrink-0 items-center justify-between border-b border-line/40 px-2 py-1.5 text-xs text-muted font-medium">
+            <span className="flex items-center gap-1.5">
+              <span className="size-1.5 rounded-full bg-accent animate-pulse" />
+              {t("questionsList")}
+            </span>
+            <span className="font-mono text-[11px] tabular-nums text-faint">
+              {currentVisibleOrdinal} / {totalUserCount}
+            </span>
+          </div>
 
-      <button
-        type="button"
-        onClick={toggleOutline}
-        aria-label={t("questionsList")}
+          <div className="flex flex-col gap-0.5 py-1">
+            {visibleTicks.map((ord) => {
+              const isCurrent = ord === currentVisibleOrdinal;
+              const text = getPromptText(ord);
+              return (
+                <button
+                  key={ord}
+                  type="button"
+                  disabled={loadingOrdinal !== null || historyLoading}
+                  onClick={() => handleSelectOrdinal(ord)}
+                  className={`group/item flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-xs transition-colors ${
+                    isCurrent
+                      ? "bg-accent/10 text-accent font-medium dark:bg-accent/15"
+                      : "text-ink hover:bg-hover"
+                  }`}
+                >
+                  <span
+                    className={`flex size-5 shrink-0 items-center justify-center rounded-md font-mono text-[10.5px] tabular-nums transition-colors ${
+                      isCurrent
+                        ? "bg-accent text-accent-ink font-semibold shadow-2xs"
+                        : "bg-bubble text-muted group-hover/item:text-ink"
+                    }`}
+                  >
+                    {ord}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[12px] leading-tight">
+                    {text || t("emptyMessage")}
+                  </span>
+                  {isCurrent && (
+                    <span className="size-1.5 shrink-0 rounded-full bg-accent" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {totalUserCount > 7 && (
+            <div className="border-t border-line/40 pt-1 px-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setFullOutlineOpen(true);
+                  setExpanded(false);
+                  clearTimer();
+                }}
+                className="w-full rounded-lg py-1 text-center font-mono text-[11px] text-faint hover:bg-hover hover:text-ink transition-colors"
+              >
+                {t("questionsList")} · ({totalUserCount})
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Vertical ticks track */}
+      <div
+        onClick={handleToggleExpand}
+        className="group/ticks flex flex-col items-end gap-1.5 py-2 px-1 rounded-full cursor-pointer transition-all hover:bg-black/5 dark:hover:bg-white/5"
         title={`${t("questionsList")} (${currentVisibleOrdinal}/${totalUserCount})`}
-        className="flex h-6 min-w-7 items-center justify-center px-1 font-mono text-[10.5px] font-semibold text-muted transition-colors hover:text-ink select-none"
       >
-        {loadingOrdinal !== null ? (
-          <LoadingIndicator label={t("loading")} size="sm" />
-        ) : (
-          <span>
-            {currentVisibleOrdinal}/{totalUserCount}
-          </span>
+        {visibleTicks[0] > 1 && (
+          <span className="mr-0.5 size-1 rounded-full bg-muted/40 transition-opacity" />
         )}
-      </button>
 
-      <button
-        type="button"
-        disabled={atLast || loadingOrdinal !== null}
-        onClick={jumpNext}
-        aria-label={t("nextQuestion")}
-        title={t("nextQuestion")}
-        className="flex size-7 items-center justify-center rounded-xl text-muted transition-colors hover:bg-hover hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
-      >
-        <NavigationActionIcon direction="down" size={13} />
-      </button>
+        {visibleTicks.map((ord) => {
+          const isCurrent = ord === currentVisibleOrdinal;
+          return (
+            <button
+              key={ord}
+              type="button"
+              tabIndex={-1}
+              onClick={(e) => {
+                if (!expanded) {
+                  handleToggleExpand(e);
+                } else {
+                  e.stopPropagation();
+                  handleSelectOrdinal(ord);
+                }
+              }}
+              aria-label={`${t("questionsList")} #${ord}`}
+              className={`rounded-full transition-all duration-200 pointer-events-auto ${
+                isCurrent
+                  ? "w-4.5 sm:w-5 h-[3px] bg-accent shadow-xs"
+                  : "w-2 sm:w-2.5 h-[2px] bg-line-strong/60 group-hover/ticks:bg-muted/70 hover:!w-3.5 hover:!bg-muted dark:bg-white/20 dark:group-hover/ticks:bg-white/35 dark:hover:!bg-white/60"
+              }`}
+            />
+          );
+        })}
 
-      {/* Floating outline popover */}
-      {open && typeof document !== "undefined" && createPortal(
+        {visibleTicks[visibleTicks.length - 1] < totalUserCount && (
+          <span className="mr-0.5 size-1 rounded-full bg-muted/40 transition-opacity" />
+        )}
+      </div>
+
+      {/* Full outline modal fallback */}
+      {fullOutlineOpen && typeof document !== "undefined" && createPortal(
         <div
           className="fixed inset-0 z-50 flex items-end justify-center md:items-center"
-          onClick={() => setOpen(false)}
+          onClick={() => setFullOutlineOpen(false)}
         >
           <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px]" />
           <div
@@ -293,7 +456,7 @@ export function PromptNavigator({
               </span>
               <button
                 type="button"
-                onClick={() => setOpen(false)}
+                onClick={() => setFullOutlineOpen(false)}
                 aria-label={t("cancel")}
                 className="flex size-7 items-center justify-center rounded-lg text-faint transition-colors hover:bg-hover hover:text-ink"
               >
@@ -348,8 +511,9 @@ export function PromptNavigator({
         </div>,
         document.body,
       )}
-    </div>
+    </aside>
   );
 }
 
-export const MessageAnchors = PromptNavigator;
+export const PromptNavigator = MessageTimelineTicks;
+export const MessageAnchors = MessageTimelineTicks;
