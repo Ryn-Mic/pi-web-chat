@@ -16,8 +16,16 @@ export interface ConversationTurn {
   noticesBefore: TurnMessage[];
   noticesAfter: TurnMessage[];
   active: boolean;
-  /** Failed, unresolved or no-final turns must not disappear automatically. */
-  collapsible: boolean;
+  /**
+   * Failed tool results in this turn, including errors the agent recovered from.
+   * Surfaced on the folded summary row so a collapsed turn still reports them.
+   */
+  failedTools: number;
+  /**
+   * The turn did not settle: a provider error text or a tool call whose result
+   * never arrived. Folded turns surface this instead of auto-expanding.
+   */
+  incomplete: boolean;
 }
 
 /** Group only the loaded page; never inspect or reparse the persisted transcript. */
@@ -58,8 +66,13 @@ export function conversationTurns(messages: UIMessage[], isStreaming: boolean): 
         if (processBlocks.length) process.push({ ...last, message: { ...last.message, content: processBlocks } });
       }
     }
-    const unsafe = assistants.some(({ message }) => message.errorMessage || message.content.some(
-      (block) => block.type === "toolCall" && (!block.result || block.result.isError),
+    const failedTools = assistants.reduce(
+      (count, { message }) => count
+        + message.content.filter((block) => block.type === "toolCall" && block.result?.isError).length,
+      0,
+    );
+    const incomplete = assistants.some(({ message }) => !!message.errorMessage || message.content.some(
+      (block) => block.type === "toolCall" && !block.result,
     ));
     const notices = group.entries.filter((entry) => entry.message.role === "custom");
     return {
@@ -71,7 +84,8 @@ export function conversationTurns(messages: UIMessage[], isStreaming: boolean): 
       noticesBefore: notices.filter((entry) => !reply || entry.index < reply.index),
       noticesAfter: notices.filter((entry) => reply && entry.index > reply.index),
       active,
-      collapsible: !!reply && !unsafe,
+      failedTools,
+      incomplete,
     };
   });
 }

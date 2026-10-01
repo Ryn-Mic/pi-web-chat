@@ -225,6 +225,8 @@ export const ja: Messages = {
   imagePlaceholder: "[画像]",
   executionProcess: "実行過程",
   executionToolCount: "ツール呼び出し {count} 回",
+  executionFailedToolCount: "{count} 件失敗",
+  executionIncomplete: "エラーあり",
   toolRunning: "{name} を実行中…",
   askAnswerInTerminal: "これは pi ターミナルでの回答が必要です — Web UI では回答できません。",
   copyMessage: "メッセージをコピー",
