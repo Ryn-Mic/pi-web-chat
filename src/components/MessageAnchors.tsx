@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import type { UIMessage, UIMessageAnchor } from "../../shared/protocol";
+import { setModalOverlayOpen } from "../lib/drawer";
 import { localeTag, useLocale, useT } from "../lib/i18n";
 import { messageIndexForUserOrdinal } from "../lib/message-anchors";
 import { LoadingIndicator } from "./LoadingIndicator";
@@ -85,6 +87,11 @@ export function MessageAnchors({
     setLoadFailed(false);
     setFailedAnchor(null);
   }, [sessionId]);
+
+  useEffect(() => {
+    setModalOverlayOpen(open);
+    return () => setModalOverlayOpen(false);
+  }, [open]);
 
   useEffect(() => {
     if (pendingOrdinal === null || anchors === null) return;
@@ -184,14 +191,14 @@ export function MessageAnchors({
         </svg>
       </button>
 
-      {open && (
+      {open && typeof document !== "undefined" && createPortal(
         <div
-          className="fixed inset-0 z-40 flex items-end justify-center md:items-center"
+          className="fixed inset-0 z-50 flex items-end justify-center md:items-center"
           onClick={close}
         >
-          <div className="absolute inset-0 bg-black/40" />
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px]" />
           <div
-            className="relative z-10 flex max-h-[65vh] w-full flex-col rounded-t-2xl bg-card shadow-2xl outline-none md:max-w-sm md:rounded-2xl"
+            className="relative z-10 flex max-h-[65vh] w-full flex-col rounded-t-2xl border border-line/60 bg-card shadow-2xl outline-none md:max-w-sm md:rounded-2xl dark:border-white/[0.08]"
             onClick={(event) => event.stopPropagation()}
             role="dialog"
             aria-label={t("messageAnchors")}
@@ -252,7 +259,8 @@ export function MessageAnchors({
               ))}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

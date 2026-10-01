@@ -11,6 +11,7 @@ const filesListeners = new Set<(view?: "files" | "git") => void>();
 
 let sessionsDrawerOpen = false;
 let filesDrawerOpen = false;
+let modalOverlayOpen = false;
 const stateListeners = new Set<() => void>();
 
 function notifyState() {
@@ -29,6 +30,12 @@ export function setFilesDrawerOpen(open: boolean) {
   notifyState();
 }
 
+export function setModalOverlayOpen(open: boolean) {
+  if (modalOverlayOpen === open) return;
+  modalOverlayOpen = open;
+  notifyState();
+}
+
 export function useAnyDrawerOpen(): boolean {
   return useSyncExternalStore(
     (onStoreChange) => {
@@ -37,7 +44,7 @@ export function useAnyDrawerOpen(): boolean {
         stateListeners.delete(onStoreChange);
       };
     },
-    () => sessionsDrawerOpen || filesDrawerOpen,
+    () => sessionsDrawerOpen || filesDrawerOpen || modalOverlayOpen,
     () => false,
   );
 }
