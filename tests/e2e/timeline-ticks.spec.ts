@@ -111,3 +111,34 @@ test("timeline ticks: renders up to 7 ticks, centers, highlights current, expand
   // Clicking an item should jump and immediately collapse the flyout
   await expect(flyout).not.toBeVisible();
 });
+
+test("timeline ticks: sliding/scrubbing on ticks scrolls the chat viewport in real-time", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 667 });
+  await mockChatWithQuestions(page, 10);
+  await login(page);
+
+  const nav = page.locator('aside[role="navigation"]');
+  await expect(nav).toBeVisible();
+
+  const track = nav.locator(".group\\/ticks");
+  const trackBox = await track.boundingBox();
+  expect(trackBox).not.toBeNull();
+
+  // Pointer down at the bottom of the track (latest question), then slide up to the top
+  const startX = trackBox!.x + trackBox!.width / 2;
+  const bottomY = trackBox!.y + trackBox!.height - 5;
+  const topY = trackBox!.y + 5;
+
+  await page.mouse.move(startX, bottomY);
+  await page.mouse.down();
+  // Drag upward to scrub towards earlier messages
+  await page.mouse.move(startX, topY, { steps: 5 });
+
+  // Floating scrubber badge should be visible during scrubbing
+  const badge = nav.locator(".animate-in");
+  await expect(badge).toBeVisible();
+
+  await page.mouse.up();
+});

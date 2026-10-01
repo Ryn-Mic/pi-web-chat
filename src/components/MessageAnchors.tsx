@@ -33,15 +33,18 @@ function extractUserText(content: UIMessage["content"]): string {
 function scrollToMessage(
   containerRef: RefObject<HTMLDivElement | null>,
   index: number,
+  smooth = true,
 ): void {
   const el = containerRef.current?.querySelector<HTMLElement>(`[data-msg-index="${index}"]`);
   if (!el) return;
-  el.scrollIntoView({ behavior: "smooth", block: "start" });
-  const bubble = el.querySelector<HTMLElement>(".user-bubble");
-  const target = bubble ?? el;
-  target.classList.remove("anchor-flash");
-  void target.offsetWidth;
-  target.classList.add("anchor-flash");
+  el.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+  if (smooth) {
+    const bubble = el.querySelector<HTMLElement>(".user-bubble");
+    const target = bubble ?? el;
+    target.classList.remove("anchor-flash");
+    void target.offsetWidth;
+    target.classList.add("anchor-flash");
+  }
 }
 
 export interface MessageTimelineTicksProps {
@@ -62,7 +65,8 @@ export interface MessageTimelineTicksProps {
  * Timeline ticks on the right edge of the chat viewport representing user message nodes.
  * Features:
  * - Up to 7 ticks, centered vertically;
- * - Current message tick is bolder and longer;
+ * - Current message tick is bolder and longer (accent color);
+ * - Gestures: Slide / Scrub on ticks to directly scroll the message viewport in real time;
  * - First tap/click expands message card previews;
  * - Automatically collapses after 2 seconds of inactivity;
  * - Direct jumping to message nodes with anchor flash animation.
@@ -80,6 +84,7 @@ export function MessageTimelineTicks({
   const t = useT();
   const locale = useLocale();
   const rootRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [fullOutlineOpen, setFullOutlineOpen] = useState(false);
   const [anchors, setAnchors] = useState<UIMessageAnchor[] | null>(null);
@@ -88,9 +93,17 @@ export function MessageTimelineTicks({
   const [pendingOrdinal, setPendingOrdinal] = useState<number | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [failedAnchor, setFailedAnchor] = useState<UIMessageAnchor | null>(null);
-  const [currentVisibleOrdinal, setCurrentVisibleOrdinal] = useState<number>(1);
+
   const requestVersion = useRef(0);
   const autoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Dragging / Scrubbing state
+  const isScrubbingRef = useRef(false);
+  const pointerStartYRef = useRef(0);
+  const hasDraggedRef = useRef(false);
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [scrubbingOrdinal, setScrubbingOrdinal] = useState<number | null>(null);
+  const [scrubbingTooltipY, setScrubbingTooltipY] = useState<number | null>(null);
 
   const userEntries = useMemo(() => {
     const list: { index: number; ordinal: number; text: string }[] = [];
@@ -109,6 +122,11 @@ export function MessageTimelineTicks({
   }, [messages]);
 
   const totalUserCount = anchors?.length ?? (historyHasMore ? userEntries.length + 1 : userEntries.length);
+
+  // Initialize current visible ordinal to latest user message when available
+  const [currentVisibleOrdinal, setCurrentVisibleOrdinal] = useState<number>(() => {
+    return userEntries.length > 0 ? userEntries[userEntries.length - 1]!.ordinal : 1;
+  });
 
   const visibleTicks = useMemo(
     () => computeVisibleTicks(totalUserCount, currentVisibleOrdinal, 7),
@@ -149,7 +167,10 @@ export function MessageTimelineTicks({
     setLoadFailed(false);
     setFailedAnchor(null);
     clearTimer();
-  }, [sessionId, clearTimer]);
+    if (userEntries.length > 0) {
+      setCurrentVisibleOrdinal(userEntries[userEntries.length - 1]!.ordinal);
+    }
+  }, [sessionId, clearTimer, userEntries]);
 
   useEffect(() => {
     if (hide) {
@@ -176,11 +197,30 @@ export function MessageTimelineTicks({
     return () => window.removeEventListener("pointerdown", handlePointerDown);
   }, [expanded, clearTimer]);
 
-  // Track user message closest to the top of viewport
+  // Track user message closest to the viewport
   const updateVisibleOrdinal = useCallback(() => {
+    if (isScrubbingRef.current) return;
     const container = containerRef.current;
     if (!container || userEntries.length === 0) return;
-    const containerTop = container.getBoundingClientRect().top;
+
+    // 1. If viewport is close to bottom, authoritative position is the latest message
+    const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 60;
+    if (isAtBottom) {
+      setCurrentVisibleOrdinal(userEntries[userEntries.length - 1]!.ordinal);
+      return;
+    }
+
+    // 2. If viewport is at top, authoritative position is the first message
+    if (container.scrollTop <= 15) {
+      setCurrentVisibleOrdinal(userEntries[0]!.ordinal);
+      return;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const viewportTop = containerRect.top;
+    const viewportBottom = containerRect.bottom;
+    const focusY = viewportTop + container.clientHeight * 0.25;
+
     let closestOrdinal = userEntries[userEntries.length - 1]!.ordinal;
     let minDistance = Infinity;
 
@@ -188,7 +228,11 @@ export function MessageTimelineTicks({
       const el = container.querySelector<HTMLElement>(`[data-msg-index="${entry.index}"]`);
       if (!el) continue;
       const rect = el.getBoundingClientRect();
-      const distance = Math.abs(rect.top - containerTop);
+
+      // Messages far below viewport bottom are ignored
+      if (rect.top > viewportBottom) continue;
+
+      const distance = Math.abs(rect.top - focusY);
       if (distance < minDistance) {
         minDistance = distance;
         closestOrdinal = entry.ordinal;
@@ -206,11 +250,15 @@ export function MessageTimelineTicks({
   }, [containerRef, updateVisibleOrdinal]);
 
   useEffect(() => {
+    updateVisibleOrdinal();
+  }, [messages.length, updateVisibleOrdinal]);
+
+  useEffect(() => {
     if (pendingOrdinal === null || anchors === null) return;
     const index = messageIndexForUserOrdinal(messages, anchors.length, pendingOrdinal);
     if (index === null) return;
     const frame = requestAnimationFrame(() => {
-      scrollToMessage(containerRef, index);
+      scrollToMessage(containerRef, index, true);
       setPendingOrdinal(null);
       setLoadingOrdinal(null);
       setExpanded(false);
@@ -247,42 +295,52 @@ export function MessageTimelineTicks({
     }
   }, [historyHasMore, anchors, indexLoading, requestAnchors]);
 
-  const jumpToOrdinal = (targetOrdinal: number) => {
-    if (loadingOrdinal !== null || historyLoading) return;
-    const total = anchors?.length ?? totalUserCount;
-    const index = anchors
-      ? messageIndexForUserOrdinal(messages, anchors.length, targetOrdinal)
-      : userEntries.find((e) => e.ordinal === targetOrdinal)?.index ?? null;
+  const scrollToOrdinal = useCallback(
+    (targetOrdinal: number, smooth = true) => {
+      if (loadingOrdinal !== null || historyLoading) return;
+      const total = anchors?.length ?? totalUserCount;
+      const index = anchors
+        ? messageIndexForUserOrdinal(messages, anchors.length, targetOrdinal)
+        : userEntries.find((e) => e.ordinal === targetOrdinal)?.index ?? null;
 
-    if (index !== null) {
-      scrollToMessage(containerRef, index);
-      setCurrentVisibleOrdinal(targetOrdinal);
+      if (index !== null) {
+        scrollToMessage(containerRef, index, smooth);
+        setCurrentVisibleOrdinal(targetOrdinal);
+        return;
+      }
+
+      // Need to fetch earlier history
+      const version = requestVersion.current;
+      setLoadingOrdinal(targetOrdinal);
+      setPendingOrdinal(targetOrdinal);
+      setLoadFailed(false);
+      setFailedAnchor(null);
+      void onLoadHistoryThroughUserMessage(targetOrdinal, total)
+        .then((loaded) => {
+          if (requestVersion.current !== version || loaded) return;
+          setPendingOrdinal(null);
+          setLoadingOrdinal(null);
+          setLoadFailed(true);
+        })
+        .catch(() => {
+          if (requestVersion.current !== version) return;
+          setPendingOrdinal(null);
+          setLoadingOrdinal(null);
+          setLoadFailed(true);
+        });
+    },
+    [anchors, containerRef, historyLoading, loadingOrdinal, messages, onLoadHistoryThroughUserMessage, totalUserCount, userEntries],
+  );
+
+  const jumpToOrdinal = useCallback(
+    (targetOrdinal: number) => {
+      scrollToOrdinal(targetOrdinal, true);
       setExpanded(false);
       setFullOutlineOpen(false);
       clearTimer();
-      return;
-    }
-
-    // Need to fetch earlier history
-    const version = requestVersion.current;
-    setLoadingOrdinal(targetOrdinal);
-    setPendingOrdinal(targetOrdinal);
-    setLoadFailed(false);
-    setFailedAnchor(null);
-    void onLoadHistoryThroughUserMessage(targetOrdinal, total)
-      .then((loaded) => {
-        if (requestVersion.current !== version || loaded) return;
-        setPendingOrdinal(null);
-        setLoadingOrdinal(null);
-        setLoadFailed(true);
-      })
-      .catch(() => {
-        if (requestVersion.current !== version) return;
-        setPendingOrdinal(null);
-        setLoadingOrdinal(null);
-        setLoadFailed(true);
-      });
-  };
+    },
+    [clearTimer, scrollToOrdinal],
+  );
 
   const getPromptText = useCallback(
     (ord: number) => {
@@ -297,8 +355,7 @@ export function MessageTimelineTicks({
     [anchors, userEntries],
   );
 
-  const handleToggleExpand = (e?: React.MouseEvent) => {
-    e?.stopPropagation();
+  const handleToggleExpand = useCallback(() => {
     if (!expanded) {
       setExpanded(true);
       if (anchors === null && !indexLoading) {
@@ -308,10 +365,108 @@ export function MessageTimelineTicks({
       setExpanded(false);
       clearTimer();
     }
+  }, [anchors, clearTimer, expanded, indexLoading, requestAnchors]);
+
+  // Resolve which tick button is closest to the pointer clientY
+  const resolveOrdinalFromPoint = useCallback(
+    (clientY: number): { ordinal: number; relativeY: number } | null => {
+      const track = trackRef.current;
+      if (!track) return null;
+      const trackRect = track.getBoundingClientRect();
+      const buttons = Array.from(track.querySelectorAll<HTMLButtonElement>("button[data-ordinal]"));
+      if (buttons.length === 0) return null;
+
+      let closestOrdinal = visibleTicks[0] ?? 1;
+      let minDistance = Infinity;
+      let targetCenterY = trackRect.top + trackRect.height / 2;
+
+      for (const btn of buttons) {
+        const ord = Number(btn.getAttribute("data-ordinal"));
+        if (!ord) continue;
+        const rect = btn.getBoundingClientRect();
+        const centerY = rect.top + rect.height / 2;
+        const distance = Math.abs(clientY - centerY);
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestOrdinal = ord;
+          targetCenterY = centerY;
+        }
+      }
+
+      const relativeY = targetCenterY - trackRect.top;
+      return { ordinal: closestOrdinal, relativeY };
+    },
+    [visibleTicks],
+  );
+
+  // Pointer scrubbing handlers (slide to scroll)
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    pointerStartYRef.current = e.clientY;
+    hasDraggedRef.current = false;
+    isScrubbingRef.current = true;
+    setIsScrubbing(true);
+
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+
+    const resolved = resolveOrdinalFromPoint(e.clientY);
+    if (resolved) {
+      setScrubbingOrdinal(resolved.ordinal);
+      setScrubbingTooltipY(resolved.relativeY);
+    }
   };
 
-  const handleSelectOrdinal = (ord: number) => {
-    jumpToOrdinal(ord);
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isScrubbingRef.current) return;
+    const dy = Math.abs(e.clientY - pointerStartYRef.current);
+    if (dy > 4) {
+      hasDraggedRef.current = true;
+    }
+
+    const resolved = resolveOrdinalFromPoint(e.clientY);
+    if (resolved) {
+      setScrubbingOrdinal(resolved.ordinal);
+      setScrubbingTooltipY(resolved.relativeY);
+
+      if (hasDraggedRef.current) {
+        // Direct real-time scroll while sliding
+        scrollToOrdinal(resolved.ordinal, false);
+      }
+    }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isScrubbingRef.current) return;
+    const wasDragging = hasDraggedRef.current;
+    isScrubbingRef.current = false;
+    setIsScrubbing(false);
+    setScrubbingOrdinal(null);
+    setScrubbingTooltipY(null);
+
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+
+    if (!wasDragging) {
+      // Tap/click: toggle outline preview flyout
+      handleToggleExpand();
+    } else {
+      // Finished scrubbing: reset 2s collapse timer
+      resetAutoCloseTimer();
+    }
+  };
+
+  const handlePointerCancel = () => {
+    isScrubbingRef.current = false;
+    setIsScrubbing(false);
+    setScrubbingOrdinal(null);
+    setScrubbingTooltipY(null);
   };
 
   if (hide || (userEntries.length < 2 && !historyHasMore)) return null;
@@ -323,6 +478,24 @@ export function MessageTimelineTicks({
       aria-label={t("questionsList")}
       className="absolute right-1 sm:right-2.5 top-1/2 -translate-y-1/2 z-20 flex items-center select-none pointer-events-auto"
     >
+      {/* Real-time floating scrubber badge during sliding */}
+      {isScrubbing && hasDraggedRef.current && scrubbingOrdinal !== null && (
+        <div
+          className="absolute right-full mr-2.5 flex items-center gap-2 rounded-xl border border-line/70 bg-card/95 px-3 py-1.5 shadow-xl backdrop-blur-md dark:border-white/[0.1] dark:bg-[#20201e]/95 pointer-events-none select-none z-30 animate-in fade-in duration-100"
+          style={{
+            top: scrubbingTooltipY !== null ? `${scrubbingTooltipY}px` : "50%",
+            transform: "translateY(-50%)",
+          }}
+        >
+          <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-accent text-[10.5px] font-mono font-semibold text-accent-ink shadow-2xs">
+            #{scrubbingOrdinal}
+          </span>
+          <span className="max-w-[180px] truncate text-[12px] font-medium text-ink leading-tight">
+            {getPromptText(scrubbingOrdinal)}
+          </span>
+        </div>
+      )}
+
       {/* Expanded flyout card */}
       {expanded && (
         <div
@@ -331,7 +504,7 @@ export function MessageTimelineTicks({
           onTouchStart={resetAutoCloseTimer}
           onWheel={resetAutoCloseTimer}
           onClick={(e) => e.stopPropagation()}
-          className="absolute right-full mr-2 top-1/2 -translate-y-1/2 w-64 sm:w-72 max-w-[calc(100vw-3.5rem)] flex flex-col rounded-2xl border border-line/70 bg-card/95 p-1.5 shadow-xl backdrop-blur-md dark:border-white/[0.1] dark:bg-[#20201e]/95 animate-in fade-in zoom-in-95 duration-150"
+          className="absolute right-full mr-2.5 top-1/2 -translate-y-1/2 w-64 sm:w-72 max-w-[calc(100vw-3.5rem)] flex flex-col rounded-2xl border border-line/70 bg-card/95 p-1.5 shadow-xl backdrop-blur-md dark:border-white/[0.1] dark:bg-[#20201e]/95 animate-in fade-in zoom-in-95 duration-150"
         >
           <div className="flex shrink-0 items-center justify-between border-b border-line/40 px-2 py-1.5 text-xs text-muted font-medium">
             <span className="flex items-center gap-1.5">
@@ -352,7 +525,7 @@ export function MessageTimelineTicks({
                   key={ord}
                   type="button"
                   disabled={loadingOrdinal !== null || historyLoading}
-                  onClick={() => handleSelectOrdinal(ord)}
+                  onClick={() => jumpToOrdinal(ord)}
                   className={`group/item flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-xs transition-colors ${
                     isCurrent
                       ? "bg-accent/10 text-accent font-medium dark:bg-accent/15"
@@ -397,10 +570,14 @@ export function MessageTimelineTicks({
         </div>
       )}
 
-      {/* Vertical ticks track */}
+      {/* Vertical ticks track with touch-none for smooth scrubbing */}
       <div
-        onClick={handleToggleExpand}
-        className="group/ticks flex flex-col items-end gap-1.5 py-2 px-1 rounded-full cursor-pointer transition-all hover:bg-black/5 dark:hover:bg-white/5"
+        ref={trackRef}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        className="group/ticks flex flex-col items-end gap-1.5 py-2 px-1 rounded-full cursor-pointer transition-all hover:bg-black/5 dark:hover:bg-white/5 touch-none"
         title={`${t("questionsList")} (${currentVisibleOrdinal}/${totalUserCount})`}
       >
         {visibleTicks[0] > 1 && (
@@ -408,18 +585,17 @@ export function MessageTimelineTicks({
         )}
 
         {visibleTicks.map((ord) => {
-          const isCurrent = ord === currentVisibleOrdinal;
+          const isCurrent = ord === (isScrubbing && scrubbingOrdinal !== null ? scrubbingOrdinal : currentVisibleOrdinal);
           return (
             <button
               key={ord}
               type="button"
               tabIndex={-1}
+              data-ordinal={ord}
               onClick={(e) => {
-                if (!expanded) {
-                  handleToggleExpand(e);
-                } else {
-                  e.stopPropagation();
-                  handleSelectOrdinal(ord);
+                e.stopPropagation();
+                if (expanded) {
+                  jumpToOrdinal(ord);
                 }
               }}
               aria-label={`${t("questionsList")} #${ord}`}
