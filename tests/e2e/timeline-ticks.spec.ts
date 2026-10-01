@@ -23,11 +23,20 @@ function snapshotFor(id: string, messages: UIMessage[]): UISnapshot {
   };
 }
 
-async function mockChatWithQuestions(page: Page, count = 10) {
+async function mockChatWithQuestions(page: Page, count = 10, answerLines = 2) {
   const messages: UIMessage[] = [];
   for (let i = 1; i <= count; i++) {
     messages.push(message(`u-${i}`, `Question #${i} from user about topic ${i}`, "user"));
-    messages.push(message(`a-${i}`, `Answer #${i} with some long text to provide scrollable vertical distance.`, "assistant"));
+    messages.push(
+      message(
+        `a-${i}`,
+        Array.from(
+          { length: answerLines },
+          () => `Answer #${i} with text to provide scrollable vertical distance.`,
+        ).join("\n"),
+        "assistant",
+      ),
+    );
   }
 
   const snapshot = snapshotFor("session-ticks", messages);
@@ -141,4 +150,148 @@ test("timeline ticks: sliding/scrubbing on ticks scrolls the chat viewport in re
   await expect(badge).toBeVisible();
 
   await page.mouse.up();
+});
+
+/** Read the ordinal of the single bold/long "current" tick. */
+async function activeTickOrdinal(page: Page): Promise<number | null> {
+  const raw = await page
+    .locator('aside[role="navigation"] button[data-ordinal].bg-accent')
+    .first()
+    .getAttribute("data-ordinal");
+  return raw === null ? null : Number(raw);
+}
+
+/** Visible tick ordinals in track order (top → bottom). */
+async function visibleTickOrdinals(page: Page): Promise<number[]> {
+  return page
+    .locator('aside[role="navigation"] button[data-ordinal]')
+    .evaluateAll((els) => els.map((el) => Number(el.getAttribute("data-ordinal"))));
+}
+
+/**
+ * Top edge of the Nth loaded user prompt, relative to the scroll container.
+ * Only meaningful when the whole transcript is loaded (no history pages).
+ */
+async function loadedPromptTop(page: Page, ordinal: number): Promise<number> {
+  return page.evaluate((target) => {
+    const scroller = document.querySelector(".message-list .thin-scroll")!;
+    const containerTop = scroller.getBoundingClientRect().top;
+    const prompt = Array.from(scroller.querySelectorAll("[data-msg-index]"))[target - 1]!;
+    return Math.round(prompt.getBoundingClientRect().top - containerTop);
+  }, ordinal);
+}
+
+test("timeline ticks: the highlighted tick corresponds to the prompt at the top of the viewport", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 667 });
+  // Short answers keep the NEXT prompt well inside the viewport, which is the
+  // geometry that used to highlight the neighbour of the prompt just jumped to.
+  await mockChatWithQuestions(page, 10, 1);
+  await login(page);
+
+  const nav = page.locator('aside[role="navigation"]');
+  await expect(nav).toBeVisible();
+
+  // At rest the viewport is pinned to the end: the newest question is current.
+  await expect.poll(() => activeTickOrdinal(page)).toBe(10);
+
+  // Jump back to #5 from the flyout.
+  await nav.locator(".group\\/ticks").click();
+  const flyout = nav.locator(".animate-in");
+  await expect(flyout).toBeVisible();
+  await flyout.getByText("Question #5 from user about topic 5").click();
+
+  // The jump aligns the prompt to the top of the viewport…
+  await expect.poll(() => loadedPromptTop(page, 5)).toBeLessThanOrEqual(24);
+  // …and the highlighted tick is that same prompt, not its neighbour.
+  await expect.poll(() => activeTickOrdinal(page)).toBe(5);
+  expect(await visibleTickOrdinals(page)).toEqual([2, 3, 4, 5, 6, 7, 8]);
+
+  // Jumping forward tracks the target the same way.
+  await nav.locator(".group\\/ticks").click();
+  await expect(flyout).toBeVisible();
+  await flyout.getByText("Question #8 from user about topic 8").click();
+  await expect.poll(() => loadedPromptTop(page, 8)).toBeLessThanOrEqual(24);
+  await expect.poll(() => activeTickOrdinal(page)).toBe(8);
+
+  // Scrolling back to the end re-anchors to the newest question.
+  await page.evaluate(() => {
+    const scroller = document.querySelector(".message-list .thin-scroll")!;
+    scroller.scrollTop = scroller.scrollHeight;
+  });
+  await expect.poll(() => activeTickOrdinal(page)).toBe(10);
+});
+
+test("timeline ticks: a transcript that starts mid-conversation is labelled by global ordinals", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 667 });
+
+  const messages: UIMessage[] = [];
+  for (let i = 1; i <= 6; i++) {
+    messages.push(message(`u-${i}`, `Loaded question #${i}`, "user"));
+    messages.push(message(`a-${i}`, "Short answer.", "assistant"));
+  }
+
+  await page.route("**/api/sessions?*", async (route) =>
+    route.fulfill({
+      json: {
+        sessions: [
+          {
+            id: "session-ticks",
+            path: `${PROJECT_ROOT}/session-ticks.jsonl`,
+            project: PROJECT_ROOT,
+            name: "Session Ticks",
+            firstMessage: "Question #1",
+            modified: "2026-09-30T00:00:00Z",
+            messageCount: 90,
+            agent: "pi",
+          },
+        ],
+        nextCursor: null,
+        scanning: false,
+      },
+    }),
+  );
+  // The loaded page is the last 6 of 45 questions.
+  await page.route("**/api/sessions/session-ticks/anchors", async (route) =>
+    route.fulfill({
+      json: {
+        anchors: Array.from({ length: 45 }, (_, i) => ({
+          id: `u${i + 1}`,
+          ordinal: i + 1,
+          text: `Question #${i + 1}`,
+        })),
+      },
+    }),
+  );
+  await page.routeWebSocket(/\/ws\?/, (socket: WebSocketRoute) => {
+    const snapshot: UISnapshot = {
+      ...snapshotFor("session-ticks", messages),
+      history: { cursor: "cursor-1", hasMore: true },
+    };
+    socket.send(JSON.stringify({ type: "session_bound", sessionId: "session-ticks" }));
+    socket.send(JSON.stringify({ type: "snapshot", seq: 0, revision: 0, snapshot }));
+  });
+
+  await login(page);
+  const nav = page.locator('aside[role="navigation"]');
+  await expect(nav).toBeVisible();
+
+  // Pinned to the end of a 45-question session: the newest question is tick 45.
+  await expect.poll(() => activeTickOrdinal(page)).toBe(45);
+  expect(await visibleTickOrdinals(page)).toEqual([39, 40, 41, 42, 43, 44, 45]);
+
+  // The flyout labels the same global node.
+  await nav.locator(".group\\/ticks").click();
+  await expect(nav.locator(".animate-in")).toBeVisible();
+  await expect(nav.locator(".animate-in").getByText("Question #39")).toBeVisible();
+
+  // Scrolling to the top of the loaded page anchors on its first question (40),
+  // never on the page-local ordinal 1.
+  await page.evaluate(() => {
+    document.querySelector(".message-list .thin-scroll")!.scrollTop = 0;
+  });
+  await expect.poll(() => activeTickOrdinal(page)).toBe(40);
 });
