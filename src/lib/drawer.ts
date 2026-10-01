@@ -44,7 +44,20 @@ export function useAnyDrawerOpen(): boolean {
         stateListeners.delete(onStoreChange);
       };
     },
-    () => sessionsDrawerOpen || filesDrawerOpen || modalOverlayOpen,
+    () => sessionsDrawerOpen || filesDrawerOpen,
+    () => false,
+  );
+}
+
+export function useModalOverlayOpen(): boolean {
+  return useSyncExternalStore(
+    (onStoreChange) => {
+      stateListeners.add(onStoreChange);
+      return () => {
+        stateListeners.delete(onStoreChange);
+      };
+    },
+    () => modalOverlayOpen,
     () => false,
   );
 }
