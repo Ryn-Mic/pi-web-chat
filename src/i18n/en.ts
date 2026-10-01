@@ -226,6 +226,8 @@ export type Messages = {
   dismiss: string;
   reload: string;
   imagePlaceholder: string;
+  executionProcess: string;
+  executionToolCount: string;
   toolRunning: string;
   askAnswerInTerminal: string;
   copyMessage: string;
@@ -520,6 +522,8 @@ export const en: Messages = {
   dismiss: "Dismiss",
   attachedImage: "Attached image",
   imagePlaceholder: "[image]",
+  executionProcess: "Execution process",
+  executionToolCount: "Tool calls: {count}",
   toolRunning: "Running {name}…",
   askAnswerInTerminal: "This needs input in the pi terminal — the web UI can't answer it.",
   copyMessage: "Copy message",

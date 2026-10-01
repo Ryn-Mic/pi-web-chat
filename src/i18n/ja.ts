@@ -220,6 +220,8 @@ export const ja: Messages = {
   dismiss: "閉じる",
   attachedImage: "添付画像",
   imagePlaceholder: "[画像]",
+  executionProcess: "実行過程",
+  executionToolCount: "ツール呼び出し {count} 回",
   toolRunning: "{name} を実行中…",
   askAnswerInTerminal: "これは pi ターミナルでの回答が必要です — Web UI では回答できません。",
   copyMessage: "メッセージをコピー",

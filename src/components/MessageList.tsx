@@ -13,11 +13,10 @@ import { chatClient, type ActiveTool } from "../lib/chat";
 import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
 import { buildEditDiffFromArgs, isUnifiedDiff } from "../lib/diff";
 import { useT } from "../lib/i18n";
-import { messageKeys } from "../lib/message-identity";
+import { conversationTurns, type ConversationTurn, type TurnMessage } from "../lib/conversation-turns";
 import { sameToolCallBlock, todoCallSummary, type ToolCallBlock } from "../lib/toolCall";
 import {
   formatTurnCompletedAt,
-  isAssistantTurnComplete,
   splitAssistantTurnCompletion,
 } from "../lib/turn-completion";
 import { LoadingIndicator } from "./LoadingIndicator";
@@ -375,20 +374,16 @@ function Thinking({
   text,
   defaultOpen = true,
   streaming = false,
-  collapsed = false,
 }: {
   text: string;
   defaultOpen?: boolean;
   streaming?: boolean;
-  /** The agent has sent its explicit thinking_end event. */
-  collapsed?: boolean;
 }) {
-  // Streaming thinking is expanded by default; snapshot thinking blocks are
-  // collapsed by default (defaultOpen=false). Users can toggle manually.
+  // Running turns keep thinking expanded; history stays manually inspectable.
   const [open, setOpen] = useState(defaultOpen);
   return (
     <details
-      open={collapsed ? false : open}
+      open={open}
       onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
       className="chat-message-text my-2"
     >
@@ -417,8 +412,10 @@ function Blocks({
   markdown,
   cwd,
   onPreviewFile,
+  thinkingOpen = false,
 }: {
   blocks: UIContentBlock[];
+  thinkingOpen?: boolean;
   markdown: boolean;
   cwd?: string;
   onPreviewFile?: PreviewMessageFile;
@@ -442,7 +439,7 @@ function Blocks({
               </div>
             );
           case "thinking":
-            return <Thinking key={i} text={b.text} defaultOpen={false} />;
+            return <Thinking key={i} text={b.text} defaultOpen={thinkingOpen} />;
           case "toolCall":
             return <ToolCallCard key={i} block={b} />;
           case "image":
@@ -565,10 +562,12 @@ const Message = memo(function Message({
   message,
   index,
   isTurnComplete,
+  thinkingOpen = false,
   cwd,
   onPreviewFile,
 }: {
   message: UIMessage;
+  thinkingOpen?: boolean;
   index?: number;
   /** Only a settled turn shows assistant completion metadata and copy. */
   isTurnComplete: boolean;
@@ -599,7 +598,7 @@ const Message = memo(function Message({
   }
   return (
     <div className="group/message min-w-0">
-      <div className="chat-message-text min-w-0"><Blocks blocks={content} markdown cwd={cwd} onPreviewFile={onPreviewFile} /></div>
+      <div className="chat-message-text min-w-0"><Blocks blocks={content} markdown thinkingOpen={thinkingOpen} cwd={cwd} onPreviewFile={onPreviewFile} /></div>
       {message.errorMessage && (
         <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600 dark:border-red-900 dark:bg-red-950/50 dark:text-red-400">
           {message.errorMessage}
@@ -615,6 +614,117 @@ const Message = memo(function Message({
     </div>
   );
 });
+function ProcessDisclosure({
+  collapsed,
+  toolCount,
+  active = false,
+  children,
+}: {
+  collapsed: boolean;
+  toolCount: number;
+  active?: boolean;
+  children: React.ReactNode;
+}) {
+  const t = useT();
+  const [override, setOverride] = useState<{ collapsed: boolean; open: boolean } | null>(null);
+  const open = override?.collapsed === collapsed ? override.open : !collapsed;
+  return (
+    <details open={open} className="min-w-0 my-1.5" data-execution-process>
+      <summary
+        onClick={(event) => {
+          // Control the native disclosure synchronously: queued toggle events must
+          // not undo completion-driven folding or the user's subsequent reopening.
+          event.preventDefault();
+          setOverride({ collapsed, open: !open });
+        }}
+        className="flex min-h-9 cursor-pointer list-none items-center gap-2 rounded-xl border border-line/60 bg-card/60 px-3 py-1.5 text-xs text-muted shadow-2xs backdrop-blur-xs transition-all hover:border-line hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent select-none dark:border-white/[0.08] dark:bg-card/40 dark:hover:bg-card/60 [&::-webkit-details-marker]:hidden"
+      >
+        <span
+          className={`flex size-4 shrink-0 items-center justify-center transition-transform duration-200 ${
+            open ? "rotate-0" : "-rotate-90"
+          }`}
+        >
+          <NavigationActionIcon direction="down" size={13} />
+        </span>
+        {active ? (
+          <span className="size-1.5 shrink-0 rounded-full bg-accent animate-pulse" aria-hidden />
+        ) : (
+          <span className="size-1.5 shrink-0 rounded-full bg-faint/60" aria-hidden />
+        )}
+        <span className="font-medium text-ink/90">{t("executionProcess")}</span>
+        {toolCount > 0 && (
+          <span className="ml-auto inline-flex items-center rounded-full bg-bubble px-2 py-0.5 font-mono text-[10px] text-muted dark:bg-white/5 dark:text-muted/90">
+            {t("executionToolCount", { count: toolCount })}
+          </span>
+        )}
+      </summary>
+      <div className="ml-2.5 flex min-w-0 flex-col gap-3 border-l-2 border-line/60 pl-3.5 pt-2 pb-1 sm:gap-3.5 dark:border-white/[0.08]">
+        {children}
+      </div>
+    </details>
+  );
+}
+
+function AssistantTurn({
+  turn,
+  cwd,
+  onPreviewFile,
+  live,
+}: {
+  turn: ConversationTurn;
+  cwd?: string;
+  onPreviewFile?: PreviewMessageFile;
+  live?: {
+    streamThinking: string;
+    streamThinkingComplete: boolean;
+    streamText: string;
+    activeTools: ActiveTool[];
+    showTyping: boolean;
+  };
+}) {
+  const t = useT();
+  const renderMessage = (entry: TurnMessage, complete = false) => (
+    <Message
+      key={entry.key}
+      message={entry.message}
+      index={entry.message.role === "user" ? entry.index : undefined}
+      isTurnComplete={complete}
+      thinkingOpen={turn.active}
+      cwd={cwd}
+      onPreviewFile={onPreviewFile}
+    />
+  );
+  const hasProcess = turn.process.length > 0 || !!(live && (
+    live.streamThinking || live.streamText || live.activeTools.length || live.showTyping
+  ));
+  const toolCount = turn.process.reduce((count, entry) => count + entry.message.content.filter(
+    (block) => block.type === "toolCall",
+  ).length, 0) + (live?.activeTools.length ?? 0);
+  return (
+    <>
+      {turn.prompt && renderMessage(turn.prompt)}
+      {hasProcess && (
+        <ProcessDisclosure collapsed={turn.collapsible} toolCount={toolCount} active={turn.active}>
+          {turn.process.map((entry) => renderMessage(entry))}
+          {live?.streamThinking && (
+            <Thinking text={live.streamThinking} streaming={!live.streamThinkingComplete} />
+          )}
+          {live?.streamText && (
+            <div className="chat-message-text min-w-0">
+              <Markdown text={live.streamText} streaming cwd={cwd} onPreviewFile={onPreviewFile} />
+            </div>
+          )}
+          {live?.activeTools.map((tool) => <ActiveToolCard key={tool.toolCallId} tool={tool} />)}
+          {live?.showTyping && <LoadingIndicator label={t("loading")} size="sm" />}
+        </ProcessDisclosure>
+      )}
+      {turn.noticesBefore.map((entry) => renderMessage(entry))}
+      {turn.reply && renderMessage(turn.reply, true)}
+      {turn.noticesAfter.map((entry) => renderMessage(entry))}
+    </>
+  );
+}
+
 export function EmptyStateHero({ cwd, agent }: { cwd?: string; agent: UIAgentKind }) {
   const t = useT();
   const starterPrompts = [
@@ -731,7 +841,9 @@ export function MessageList({
   hideScrollButton?: boolean;
 }) {
   const t = useT();
-  const keys = useMemo(() => messageKeys(messages), [messages]);
+  // Keep live content visible even if its lifecycle snapshot arrives out of order.
+  const turnRunning = isStreaming || !!(streamText || streamThinking || activeTools.length);
+  const turns = useMemo(() => conversationTurns(messages, turnRunning), [messages, turnRunning]);
   const chatFontSize = useChatFontSize();
   const stickToBottom = useRef(true);
   const touchStartY = useRef<number | null>(null);
@@ -881,36 +993,23 @@ export function MessageList({
           {messages.length === 0 && !streamText && (
             <EmptyStateHero cwd={cwd} agent={agent} />
           )}
-          {messages.map((m, i) => (
-            <Message
-              key={keys[i]}
-              message={m}
-              index={m.role === "user" ? i : undefined}
-              isTurnComplete={isAssistantTurnComplete(messages, i, isStreaming)}
+          {turns.map((turn) => (
+            <AssistantTurn
+              key={turn.key}
+              turn={turn}
               cwd={cwd}
               onPreviewFile={onPreviewFile}
+              live={turn.active ? { streamThinking, streamThinkingComplete, streamText, activeTools, showTyping } : undefined}
             />
           ))}
-          {streamThinking && (
-            <Thinking
-              text={streamThinking}
-              streaming
-              collapsed={streamThinkingComplete}
+          {turns.length === 0 && turnRunning && (
+            <AssistantTurn
+              turn={{ key: "live", process: [], noticesBefore: [], noticesAfter: [], active: true, collapsible: false }}
+              cwd={cwd}
+              onPreviewFile={onPreviewFile}
+              live={{ streamThinking, streamThinkingComplete, streamText, activeTools, showTyping }}
             />
           )}
-          {streamText && (
-            <div className="chat-message-text min-w-0">
-              {/* Streamdown handles incomplete markdown natively — no manual escaping */}
-              <Markdown
-                text={streamText}
-                streaming
-                cwd={cwd}
-                onPreviewFile={onPreviewFile}
-              />
-            </div>
-          )}
-          {activeTools.map((tool) => <ActiveToolCard key={tool.toolCallId} tool={tool} />)}
-          {showTyping && <LoadingIndicator label={t("loading")} size="sm" />}
         </div>
       </div>
 

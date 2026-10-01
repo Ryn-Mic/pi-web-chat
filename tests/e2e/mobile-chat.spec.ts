@@ -110,8 +110,9 @@ test("mobile history retry preserves expanded message identity after prepend", a
     return route.fulfill({ json: { messages: [message("older", "Older history")], cursor: null, hasMore: false } });
   });
   await login(page);
+  await page.locator("[data-execution-process] > summary").click();
   await page.locator("summary").filter({ hasText: "thinking…" }).click();
-  const thinking = page.locator("details").filter({ hasText: "Keep this expanded thinking" });
+  const thinking = page.locator("details:not([data-execution-process])").filter({ hasText: "Keep this expanded thinking" });
   await expect(thinking).toHaveAttribute("open", "");
   await page.getByRole("button", { name: "Load earlier messages" }).click();
   await expect(page.getByText("Couldn't load earlier messages. Try again.")).toBeVisible();
