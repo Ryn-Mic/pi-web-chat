@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import {
   assertGitRoot,
+  branchFromHeadFile,
   checkoutGitBranch,
   getGitBranches,
   getGitCommit,
@@ -130,4 +131,46 @@ test("partially staged paths are normalized once", async () => {
   const status = await getGitStatus(nested);
   assert.equal(status.staged[0]?.path, "partial.txt");
   assert.equal(status.unstaged[0]?.path, "partial.txt");
+});
+
+test("branchFromHeadFile agrees with git for repos, worktrees and detached HEADs", () => {
+  fixture();
+  assert.equal(branchFromHeadFile(root), "feature/test");
+  assert.equal(branchFromHeadFile(root), git("branch", "--show-current").trim());
+
+  // Detached HEAD has no branch name, exactly like `--show-current`.
+  const head = git("rev-parse", "HEAD").trim();
+  git("checkout", "-q", head);
+  assert.equal(git("branch", "--show-current").trim(), "");
+  assert.equal(branchFromHeadFile(root), null);
+
+  // A linked worktree keeps `.git` as a gitfile pointing at the real git dir.
+  git("checkout", "-q", "feature/test");
+  const worktree = `${root}-wt`;
+  try {
+    git("worktree", "add", "-q", worktree, "main");
+    assert.equal(branchFromHeadFile(worktree), "main");
+    assert.equal(
+      branchFromHeadFile(worktree),
+      execFileSync("git", ["-C", worktree, "branch", "--show-current"], { encoding: "utf8" }).trim(),
+    );
+  } finally {
+    git("worktree", "remove", "--force", worktree);
+    rmSync(worktree, { recursive: true, force: true });
+  }
+
+  // Outside a repository the caller must fall back to spawning git.
+  const plain = mkdtempSync(join(tmpdir(), "pi-git-plain-"));
+  try {
+    assert.equal(branchFromHeadFile(plain), undefined);
+  } finally {
+    rmSync(plain, { recursive: true, force: true });
+  }
+
+  // Equivalence on a real checkout, whatever state the test run is in.
+  const repo = join(import.meta.dirname, "..");
+  const viaGit = execFileSync("git", ["-C", repo, "branch", "--show-current"], {
+    encoding: "utf8",
+  }).trim();
+  assert.equal(branchFromHeadFile(repo), viaGit || null);
 });

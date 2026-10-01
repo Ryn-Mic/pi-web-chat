@@ -677,6 +677,12 @@ function ProcessDisclosure({
   const t = useT();
   const [override, setOverride] = useState<{ collapsed: boolean; open: boolean } | null>(null);
   const open = override?.collapsed === collapsed ? override.open : !collapsed;
+  // A folded disclosure is invisible but still mounted, and a tool-heavy
+  // transcript keeps roughly half of its DOM nodes inside closed ones. Mount the
+  // contents on first reveal instead; everything the reader can see (final
+  // replies, notices, prompts) lives outside the disclosure and stays mounted.
+  const [revealed, setRevealed] = useState(open);
+  if (open && !revealed) setRevealed(true);
   // A folded row must still report trouble. A pending tool call is expected while
   // the turn runs, so only an error or an unresolved result outranks the count.
   const signal = incomplete && !active
@@ -724,7 +730,9 @@ function ProcessDisclosure({
         )}
       </summary>
       <div className="ml-2.5 flex min-w-0 flex-col gap-3 border-l-2 border-line/60 pl-3.5 pt-2 pb-1 sm:gap-3.5 dark:border-white/[0.08]">
-        {children}
+        {/* Once revealed the contents stay mounted, so re-collapsing keeps the
+            reader's inner expansions (a tool card they opened) for this mount. */}
+        {revealed ? children : null}
       </div>
     </details>
   );
