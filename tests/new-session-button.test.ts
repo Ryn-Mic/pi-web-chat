@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { projectLabel } from "../src/components/ProjectBadge.tsx";
 import { MORPH_ICON_PATHS } from "../src/lib/morph-icons.ts";
-import { setFilesDrawerOpen, setSessionsDrawerOpen } from "../src/lib/drawer.ts";
+import { setFilesDrawerOpen, setModalOverlayOpen, setSessionsDrawerOpen } from "../src/lib/drawer.ts";
 import { en } from "../src/i18n/en.ts";
 import { zh } from "../src/i18n/zh.ts";
 import { ja } from "../src/i18n/ja.ts";
@@ -31,8 +31,10 @@ test("newSessionDefault translation exists across all supported locales", () => 
 test("drawer state transitions toggle open states safely", () => {
   setSessionsDrawerOpen(true);
   setFilesDrawerOpen(true);
+  setModalOverlayOpen(true);
   setSessionsDrawerOpen(false);
   setFilesDrawerOpen(false);
+  setModalOverlayOpen(false);
 });
 
 test("scroll down icon path exists in MORPH_ICON_PATHS", () => {
