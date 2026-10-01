@@ -19,14 +19,13 @@ import type {
   UIGitCommitDetail,
   UIGitDiff,
 } from "../../shared/protocol";
-import { authHeaders, getAuthStatus, getSessionCacheScope, setAuthStatus } from "./auth";
+import { authHeaders, authenticatedFetch, getAuthStatus, getSessionCacheScope } from "./auth";
 import { readSessionListCache, writeSessionListCache } from "./session-list-cache";
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, { ...init, headers: { ...authHeaders(), ...init?.headers } });
+  const res = await authenticatedFetch(url, init);
   if (res.status === 401) {
     // Expired/invalid session → login screen
-    setAuthStatus("unauthenticated");
     throw new Error(`${url}: 401 unauthorized`);
   }
   if (!res.ok) throw new Error(`${url}: ${res.status}`);
@@ -257,12 +256,11 @@ export function useCustomModels(enabled = true) {
 export async function discoverCustomModels(
   provider: UIModelDiscoveryRequest,
 ): Promise<UIModelDiscoveryResponse> {
-  const res = await fetch("/api/custom-models/discover", {
+  const res = await authenticatedFetch("/api/custom-models/discover", {
     method: "POST",
     headers: { "content-type": "application/json", ...authHeaders() },
     body: JSON.stringify(provider),
   });
-  if (res.status === 401) setAuthStatus("unauthenticated");
   const json = (await res.json()) as UIModelDiscoveryResponse & { error?: string };
   if (!res.ok) throw new Error(json.error ?? `model discovery failed: ${res.status}`);
   return json;
@@ -271,12 +269,11 @@ export async function discoverCustomModels(
 export async function saveCustomModels(
   providers: UICustomProvider[],
 ): Promise<UICustomModelsResponse> {
-  const res = await fetch("/api/custom-models", {
+  const res = await authenticatedFetch("/api/custom-models", {
     method: "PUT",
     headers: { "content-type": "application/json", ...authHeaders() },
     body: JSON.stringify({ providers }),
   });
-  if (res.status === 401) setAuthStatus("unauthenticated");
   const json = (await res.json()) as UICustomModelsResponse & { error?: string };
   if (!res.ok) throw new Error(json.error ?? `save failed: ${res.status}`);
   return json;

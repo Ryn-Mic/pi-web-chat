@@ -682,7 +682,12 @@ export class CodexAppServerClient {
     if (!trimmed) return;
     let message: JsonRpcMessage;
     try {
-      message = JSON.parse(trimmed) as JsonRpcMessage;
+      const parsed: unknown = JSON.parse(trimmed);
+      if (!isRecord(parsed)
+        || (parsed.id !== undefined && typeof parsed.id !== "string" && !(typeof parsed.id === "number" && Number.isFinite(parsed.id)))
+        || (parsed.method != null && (typeof parsed.method !== "string" || !parsed.method))
+        || (parsed.error != null && (!isRecord(parsed.error) || typeof parsed.error.message !== "string"))) return;
+      message = parsed as JsonRpcMessage;
     } catch {
       return;
     }
@@ -1165,6 +1170,8 @@ export class CodexSession {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.ready = false;
+    this.observerModeValue = false;
     this.unsubscribeNotification?.();
     this.unsubscribeRequest?.();
     this.unsubscribeNotification = null;
@@ -1185,8 +1192,11 @@ export class CodexSession {
     if (this.ownsClient) await this.client.dispose();
   }
 
+  private assertLive(): void { if (this.disposed) throw new Error("Codex session disposed"); }
+
   private async connectThread(): Promise<void> {
     await this.client.connect();
+    this.assertLive();
     let response: unknown;
     try {
       response = await this.client.request(
@@ -1206,6 +1216,7 @@ export class CodexSession {
             },
       );
     } catch (error) {
+      this.assertLive();
       // Another client owns the thread's active turn, so the app-server
       // refuses to hand it over. Attach read-only instead of failing the
       // whole session: the Web UI can watch the running turn and gains full
@@ -1216,12 +1227,14 @@ export class CodexSession {
       }
       throw error;
     }
+    this.assertLive();
     this.installResumedThread(response);
   }
 
   /** Shared post-connect processing for a successful thread/resume (initial
    * attach and observer→writer upgrades). */
   private installResumedThread(response: unknown): void {
+    if (this.disposed) return;
     const record = isRecord(response) ? response : {};
     const thread = isRecord(record.thread) ? record.thread : undefined;
     const nextThreadId = stringValue(thread?.id);
@@ -1283,6 +1296,7 @@ export class CodexSession {
   private async enterObserverMode(): Promise<void> {
     const threadId = this.threadId!;
     const thread = await this.client.readThread(threadId).catch(() => undefined);
+    this.assertLive();
     if (!this.retainedThreadId) {
       this.client.retainThread(threadId);
       this.retainedThreadId = threadId;
@@ -1300,6 +1314,7 @@ export class CodexSession {
       cwd: this.cwdValue,
     });
     await this.pollObserverTurn();
+    this.assertLive();
     this.observerPollTimer = setInterval(() => {
       void this.pollObserverTurn().catch((error) => {
         if (this.disposed) return;
@@ -1319,7 +1334,7 @@ export class CodexSession {
   /** One read-only observation tick: try to claim the thread (upgrade), then
    * refresh the newest turn page and broadcast any visible changes. */
   private async pollObserverTurn(): Promise<void> {
-    if (this.observerPolling || !this.threadId || !this.observerModeValue) return;
+    if (this.disposed || this.observerPolling || !this.threadId || !this.observerModeValue) return;
     this.observerPolling = true;
     try {
       // Upgrade probe: the app-server hands the thread over as soon as the
@@ -1331,9 +1346,11 @@ export class CodexSession {
           threadId: this.threadId,
           initialTurnsPage: { limit: HISTORY_TURN_LIMIT, sortDirection: "desc", itemsView: "full" },
         });
+        if (this.disposed) return;
         this.installResumedThread(response);
         upgraded = true;
       } catch (error) {
+        if (this.disposed) return;
         if (!isWriterConflict(error)) {
           this.emitEvent({ type: "error", message: errorMessage(error) });
         }
@@ -1347,6 +1364,7 @@ export class CodexSession {
         sortDirection: "desc",
         itemsView: "full",
       });
+      if (this.disposed) return;
       const record = isRecord(response) ? response : {};
       const turns = Array.isArray(record.data) ? record.data.filter(isRecord).reverse() : [];
       const cursor = stringValue(record.nextCursor) ?? null;
@@ -1600,6 +1618,7 @@ export class CodexSession {
   }
 
   private handleNotification(method: string, params: Record<string, unknown>): void {
+    if (this.disposed) return;
     if (method === "connection/error") {
       this.ready = false;
       const message = stringValue(params.message) ?? "Codex app-server connection failed";
@@ -1909,7 +1928,7 @@ export class CodexSession {
   }
 
   private async refreshHistory(): Promise<void> {
-    if (!this.threadId) return;
+    if (this.disposed || !this.threadId) return;
     const response = await this.client.request("thread/turns/list", {
       threadId: this.threadId,
       cursor: null,
@@ -1917,6 +1936,7 @@ export class CodexSession {
       sortDirection: "desc",
       itemsView: "full",
     });
+    if (this.disposed) return;
     const record = isRecord(response) ? response : {};
     const turns = Array.isArray(record.data) ? record.data.filter(isRecord).reverse() : [];
     const cursor = stringValue(record.nextCursor) ?? null;

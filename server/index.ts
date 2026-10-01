@@ -54,6 +54,7 @@ import type {
 import { SESSION_NOT_FOUND_CLOSE_CODE } from "../shared/protocol.ts";
 import { createSnapshotDelta } from "../shared/snapshot.ts";
 import { auth, authStartupInfo } from "./auth.ts";
+import { defaultChatWorkspace } from "./private-paths.ts";
 import {
   MANAGED_DAEMON_INSTANCE_ENV,
   isManagedDaemon,
@@ -132,7 +133,7 @@ const PORT = Number(process.env.PORT ?? 3141);
 const HOST = process.env.HOST ?? "127.0.0.1";
 const HOME = homedir();
 // Personal chat workspace (separate from the project cwd). Override with PI_WEB_CWD.
-const DEFAULT_AGENT_CWD = join(HOME, ".pi", "web-chat");
+const DEFAULT_AGENT_CWD = defaultChatWorkspace();
 const AGENT_CWD = resolve(process.env.PI_WEB_CWD ?? DEFAULT_AGENT_CWD);
 mkdirSync(AGENT_CWD, { recursive: true });
 

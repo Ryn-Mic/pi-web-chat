@@ -112,6 +112,7 @@ export function ChatPage() {
     historyHasMore,
     historyLoading,
     historyError,
+    historyRevision,
     streamText,
     streamThinking,
     streamThinkingComplete,
@@ -329,6 +330,7 @@ export function ChatPage() {
               historyHasMore={historyHasMore}
               historyLoading={historyLoading}
               historyError={historyError}
+              historyRevision={historyRevision}
               onLoadOlder={() => chatClient.loadOlderMessages()}
               containerRef={messageListRef}
               cwd={snapshot?.cwd}

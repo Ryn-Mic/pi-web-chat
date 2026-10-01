@@ -7,6 +7,8 @@ const TOKEN_KEY = "pi-web-chat:session-token";
 const listeners = new Set<() => void>();
 
 let status: AuthStatus = "checking";
+let authGeneration = 0;
+export function getAuthGeneration(): number { return authGeneration; }
 
 function readStoredToken(): string | null {
   try {
@@ -54,6 +56,7 @@ export function getSessionToken(): string | null {
 
 export function setSessionToken(token: string | null) {
   if (cachedToken !== token) {
+    authGeneration += 1;
     clearSessionListCache();
     cacheScope = null;
     try { localStorage.removeItem(SESSION_CACHE_SCOPE_KEY); } catch { /* optional */ }
@@ -75,7 +78,7 @@ export function getAuthStatus(): AuthStatus {
 export function setAuthStatus(next: AuthStatus) {
   if (status === next) return;
   status = next;
-  if (next === "unauthenticated") clearSessionListCache();
+  if (next === "unauthenticated") { authGeneration += 1; clearSessionListCache(); }
   emit();
 }
 
@@ -88,10 +91,22 @@ export function authHeaders(): Record<string, string> {
   return t ? { authorization: `Bearer ${t}` } : {};
 }
 
+/** Ignore responses owned by a previous login, including late 401s. */
+export async function authenticatedFetch(url: string, init?: RequestInit, fetchImpl: typeof fetch = fetch): Promise<Response> {
+  const generation = authGeneration;
+  const response = await fetchImpl(url, { ...init, headers: { ...authHeaders(), ...init?.headers } });
+  if (generation !== authGeneration) throw new DOMException("Authentication changed", "AbortError");
+  if (response.status === 401) setAuthStatus("unauthenticated");
+  return response;
+}
+
 /** Check the session token at boot */
 export async function checkAuth(): Promise<AuthStatus> {
+  const generation = authGeneration;
   try {
     const res = await fetch("/api/auth/status", { headers: authHeaders() });
+    if (generation !== authGeneration) return status;
+    if (!res.ok && res.status !== 401) return "checking";
     const next: AuthStatus = res.ok ? "authenticated" : "unauthenticated";
     setAuthStatus(next);
     return next;
@@ -103,6 +118,7 @@ export async function checkAuth(): Promise<AuthStatus> {
 
 /** Login: token + (TOTP code when 2FA is on) */
 export async function login(token: string, totp?: string): Promise<{ ok: boolean; error?: string }> {
+  const generation = authGeneration;
   try {
     const res = await fetch("/api/auth/login", {
       method: "POST",
@@ -110,6 +126,7 @@ export async function login(token: string, totp?: string): Promise<{ ok: boolean
       body: JSON.stringify({ token, totp }),
     });
     const json = (await res.json().catch(() => ({}))) as { sessionToken?: string; error?: string };
+    if (generation !== authGeneration) return { ok: false, error: "Authentication changed; sign in again." };
     if (!res.ok || !json.sessionToken) {
       return { ok: false, error: json.error ?? `login failed (${res.status})` };
     }
@@ -123,6 +140,9 @@ export async function login(token: string, totp?: string): Promise<{ ok: boolean
 
 export async function logout() {
   const token = cachedToken;
+  authGeneration += 1;
+  setSessionToken(null);
+  setAuthStatus("unauthenticated");
   if (token) {
     try {
       await fetch("/api/auth/logout", {
@@ -133,6 +153,4 @@ export async function logout() {
       /* ignore */
     }
   }
-  setSessionToken(null);
-  setAuthStatus("unauthenticated");
 }

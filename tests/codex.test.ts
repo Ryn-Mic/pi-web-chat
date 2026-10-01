@@ -1779,3 +1779,74 @@ test("scheduled observer polls contain an upstream failure and recover on the ne
     t.mock.timers.reset();
   }
 });
+
+test("RPC primitive and malformed frames are ignored without breaking a valid response", async () => {
+  const process = new FakeRpcProcess((request, fake) => fake.respond(request, { alive: true }));
+  const { spawnProcess } = fakeSpawner(() => process);
+  const client = new CodexAppServerClient({ cwd: "/tmp/project", transport: "standalone", spawnProcess });
+  try {
+    await client.connect();
+    for (const frame of [null, [], 42, "text", { method: 4 }, { id: {}, result: {} }, { id: 1, error: null }]) {
+      process.stdout.write(JSON.stringify(frame) + "\n");
+    }
+    assert.deepEqual(await client.request("fixture/alive", {}), { alive: true });
+  } finally { await client.dispose(); }
+});
+
+test("a disposed shared session ignores a late resume and retains no native subscription", async () => {
+  let resume!: RpcEnvelope;
+  const process = new FakeRpcProcess((request, fake) => {
+    if (request.method === "initialize") fake.respond(request, {});
+    else if (request.method === "thread/resume") resume = request;
+  });
+  const { spawnProcess } = fakeSpawner(() => process);
+  const client = new CodexAppServerClient({ cwd: "/tmp/project", transport: "standalone", spawnProcess });
+  const events: CodexSessionEvent[] = [];
+  const session = new CodexSession({ cwd: "/tmp/project", client, state: { threadId: "late-fixture" }, onEvent: e => events.push(e) });
+  const pending = session.connect();
+  const rejected = assert.rejects(pending, /disposed/);
+  await process.waitForRequest("thread/resume");
+  await session.dispose();
+  const count = events.length;
+  process.respond(resume, { thread: { id: "late-fixture", status: { type: "idle" } }, initialTurnsPage: { data: [], nextCursor: null } });
+  await rejected;
+  assert.equal(events.length, count);
+  assert.equal((client as unknown as { threadSubscriptions: Map<string, number> }).threadSubscriptions.size, 0);
+  await client.dispose();
+});
+
+test("late history and observer upgrade replies emit nothing after disposal", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  for (const observer of [false, true]) {
+    let resumes = 0;
+    let held!: RpcEnvelope;
+    const process = new FakeRpcProcess((request, fake) => {
+      if (request.method === "initialize") fake.respond(request, {});
+      else if (request.method === "thread/read") fake.respond(request, { thread: { id: "late-async", cwd: "/tmp/project" } });
+      else if (request.method === "thread/resume") {
+        resumes++;
+        if (observer && resumes <= 2) fake.respondError(request, "already has an active writer");
+        else if (observer) held = request;
+        else fake.respond(request, { thread: { id: "late-async", status: { type: "idle" } }, initialTurnsPage: { data: [], nextCursor: null } });
+      } else if (request.method === "thread/turns/list") {
+        if (observer) fake.respond(request, { data: [], nextCursor: null }); else held = request;
+      }
+    });
+    const { spawnProcess } = fakeSpawner(() => process);
+    const client = new CodexAppServerClient({ cwd: "/tmp/project", transport: "standalone", spawnProcess });
+    const events: CodexSessionEvent[] = [];
+    const session = new CodexSession({ cwd: "/tmp/project", client, state: { threadId: "late-async" }, onEvent: e => events.push(e) });
+    await session.connect();
+    let history: Promise<void> | undefined;
+    if (observer) { t.mock.timers.tick(2_000); await nextTask(); }
+    else history = (session as unknown as { refreshHistory(): Promise<void> }).refreshHistory();
+    await nextTask(); assert.ok(held);
+    await session.dispose(); const count = events.length;
+    process.respond(held, observer ? { thread: { id: "late-async" }, initialTurnsPage: { data: [], nextCursor: null } } : { data: [], nextCursor: null });
+    await history; await nextTask();
+    assert.equal(events.length, count);
+    assert.equal((client as unknown as { threadSubscriptions: Map<string, number> }).threadSubscriptions.size, 0);
+    await client.dispose();
+  }
+  t.mock.timers.reset();
+});

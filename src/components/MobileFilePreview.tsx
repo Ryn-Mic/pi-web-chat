@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authHeaders, setAuthStatus } from "../lib/auth";
+import { authHeaders, authenticatedFetch } from "../lib/auth";
 import {
   createPreviewFrameSrc,
   isPreviewFrameMessage,
@@ -46,7 +46,7 @@ export function MobileFilePreview({
     const controller = new AbortController();
     setSrc(null);
     setError(null);
-    void fetch("/api/files/preview-context", {
+    void authenticatedFetch("/api/files/preview-context", {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders() },
       body: JSON.stringify({
@@ -58,7 +58,6 @@ export function MobileFilePreview({
       signal: controller.signal,
     })
       .then(async (response) => {
-        if (response.status === 401) setAuthStatus("unauthenticated");
         if (!response.ok) {
           setError(response.status === 415 ? "unsupported" : response.status === 413 ? "too-large" : response.status === 404 ? "missing" : response.status === 403 ? "forbidden" : "failed");
           return;

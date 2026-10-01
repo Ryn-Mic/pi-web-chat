@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { basename, extname, join, normalize, relative, resolve, sep } from "node:path";
 import ignore, { type Ignore } from "ignore";
+import { assertPublicFileIdentity, assertPublicFilePath, isPrivateStatePath } from "./private-paths.ts";
 import type { UIFileMatch, UITreeNode } from "../shared/protocol.ts";
 
 /** Always excluded, at any depth (huge or internal) */
@@ -120,6 +121,8 @@ export function resolvePreviewFile(root: string, rel: string, options?: { source
     st = lstatSync(targetAbs);
   }
 
+  assertPublicFilePath(targetAbs);
+  assertPublicFileIdentity(st);
   if (!st.isFile()) throw enoentError(normalizedRel);
   if (st.size > MAX_PREVIEW_BYTES) throw new PreviewTooLargeError();
 
@@ -141,6 +144,8 @@ export function openResolvedPreviewFile(meta: ResolvedPreviewFile): OpenResolved
   const fd = openSync(meta.realAbs, "r");
   try {
     const st = fstatSync(fd);
+    assertPublicFilePath(meta.realAbs);
+    assertPublicFileIdentity(st);
     if (
       !st.isFile() ||
       st.dev !== meta.dev ||
@@ -203,6 +208,7 @@ export function assertInsideRoot(root: string, rel: string): string {
   const abs = resolve(rootAbs, rel);
   if (abs !== rootAbs && !abs.startsWith(rootAbs + sep)) throw new PathEscapeError(rel);
   assertNoSymlinkedDirectorySegment(rootAbs, rel);
+  assertPublicFilePath(abs);
   return abs;
 }
 
@@ -240,7 +246,7 @@ function probeDir(abs: string, rel: string, ig: Ignore | null): { hasChildren: b
   }
   for (const ent of dirents) {
     const childRel = `${rel}/${ent.name}`;
-    if (!isExcluded(childRel, ent.isDirectory(), ig)) return { hasChildren: true, inaccessible: false };
+    if (!isPrivateStatePath(join(abs, ent.name)) && !isExcluded(childRel, ent.isDirectory(), ig)) return { hasChildren: true, inaccessible: false };
   }
   return { hasChildren: false, inaccessible: false };
 }
@@ -259,7 +265,7 @@ export function listDir(root: string, rel: string): { nodes: UITreeNode[]; trunc
     // Dirent is lstat semantics: symlinked dirs report isDirectory() === false
     const isDir = ent.isDirectory();
     const childRel = rel ? `${rel}/${ent.name}` : ent.name;
-    if (isExcluded(childRel, isDir, ig)) continue;
+    if (isPrivateStatePath(join(abs, ent.name)) || isExcluded(childRel, isDir, ig)) continue;
     const node: UITreeNode = { name: ent.name, path: childRel, type: isDir ? "dir" : "file" };
     if (isDir) {
       const probe = probeDir(join(abs, ent.name), childRel, ig);
@@ -312,7 +318,7 @@ export function walkProject(root: string, cap: number): { entries: FileIndexEntr
         }
       }
       const childRel = rel ? `${rel}/${ent.name}` : ent.name;
-      if (isExcluded(childRel, isDir, ig)) continue;
+      if (isPrivateStatePath(join(abs, ent.name)) || isExcluded(childRel, isDir, ig)) continue;
       entries.push({ name: ent.name, path: childRel, type: isDir ? "dir" : "file" });
       if (isDir) walk(join(abs, ent.name), childRel);
     }
@@ -325,6 +331,7 @@ const indexCache = new Map<string, { at: number; entries: FileIndexEntry[]; part
 
 /** Cached project index (5s TTL — keystrokes hit cache, new files appear after expiry). */
 export function buildFileIndex(root: string): { entries: FileIndexEntry[]; partial: boolean } {
+  assertPublicFilePath(root);
   const hit = indexCache.get(root);
   if (hit && Date.now() - hit.at < SEARCH_CACHE_TTL_MS) return hit;
   const { entries, partial } = walkProject(root, WALK_CAP);

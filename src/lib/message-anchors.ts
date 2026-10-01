@@ -1,5 +1,9 @@
 import type { UIMessage } from "../../shared/protocol";
 
+export function isPersistedUserMessage(message: UIMessage): boolean {
+  return message.role === "user" && !message.id?.startsWith("optimistic:");
+}
+
 /**
  * Map a global one-based user-message ordinal to the currently loaded suffix.
  * Persisted pages are always prepended, so loaded user messages form a
@@ -15,7 +19,7 @@ export function messageIndexForUserOrdinal(
 
   const userIndices: number[] = [];
   messages.forEach((message, index) => {
-    if (message.role === "user") userIndices.push(index);
+    if (isPersistedUserMessage(message)) userIndices.push(index);
   });
   const firstLoadedOrdinal = totalUserMessages - userIndices.length + 1;
   const localOrdinal = ordinal - firstLoadedOrdinal;

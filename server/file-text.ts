@@ -1,4 +1,5 @@
 import { constants } from "node:fs";
+import { assertPublicFileIdentity, assertPublicFilePath } from "./private-paths.ts";
 import { access, lstat, open, rename, unlink } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -24,6 +25,8 @@ async function readText(root: string, path: string) {
   const fd = await open(meta.realAbs, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const st = await fd.stat();
+    assertPublicFilePath(meta.realAbs);
+    assertPublicFileIdentity(st);
     if (!st.isFile() || st.dev !== meta.dev || st.ino !== meta.ino) throw new TextFileError(409, "content changed");
     if (st.size > MAX_TEXT_BYTES) throw new TextFileError(413, "file too large");
     // Bound reads even when another process appends after stat().

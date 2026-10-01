@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { UIMessage, UIMessageAnchor } from "../../shared/protocol";
 import { setModalOverlayOpen } from "../lib/drawer";
 import { localeTag, useLocale, useT } from "../lib/i18n";
-import { messageIndexForUserOrdinal } from "../lib/message-anchors";
+import { isPersistedUserMessage, messageIndexForUserOrdinal } from "../lib/message-anchors";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { DismissActionIcon, NavigationActionIcon } from "./MorphIcons";
 
@@ -48,6 +48,8 @@ export interface PromptNavigatorProps {
   ) => Promise<boolean>;
   containerRef: RefObject<HTMLDivElement | null>;
   hide?: boolean;
+  historyRevision?: number;
+  onNavigate?: () => void;
 }
 
 /**
@@ -62,70 +64,76 @@ export function PromptNavigator({
   onLoadHistoryThroughUserMessage,
   containerRef,
   hide = false,
+  historyRevision = 0,
+  onNavigate,
 }: PromptNavigatorProps) {
   const t = useT();
   const locale = useLocale();
   const [open, setOpen] = useState(false);
-  const [anchors, setAnchors] = useState<UIMessageAnchor[] | null>(null);
+  const [anchorIndex, setAnchorIndex] = useState<{ key: object; anchors: UIMessageAnchor[] } | null>(null);
   const [indexLoading, setIndexLoading] = useState(false);
   const [loadingOrdinal, setLoadingOrdinal] = useState<number | null>(null);
   const [pendingOrdinal, setPendingOrdinal] = useState<number | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
-  const [failedAnchor, setFailedAnchor] = useState<UIMessageAnchor | null>(null);
-  const [currentVisibleOrdinal, setCurrentVisibleOrdinal] = useState<number>(1);
+  const [failedOrdinal, setFailedOrdinal] = useState<number | null>(null);
+  const [visibleLocalOrdinal, setVisibleLocalOrdinal] = useState(1);
+  const mounted = useRef(false);
   const requestVersion = useRef(0);
+  const inFlight = useRef<object | null>(null);
 
   const userEntries = useMemo(() => {
     const list: { index: number; ordinal: number }[] = [];
-    let count = 0;
-    messages.forEach((msg, idx) => {
-      if (msg.role === "user") {
-        count += 1;
-        list.push({ index: idx, ordinal: count });
-      }
+    messages.forEach((message, index) => {
+      if (isPersistedUserMessage(message)) list.push({ index, ordinal: list.length + 1 });
     });
     return list;
   }, [messages]);
-
-  const totalUserCount = anchors?.length ?? (historyHasMore ? userEntries.length + 1 : userEntries.length);
+  const lastUser = userEntries.length ? messages[userEntries.at(-1)!.index] : null;
+  const indexKey = useMemo(() => ({}), [sessionId, historyRevision, lastUser?.id ?? lastUser]);
+  const currentKey = useRef(indexKey);
+  currentKey.current = indexKey;
+  const loadedUsers = useRef(userEntries.length);
+  loadedUsers.current = userEntries.length;
+  const anchors = anchorIndex?.key === indexKey ? anchorIndex.anchors : null;
+  const indexKnown = anchors !== null || !historyHasMore;
+  const totalUserCount = anchors?.length ?? userEntries.length;
+  const offset = anchors ? Math.max(0, anchors.length - userEntries.length) : 0;
+  const currentVisibleOrdinal = offset + Math.min(visibleLocalOrdinal, Math.max(1, userEntries.length));
 
   useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; requestVersion.current += 1; inFlight.current = null; };
+  }, []);
+  useEffect(() => {
     requestVersion.current += 1;
-    setOpen(false);
-    setAnchors(null);
+    inFlight.current = null;
+    setAnchorIndex(null);
     setIndexLoading(false);
     setLoadingOrdinal(null);
     setPendingOrdinal(null);
     setLoadFailed(false);
-    setFailedAnchor(null);
-  }, [sessionId]);
-
+    setFailedOrdinal(null);
+  }, [indexKey]);
+  useEffect(() => { setOpen(false); }, [sessionId]);
   useEffect(() => {
     setModalOverlayOpen(open);
     return () => setModalOverlayOpen(false);
   }, [open]);
 
-  // Track the user message closest to the top of the viewport
   const updateVisibleOrdinal = useCallback(() => {
     const container = containerRef.current;
-    if (!container || userEntries.length === 0) return;
-    const containerTop = container.getBoundingClientRect().top;
-    let closestOrdinal = userEntries[userEntries.length - 1]!.ordinal;
-    let minDistance = Infinity;
-
+    if (!container || !userEntries.length) return;
+    const top = container.getBoundingClientRect().top;
+    let closest = userEntries.at(-1)!.ordinal;
+    let distance = Infinity;
     for (const entry of userEntries) {
-      const el = container.querySelector<HTMLElement>(`[data-msg-index="${entry.index}"]`);
-      if (!el) continue;
-      const rect = el.getBoundingClientRect();
-      const distance = Math.abs(rect.top - containerTop);
-      if (distance < minDistance) {
-        minDistance = distance;
-        closestOrdinal = entry.ordinal;
-      }
+      const element = container.querySelector<HTMLElement>(`[data-msg-index="${entry.index}"]`);
+      if (!element) continue;
+      const next = Math.abs(element.getBoundingClientRect().top - top);
+      if (next < distance) { distance = next; closest = entry.ordinal; }
     }
-    setCurrentVisibleOrdinal(closestOrdinal);
+    setVisibleLocalOrdinal(closest);
   }, [containerRef, userEntries]);
-
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -135,80 +143,70 @@ export function PromptNavigator({
   }, [containerRef, updateVisibleOrdinal]);
 
   useEffect(() => {
-    if (pendingOrdinal === null || anchors === null) return;
-    const index = messageIndexForUserOrdinal(messages, anchors.length, pendingOrdinal);
+    if (pendingOrdinal === null || !indexKnown) return;
+    const index = messageIndexForUserOrdinal(messages, totalUserCount, pendingOrdinal);
     if (index === null) return;
+    const container = containerRef.current;
+    const key = indexKey;
     const frame = requestAnimationFrame(() => {
+      if (!mounted.current || currentKey.current !== key || containerRef.current !== container || !container?.isConnected) return;
       scrollToMessage(containerRef, index);
       setPendingOrdinal(null);
       setLoadingOrdinal(null);
       setOpen(false);
     });
     return () => cancelAnimationFrame(frame);
-  }, [anchors, containerRef, messages, pendingOrdinal]);
+  }, [containerRef, indexKey, indexKnown, messages, pendingOrdinal, totalUserCount]);
 
   const requestAnchors = useCallback(() => {
-    if (indexLoading) return;
-    const version = requestVersion.current;
+    if (inFlight.current === indexKey) return;
+    const key = indexKey;
+    const version = ++requestVersion.current;
+    inFlight.current = key;
     setIndexLoading(true);
     setLoadFailed(false);
-    setFailedAnchor(null);
-    void onLoadMessageAnchors()
-      .then((result) => {
-        if (requestVersion.current !== version) return;
-        if (result === null) {
-          setLoadFailed(true);
-          return;
-        }
-        setAnchors(result);
-      })
-      .finally(() => {
-        if (requestVersion.current === version) setIndexLoading(false);
-      });
-  }, [indexLoading, onLoadMessageAnchors]);
-
-  // Pre-fetch anchor count when history exists
+    setFailedOrdinal(null);
+    const owns = () => mounted.current && currentKey.current === key && requestVersion.current === version;
+    void onLoadMessageAnchors().then((result) => {
+      if (!owns()) return;
+      if (!result || result.length < loadedUsers.current || result.some((anchor, i) => anchor.ordinal !== i + 1)) {
+        setLoadFailed(true);
+        return;
+      }
+      setAnchorIndex({ key, anchors: result });
+    }).catch(() => { if (owns()) setLoadFailed(true); }).finally(() => {
+      if (owns()) { inFlight.current = null; setIndexLoading(false); }
+    });
+  }, [indexKey, onLoadMessageAnchors]);
   useEffect(() => {
-    if (historyHasMore && anchors === null && !indexLoading) {
-      requestAnchors();
-    }
-  }, [historyHasMore, anchors, indexLoading, requestAnchors]);
+    if ((historyHasMore || open) && anchors === null && !indexLoading && !loadFailed) requestAnchors();
+  }, [historyHasMore, open, anchors, indexLoading, loadFailed, requestAnchors]);
 
   if (hide || (userEntries.length < 2 && !historyHasMore)) return null;
 
-  const jumpToOrdinal = (targetOrdinal: number) => {
-    if (loadingOrdinal !== null || historyLoading) return;
-    const total = anchors?.length ?? totalUserCount;
-    const index = anchors
-      ? messageIndexForUserOrdinal(messages, anchors.length, targetOrdinal)
-      : userEntries.find((e) => e.ordinal === targetOrdinal)?.index ?? null;
-
+  const jumpToOrdinal = (target: number) => {
+    if (!indexKnown || loadingOrdinal !== null || historyLoading) return;
+    onNavigate?.();
+    const index = messageIndexForUserOrdinal(messages, totalUserCount, target);
     if (index !== null) {
       scrollToMessage(containerRef, index);
-      setCurrentVisibleOrdinal(targetOrdinal);
+      setVisibleLocalOrdinal(target - offset);
       setOpen(false);
       return;
     }
-
-    // Need to fetch earlier history
-    const version = requestVersion.current;
-    setLoadingOrdinal(targetOrdinal);
-    setPendingOrdinal(targetOrdinal);
+    const key = indexKey;
+    setLoadingOrdinal(target);
+    setPendingOrdinal(target);
     setLoadFailed(false);
-    setFailedAnchor(null);
-    void onLoadHistoryThroughUserMessage(targetOrdinal, total)
-      .then((loaded) => {
-        if (requestVersion.current !== version || loaded) return;
-        setPendingOrdinal(null);
-        setLoadingOrdinal(null);
-        setLoadFailed(true);
-      })
-      .catch(() => {
-        if (requestVersion.current !== version) return;
-        setPendingOrdinal(null);
-        setLoadingOrdinal(null);
-        setLoadFailed(true);
-      });
+    setFailedOrdinal(null);
+    const fail = () => {
+      if (!mounted.current || currentKey.current !== key) return;
+      setPendingOrdinal(null);
+      setLoadingOrdinal(null);
+      setFailedOrdinal(target);
+      setLoadFailed(true);
+    };
+    void onLoadHistoryThroughUserMessage(target, totalUserCount).then((loaded) => { if (!loaded) fail(); }).catch(fail);
   };
 
   const jumpPrev = () => {
@@ -236,7 +234,7 @@ export function PromptNavigator({
     <div className="absolute right-3.5 bottom-4 z-20 flex flex-col items-center rounded-2xl border border-line/70 bg-card/90 p-0.5 shadow-md backdrop-blur-md transition-all sm:right-4 dark:border-white/[0.08] dark:bg-card/80 dark:shadow-xl">
       <button
         type="button"
-        disabled={atFirst || loadingOrdinal !== null}
+        disabled={!indexKnown || historyLoading || atFirst || loadingOrdinal !== null}
         onClick={jumpPrev}
         aria-label={t("previousQuestion")}
         title={t("previousQuestion")}
@@ -254,18 +252,18 @@ export function PromptNavigator({
         title={`${t("questionsList")} (${currentVisibleOrdinal}/${totalUserCount})`}
         className="flex h-6 min-w-7 items-center justify-center px-1 font-mono text-[10.5px] font-semibold text-muted transition-colors hover:text-ink select-none"
       >
-        {loadingOrdinal !== null ? (
+        {loadingOrdinal !== null || (!indexKnown && indexLoading) ? (
           <LoadingIndicator label={t("loading")} size="sm" />
         ) : (
           <span>
-            {currentVisibleOrdinal}/{totalUserCount}
+            {indexKnown ? currentVisibleOrdinal : "…"}/{indexKnown ? totalUserCount : "…"}
           </span>
         )}
       </button>
 
       <button
         type="button"
-        disabled={atLast || loadingOrdinal !== null}
+        disabled={!indexKnown || historyLoading || atLast || loadingOrdinal !== null}
         onClick={jumpNext}
         aria-label={t("nextQuestion")}
         title={t("nextQuestion")}
@@ -309,7 +307,7 @@ export function PromptNavigator({
               {loadFailed && !indexLoading && loadingOrdinal === null && (
                 <button
                   type="button"
-                  onClick={() => (failedAnchor ? jumpToOrdinal(failedAnchor.ordinal) : requestAnchors())}
+                  onClick={() => (failedOrdinal !== null ? jumpToOrdinal(failedOrdinal) : requestAnchors())}
                   className="w-full px-4 py-3 text-center text-xs text-faint hover:bg-hover hover:text-ink"
                 >
                   {t("treeLoadError")}

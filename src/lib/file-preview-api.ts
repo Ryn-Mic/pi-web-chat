@@ -1,4 +1,4 @@
-import { authHeaders, setAuthStatus } from "./auth";
+import { authHeaders, authenticatedFetch } from "./auth";
 
 export type PreviewErrorCode =
   | "unsupported"
@@ -198,14 +198,13 @@ export async function loadDesktopPreviewFile(input: {
   let attempt = 0;
 
   while (true) {
-    const headRes = await fetchImpl(url, {
+    const headRes = await authenticatedFetch(url, {
       method: "HEAD",
       headers: authHeaders(),
       signal,
-    });
+    }, fetchImpl);
 
     if (headRes.status === 401) {
-      setAuthStatus("unauthenticated");
       throw new FilePreviewError("failed", "unauthorized");
     }
     if (!headRes.ok) {
@@ -225,14 +224,13 @@ export async function loadDesktopPreviewFile(input: {
     const getHeaders: Record<string, string> = authHeaders();
     getHeaders["If-Match"] = etag;
 
-    const getRes = await fetchImpl(url, {
+    const getRes = await authenticatedFetch(url, {
       method: "GET",
       headers: getHeaders,
       signal,
-    });
+    }, fetchImpl);
 
     if (getRes.status === 401) {
-      setAuthStatus("unauthenticated");
       throw new FilePreviewError("failed", "unauthorized");
     }
 

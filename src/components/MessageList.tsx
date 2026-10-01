@@ -824,6 +824,7 @@ export function MessageList({
   onPreviewFile,
   hideScrollButton = false,
   hidePromptNavigator = false,
+  historyRevision = 0,
   sessionId,
   onLoadMessageAnchors,
   onLoadHistoryThroughUserMessage,
@@ -845,6 +846,7 @@ export function MessageList({
   onPreviewFile?: PreviewMessageFile;
   hideScrollButton?: boolean;
   hidePromptNavigator?: boolean;
+  historyRevision?: number;
   sessionId?: string | null;
   onLoadMessageAnchors?: () => Promise<import("../../shared/protocol").UIMessageAnchor[] | null>;
   onLoadHistoryThroughUserMessage?: (
@@ -858,6 +860,9 @@ export function MessageList({
   const turns = useMemo(() => conversationTurns(messages, turnRunning), [messages, turnRunning]);
   const chatFontSize = useChatFontSize();
   const stickToBottom = useRef(true);
+  // A prepend can transiently report the old bottom while a prompt jump is
+  // being laid out. Only new user input may re-enable bottom following.
+  const suspendAutoPin = useRef(false);
   const touchStartY = useRef<number | null>(null);
   const mounted = useRef(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -902,6 +907,7 @@ export function MessageList({
   const prevStreaming = useRef(isStreaming);
   useEffect(() => {
     if (!prevStreaming.current && isStreaming) {
+      suspendAutoPin.current = false;
       stickToBottom.current = true;
       setIsAtBottom(true);
       const container = containerRef.current;
@@ -930,6 +936,7 @@ export function MessageList({
     if (!el) return;
     stickToBottom.current = true;
     setIsAtBottom(true);
+    suspendAutoPin.current = false;
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   };
 
@@ -939,7 +946,7 @@ export function MessageList({
     const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     const atBottom = distanceToBottom <= 24;
     if (atBottom) {
-      stickToBottom.current = true;
+      if (!suspendAutoPin.current) stickToBottom.current = true;
       setIsAtBottom(true);
     } else {
       setIsAtBottom(false);
@@ -948,6 +955,7 @@ export function MessageList({
 
   const handleWheel = (event: WheelEvent) => {
     if (event.ctrlKey) return;
+    suspendAutoPin.current = false;
     if (event.deltaY < 0) {
       stickToBottom.current = false;
       setIsAtBottom(false);
@@ -955,6 +963,7 @@ export function MessageList({
   };
 
   const handleTouchStart = (event: TouchEvent) => {
+    suspendAutoPin.current = false;
     touchStartY.current = event.touches[0]?.clientY ?? null;
   };
 
@@ -982,6 +991,7 @@ export function MessageList({
       <div
         ref={containerRef}
         onScroll={handleScroll}
+        onPointerDown={() => { suspendAutoPin.current = false; }}
         onWheel={handleWheel}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
@@ -1046,6 +1056,8 @@ export function MessageList({
 
       {/* Floating prompt navigator (jump to previous/next question) */}
       <PromptNavigator
+        onNavigate={() => { suspendAutoPin.current = true; stickToBottom.current = false; setIsAtBottom(false); }}
+        historyRevision={historyRevision}
         sessionId={sessionId ?? null}
         messages={messages}
         historyHasMore={historyHasMore}

@@ -350,3 +350,41 @@ await import("./server/index.ts");`;
   assert.equal((await fetch(`${baseUrl}/api/auth/status`, { headers: freshHeaders })).status, 401);
   assert.equal((await fetch(`${baseUrl}/api/health`)).status, 200);
 });
+
+test("authenticated file APIs deny credentials even when a legacy workspace equals auth state", async (t) => {
+  const fixture = mkdtempSync(join(root, "private-api-"));
+  const stateDir = join(fixture, "state");
+  const agentDir = join(fixture, "agent");
+  mkdirSync(agentDir, { recursive: true });
+  const port = await freePort();
+  const child = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
+    cwd: process.cwd(), env: { ...process.env, NODE_ENV: "test", PORT: String(port), HOST: "127.0.0.1",
+      PI_WEB_CWD: stateDir, PI_WEB_TEST_STATE_DIR: stateDir, PI_CODING_AGENT_DIR: agentDir,
+      PI_CODING_AGENT_SESSION_DIR: join(agentDir, "sessions"), PI_WEB_TOKEN: "private-api-fixture",
+      PI_WEB_2FA: "on", PI_WEB_DAEMON_MANAGED: "0", PI_WEB_CODEX_STARTED_MARKER: join(fixture, "no-codex") },
+    stdio: "ignore",
+  });
+  t.after(() => stopChild(child));
+  const base = `http://127.0.0.1:${port}`;
+  await waitUntil(async () => { try { return (await fetch(base + "/api/health")).ok; } catch { return false; } }, "private API fixture unavailable");
+  const local = new Auth({ stateDir, token: "private-api-fixture", twoFactorEnabled: true });
+  const result = await (await fetch(base + "/api/auth/login", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: "private-api-fixture", totp: local.currentTotp() }) })).json() as { sessionToken: string };
+  const headers = { authorization: `Bearer ${result.sessionToken}`, "content-type": "application/json" };
+  const cwd = encodeURIComponent(stateDir);
+  for (const path of ["token", "2fa.secret", "sessions.json"]) {
+    for (const [url, method, body] of [
+      [`/api/files/text?cwd=${cwd}&path=${path}`, "GET", undefined],
+      [`/api/files/text?cwd=${cwd}&path=${path}`, "PUT", JSON.stringify({ text: "replacement", revision: "0".repeat(64) })],
+      [`/api/files/content?cwd=${cwd}&path=${path}`, "HEAD", undefined],
+      ["/api/files/preview-context", "POST", JSON.stringify({ cwd: stateDir, path })],
+    ] as const) {
+      const response = await fetch(base + url, { method, headers, body });
+      assert.equal(response.status, 403, `${method} ${path} must be private`);
+    }
+  }
+  for (const url of [`/api/tree?cwd=${cwd}`, `/api/files/search?cwd=${cwd}&q=token`]) {
+    assert.equal((await fetch(base + url, { headers })).status, 403);
+  }
+  assert.equal(readFileSync(join(stateDir, "token"), "utf8").trim() === "private-api-fixture", true);
+});

@@ -1,4 +1,4 @@
-import { authHeaders, setAuthStatus } from "./auth";
+import { authHeaders, authenticatedFetch } from "./auth";
 import { FilePreviewError } from "./file-preview-api";
 import type { UITextFileSnapshot, UITextFileSaveRequest } from "../../shared/protocol";
 
@@ -11,7 +11,7 @@ export async function requestTextFile(input: {
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
 }): Promise<TextFileSnapshot> {
-  const response = await (input.fetchImpl ?? fetch)(
+  const response = await authenticatedFetch(
     `/api/files/text?cwd=${encodeURIComponent(input.cwd)}&path=${encodeURIComponent(input.path)}`,
     {
       method: input.save ? "PUT" : "GET",
@@ -19,8 +19,8 @@ export async function requestTextFile(input: {
       body: input.save ? JSON.stringify(input.save) : undefined,
       signal: input.signal,
     },
+    input.fetchImpl ?? fetch,
   );
-  if (response.status === 401) setAuthStatus("unauthenticated");
   if (!response.ok) {
     const code = response.status === 409 ? "changed"
       : response.status === 413 ? "too-large"

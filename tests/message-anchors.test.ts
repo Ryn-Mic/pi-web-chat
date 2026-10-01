@@ -28,3 +28,13 @@ test("rejects stale or invalid anchor ordinals", () => {
   assert.equal(messageIndexForUserOrdinal(loaded, 1, 2), null);
   assert.equal(messageIndexForUserOrdinal(loaded, 0, 1), null);
 });
+
+test("optimistic inputs do not shift persisted global prompt ordinals", () => {
+  const messages = [
+    { id: "u-99", role: "user", content: [] },
+    { id: "u-100", role: "user", content: [] },
+    { id: "optimistic:pending", role: "user", content: [] },
+  ] as UIMessage[];
+  assert.equal(messageIndexForUserOrdinal(messages, 100, 99), 0);
+  assert.equal(messageIndexForUserOrdinal(messages, 100, 100), 1);
+});

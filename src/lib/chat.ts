@@ -99,6 +99,8 @@ export interface ChatState {
   historyLoading: boolean;
   /** The current page failed; retain its cursor so the user can retry. */
   historyError: boolean;
+  /** Replacements invalidate prompt indexes; ordinary prepends do not. */
+  historyRevision: number;
   /** Assistant text streaming right now (not yet in the snapshot) */
   streamText: string;
   streamThinking: string;
@@ -149,6 +151,7 @@ function createInitialState(): ChatState {
     historyHasMore: false,
     historyLoading: false,
     historyError: false,
+    historyRevision: 0,
     streamText: "",
     streamThinking: "",
     streamThinkingComplete: false,
@@ -558,6 +561,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
         historyHasMore: false,
         historyLoading: false,
         historyError: false,
+        historyRevision: this.historyGeneration,
         sessionId: null,
         streamText: "",
         streamThinking: "",
@@ -1002,6 +1006,7 @@ export class ChatClient implements WorkspaceClient<ChatState> {
       ...(resetHistory
         ? {
             historicalMessages: [],
+            historyRevision: this.historyGeneration,
             historyCursor: snapshot.history?.cursor ?? null,
             historyHasMore: snapshot.history?.hasMore ?? false,
             historyLoading: false,
