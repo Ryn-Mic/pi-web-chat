@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { UIMessage, UIMessageAnchor } from "../../shared/protocol";
 import { setModalOverlayOpen } from "../lib/drawer";
 import { localeTag, useLocale, useT } from "../lib/i18n";
-import { computeVisibleTicks, messageIndexForUserOrdinal } from "../lib/message-anchors";
+import { computeVisibleTicks, firstLoadedUserOrdinal, messageIndexForUserOrdinal, viewportUserOrdinal } from "../lib/message-anchors";
 import { LoadingIndicator } from "./LoadingIndicator";
 import { DismissActionIcon } from "./MorphIcons";
 
@@ -123,9 +123,19 @@ export function MessageTimelineTicks({
 
   const totalUserCount = anchors?.length ?? (historyHasMore ? userEntries.length + 1 : userEntries.length);
 
+  // Ticks, flyout labels and the highlight are all indexed by GLOBAL ordinal,
+  // while `userEntries` numbers the loaded page from 1.
+  const firstLoadedOrdinal = firstLoadedUserOrdinal(totalUserCount, userEntries.length);
+
+  /** Loaded entry for a global ordinal, or null when that page is not loaded yet. */
+  const entryForOrdinal = useCallback(
+    (ordinal: number) => userEntries[ordinal - firstLoadedOrdinal] ?? null,
+    [firstLoadedOrdinal, userEntries],
+  );
+
   // Initialize current visible ordinal to latest user message when available
   const [currentVisibleOrdinal, setCurrentVisibleOrdinal] = useState<number>(() => {
-    return userEntries.length > 0 ? userEntries[userEntries.length - 1]!.ordinal : 1;
+    return userEntries.length > 0 ? totalUserCount : 1;
   });
 
   const visibleTicks = useMemo(
@@ -167,9 +177,6 @@ export function MessageTimelineTicks({
     setLoadFailed(false);
     setFailedAnchor(null);
     clearTimer();
-    if (userEntries.length > 0) {
-      setCurrentVisibleOrdinal(userEntries[userEntries.length - 1]!.ordinal);
-    }
   }, [sessionId, clearTimer, userEntries]);
 
   useEffect(() => {
@@ -197,49 +204,36 @@ export function MessageTimelineTicks({
     return () => window.removeEventListener("pointerdown", handlePointerDown);
   }, [expanded, clearTimer]);
 
-  // Track user message closest to the viewport
+  // Track the user message the viewport is anchored to: the last question whose
+  // top edge reached the top of the viewport. This is the exact line
+  // `scrollToMessage` aligns to, so a jump always reads back as its own tick.
+  // Re-runs whenever the loaded suffix or the total count changes, which also
+  // re-anchors the highlight after a session switch or a history page load.
   const updateVisibleOrdinal = useCallback(() => {
     if (isScrubbingRef.current) return;
     const container = containerRef.current;
     if (!container || userEntries.length === 0) return;
 
-    // 1. If viewport is close to bottom, authoritative position is the latest message
+    // 1. Viewport pinned to the end: the newest question is authoritative.
     const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 60;
     if (isAtBottom) {
-      setCurrentVisibleOrdinal(userEntries[userEntries.length - 1]!.ordinal);
+      setCurrentVisibleOrdinal(totalUserCount);
       return;
     }
 
-    // 2. If viewport is at top, authoritative position is the first message
-    if (container.scrollTop <= 15) {
-      setCurrentVisibleOrdinal(userEntries[0]!.ordinal);
-      return;
-    }
-
-    const containerRect = container.getBoundingClientRect();
-    const viewportTop = containerRect.top;
-    const viewportBottom = containerRect.bottom;
-    const focusY = viewportTop + container.clientHeight * 0.25;
-
-    let closestOrdinal = userEntries[userEntries.length - 1]!.ordinal;
-    let minDistance = Infinity;
-
+    const containerTop = container.getBoundingClientRect().top;
+    const offsets: { ordinal: number; top: number }[] = [];
     for (const entry of userEntries) {
       const el = container.querySelector<HTMLElement>(`[data-msg-index="${entry.index}"]`);
       if (!el) continue;
       const rect = el.getBoundingClientRect();
-
-      // Messages far below viewport bottom are ignored
-      if (rect.top > viewportBottom) continue;
-
-      const distance = Math.abs(rect.top - focusY);
-      if (distance < minDistance) {
-        minDistance = distance;
-        closestOrdinal = entry.ordinal;
-      }
+      // A collapsed/hidden message has a zero rect and no reading position.
+      if (rect.height === 0) continue;
+      offsets.push({ ordinal: firstLoadedOrdinal + entry.ordinal - 1, top: rect.top - containerTop });
     }
-    setCurrentVisibleOrdinal(closestOrdinal);
-  }, [containerRef, userEntries]);
+
+    setCurrentVisibleOrdinal(viewportUserOrdinal(offsets) ?? firstLoadedOrdinal);
+  }, [containerRef, firstLoadedOrdinal, totalUserCount, userEntries]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -299,9 +293,7 @@ export function MessageTimelineTicks({
     (targetOrdinal: number, smooth = true) => {
       if (loadingOrdinal !== null || historyLoading) return;
       const total = anchors?.length ?? totalUserCount;
-      const index = anchors
-        ? messageIndexForUserOrdinal(messages, anchors.length, targetOrdinal)
-        : userEntries.find((e) => e.ordinal === targetOrdinal)?.index ?? null;
+      const index = messageIndexForUserOrdinal(messages, total, targetOrdinal);
 
       if (index !== null) {
         scrollToMessage(containerRef, index, smooth);
@@ -329,7 +321,7 @@ export function MessageTimelineTicks({
           setLoadFailed(true);
         });
     },
-    [anchors, containerRef, historyLoading, loadingOrdinal, messages, onLoadHistoryThroughUserMessage, totalUserCount, userEntries],
+    [anchors, containerRef, historyLoading, loadingOrdinal, messages, onLoadHistoryThroughUserMessage, totalUserCount],
   );
 
   const jumpToOrdinal = useCallback(
@@ -348,11 +340,11 @@ export function MessageTimelineTicks({
         const a = anchors.find((item) => item.ordinal === ord);
         if (a?.text) return a.text;
       }
-      const local = userEntries.find((item) => item.ordinal === ord);
+      const local = entryForOrdinal(ord);
       if (local?.text) return local.text;
       return `#${ord}`;
     },
-    [anchors, userEntries],
+    [anchors, entryForOrdinal],
   );
 
   const handleToggleExpand = useCallback(() => {
