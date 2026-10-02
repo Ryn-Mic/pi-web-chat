@@ -658,17 +658,30 @@ const Message = memo(function Message({
 function ProcessDisclosure({
   collapsed,
   toolCount,
+  failedTools = 0,
+  incomplete = false,
   active = false,
   children,
 }: {
   collapsed: boolean;
   toolCount: number;
+  /** Failed tool results, including recovered ones. */
+  failedTools?: number;
+  /** Provider error or a tool call that never returned a result. */
+  incomplete?: boolean;
   active?: boolean;
   children: React.ReactNode;
 }) {
   const t = useT();
   const [override, setOverride] = useState<{ collapsed: boolean; open: boolean } | null>(null);
   const open = override?.collapsed === collapsed ? override.open : !collapsed;
+  // A folded row must still report trouble. A pending tool call is expected while
+  // the turn runs, so only an error or an unresolved result outranks the count.
+  const signal = incomplete && !active
+    ? t("executionIncomplete")
+    : failedTools > 0
+      ? t("executionFailedToolCount", { count: failedTools })
+      : null;
   return (
     <details open={open} className="min-w-0 my-1.5" data-execution-process>
       <summary
@@ -693,9 +706,18 @@ function ProcessDisclosure({
           <span className="size-1.5 shrink-0 rounded-full bg-faint/60" aria-hidden />
         )}
         <span className="font-medium text-ink/90">{t("executionProcess")}</span>
-        {toolCount > 0 && (
-          <span className="ml-auto inline-flex items-center rounded-full bg-bubble px-2 py-0.5 font-mono text-[10px] text-muted dark:bg-white/5 dark:text-muted/90">
-            {t("executionToolCount", { count: toolCount })}
+        {(toolCount > 0 || signal) && (
+          <span className="ml-auto flex shrink-0 items-center gap-1">
+            {toolCount > 0 && (
+              <span className="inline-flex items-center rounded-full bg-bubble px-2 py-0.5 font-mono text-[10px] text-muted dark:bg-white/5 dark:text-muted/90">
+                {t("executionToolCount", { count: toolCount })}
+              </span>
+            )}
+            {signal && (
+              <span className="inline-flex items-center rounded-full bg-red-500/10 px-2 py-0.5 font-mono text-[10px] font-medium text-red-600 dark:bg-red-500/15 dark:text-red-400">
+                {signal}
+              </span>
+            )}
           </span>
         )}
       </summary>
@@ -745,7 +767,13 @@ function AssistantTurn({
     <>
       {turn.prompt && renderMessage(turn.prompt)}
       {hasProcess && (
-        <ProcessDisclosure collapsed={turn.collapsible} toolCount={toolCount} active={turn.active}>
+        <ProcessDisclosure
+          collapsed={!turn.active}
+          toolCount={toolCount}
+          failedTools={turn.failedTools}
+          incomplete={turn.incomplete}
+          active={turn.active}
+        >
           {turn.process.map((entry) => renderMessage(entry))}
           {live?.streamThinking && (
             <Thinking text={live.streamThinking} streaming={!live.streamThinkingComplete} />
@@ -1056,7 +1084,7 @@ export function MessageList({
           ))}
           {turns.length === 0 && turnRunning && (
             <AssistantTurn
-              turn={{ key: "live", process: [], noticesBefore: [], noticesAfter: [], active: true, collapsible: false }}
+              turn={{ key: "live", process: [], noticesBefore: [], noticesAfter: [], active: true, failedTools: 0, incomplete: false }}
               cwd={cwd}
               onPreviewFile={onPreviewFile}
               live={{ streamThinking, streamThinkingComplete, streamText, activeTools, showTyping }}

@@ -225,6 +225,8 @@ export const ko: Messages = {
   imagePlaceholder: "[이미지]",
   executionProcess: "실행 과정",
   executionToolCount: "도구 호출 {count}회",
+  executionFailedToolCount: "{count}건 실패",
+  executionIncomplete: "오류 있음",
   toolRunning: "{name} 실행 중…",
   askAnswerInTerminal: "pi 터미널에서 답변이 필요합니다 — 웹 UI 에서는 답할 수 없습니다.",
   copyMessage: "메시지 복사",

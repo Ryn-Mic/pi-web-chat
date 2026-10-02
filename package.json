@@ -1,6 +1,6 @@
 {
   "name": "@ryn-mic/web-chat",
-  "version": "0.1.142",
+  "version": "0.1.143",
   "description": "Mobile-friendly Web UI for pi and Codex coding agents",
   "type": "module",
   "license": "MIT",

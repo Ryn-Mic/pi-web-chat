@@ -231,6 +231,8 @@ export type Messages = {
   imagePlaceholder: string;
   executionProcess: string;
   executionToolCount: string;
+  executionFailedToolCount: string;
+  executionIncomplete: string;
   toolRunning: string;
   askAnswerInTerminal: string;
   copyMessage: string;
@@ -530,6 +532,8 @@ export const en: Messages = {
   imagePlaceholder: "[image]",
   executionProcess: "Execution process",
   executionToolCount: "Tool calls: {count}",
+  executionFailedToolCount: "{count} failed",
+  executionIncomplete: "Had errors",
   toolRunning: "Running {name}…",
   askAnswerInTerminal: "This needs input in the pi terminal — the web UI can't answer it.",
   copyMessage: "Copy message",

@@ -153,15 +153,62 @@ test("historical task boundaries fold separately while the current task remains 
   await expect(page.getByText("Tool calls: 35", { exact: true })).toBeVisible();
 });
 
-test("interrupted and failed tasks remain expanded and custom notices stay visible", async ({ page }) => {
-  const chat = await mockTurn(page, [prompt, progress]);
+test("interrupted and failed tasks fold by default and flag the summary row", async ({ page }) => {
+  const chat = await mockTurn(page, [prompt, progress], true);
   await login(page);
   const process = page.locator("[data-execution-process]");
-  await expect(process).toHaveAttribute("open", "");
+  await expect(process).toHaveAttribute("open", "", "running work stays expanded");
   chat.update([prompt, { ...progress, errorMessage: "The task was interrupted" }, message("notice", "custom", "Important custom notice"), final]);
+  // Settled turns fold even when they carried an error…
+  await expect(process).not.toHaveAttribute("open", "");
+  // …and the collapsed row reports it instead of hiding it.
+  await expect(process.locator(":scope > summary").getByText("Had errors", { exact: true })).toBeVisible();
+  await expect(page.getByText("Important custom notice", { exact: true })).toBeVisible();
+  await expect(page.getByText("The project is ready.", { exact: true })).toBeVisible();
+  // Expanding still exposes the error text and the retained work.
+  await process.locator(":scope > summary").click();
   await expect(process).toHaveAttribute("open", "");
   await expect(page.getByText("The task was interrupted", { exact: true })).toBeVisible();
-  await expect(page.getByText("Important custom notice", { exact: true })).toBeVisible();
+  await expect(page.getByText("Reading the documentation", { exact: true })).toBeVisible();
+});
+
+test("a settled turn that recovered from a failed tool folds and counts the failure", async ({ page }) => {
+  const failedStep: UIMessage = {
+    id: "failed-step",
+    role: "assistant",
+    content: [
+      { type: "thinking", text: "Inspecting the missing file" },
+      { type: "toolCall", id: "read-missing", name: "read", args: { path: "missing.md" }, result: { text: "no such file", isError: true } },
+    ],
+  };
+  await mockTurn(page, [prompt, failedStep, final]);
+  await login(page);
+  const process = page.locator("[data-execution-process]");
+  await expect(process).not.toHaveAttribute("open", "");
+  const summary = process.locator(":scope > summary");
+  await expect(summary.getByText("1 failed", { exact: true })).toBeVisible();
+  // Both pills must fit the folded row at mobile width.
+  const fitted = await summary.evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
+  expect(fitted).toBe(true);
+  await expect(page.getByText("The project is ready.", { exact: true })).toBeVisible();
+  await summary.click();
+  await expect(process.getByText("read missing.md", { exact: true }).first()).toBeVisible();
+});
+
+test("a tool call that never returned a result is flagged as incomplete", async ({ page }) => {
+  const pendingStep: UIMessage = {
+    id: "pending-step",
+    role: "assistant",
+    content: [
+      { type: "text", text: "Checking the package manifest" },
+      { type: "toolCall", id: "read-pending", name: "read", args: { path: "package.json" } },
+    ],
+  };
+  await mockTurn(page, [prompt, pendingStep, final]);
+  await login(page);
+  const process = page.locator("[data-execution-process]");
+  await expect(process).not.toHaveAttribute("open", "");
+  await expect(process.locator(":scope > summary").getByText("Had errors", { exact: true })).toBeVisible();
   await expect(page.getByText("The project is ready.", { exact: true })).toBeVisible();
 });
 

@@ -18,7 +18,8 @@ const final = message("final-1", "assistant", [text("Done.\n\n✻ Turn took 12s"
 test("running commentary, thinking and paired tools remain in one expanded process", () => {
   const [turn] = conversationTurns([prompt, progress, final], true);
   assert.equal(turn?.active, true);
-  assert.equal(turn?.collapsible, false);
+  assert.equal(turn?.failedTools, 0);
+  assert.equal(turn?.incomplete, false);
   assert.equal(turn?.reply, undefined);
   assert.deepEqual(turn?.process.map((entry) => entry.key), ["progress-1", "final-1"]);
   assert.equal(turn?.process[0]?.message.content[2], tool);
@@ -27,7 +28,8 @@ test("running commentary, thinking and paired tools remain in one expanded proce
 
 test("settled turns separate the final reply and keep duration metadata", () => {
   const [turn] = conversationTurns([prompt, progress, final], false);
-  assert.equal(turn?.collapsible, true);
+  assert.equal(turn?.failedTools, 0);
+  assert.equal(turn?.incomplete, false);
   assert.deepEqual(turn?.process.map((entry) => entry.key), ["progress-1"]);
   assert.equal(turn?.reply?.key, "final-1");
   assert.equal(turn?.reply?.message, final, "unchanged final replies retain memo-friendly identity");
@@ -40,7 +42,7 @@ test("thinking inside the final assistant message folds without hiding the reply
   const [turn] = conversationTurns([prompt, mixed], false);
   assert.deepEqual(turn?.process[0]?.message.content, [thinking]);
   assert.deepEqual(turn?.reply?.message.content, [text("Answer")]);
-  assert.equal(turn?.collapsible, true);
+  assert.equal(turn?.incomplete, false);
 });
 
 test("only text after the last tool belongs to the final reply", () => {
@@ -62,9 +64,7 @@ test("previous tasks can fold while a later task runs", () => {
   const second = message("user-2", "user", [text("Next task")]);
   const turns = conversationTurns([prompt, progress, final, second, progress], true);
   assert.equal(turns.length, 2);
-  assert.equal(turns[0]?.collapsible, true);
   assert.equal(turns[0]?.active, false);
-  assert.equal(turns[1]?.collapsible, false);
   assert.equal(turns[1]?.active, true);
   assert.equal(turns[1]?.prompt?.index, 3);
 });
@@ -93,23 +93,41 @@ test("custom notices stay outside the folded process on either side of the reply
   assert.deepEqual(turn?.noticesAfter.map((entry) => entry.key), ["notice-2"]);
 });
 
-test("no-final turns never fold even when streaming has stopped", () => {
+test("settled no-final turns fold too and carry no failure signal", () => {
   for (const tail of [progress, message("thinking-only", "assistant", [thinking]), message("duration-only", "assistant", [text("✻ Turn took 12s")]), message("blank", "assistant", [text("  ")])]) {
     const [turn] = conversationTurns([prompt, message("commentary", "assistant", [text("I will check")]), tail], false);
     assert.equal(turn?.reply, undefined);
-    assert.equal(turn?.collapsible, false);
+    assert.equal(turn?.active, false, "the UI folds every settled turn");
+    assert.equal(turn?.failedTools, 0);
+    assert.equal(turn?.incomplete, false);
   }
 });
 
-test("pending tools, failed tools and assistant errors do not auto-fold", () => {
+test("unresolved tools, failed tools and assistant errors fold with a summary signal", () => {
   const pending: UIContentBlock = { ...tool, result: undefined };
   const failed: UIContentBlock = { ...tool, result: { text: "failure", isError: true } };
-  for (const blocked of [message("pending", "assistant", [pending]), message("failed", "assistant", [failed]), { ...progress, errorMessage: "Agent failed" }]) {
-    const [turn] = conversationTurns([prompt, blocked, final], false);
-    assert.equal(turn?.collapsible, false);
-    assert.equal(turn?.reply?.key, "final-1");
-  }
-  assert.equal(conversationTurns([prompt, progress, { ...final, errorMessage: "Aborted" }], false)[0]?.reply, undefined);
+
+  const [pendingTurn] = conversationTurns([prompt, message("pending", "assistant", [pending]), final], false);
+  assert.equal(pendingTurn?.incomplete, true, "a tool call without a result never settled");
+  assert.equal(pendingTurn?.failedTools, 0);
+  assert.equal(pendingTurn?.reply?.key, "final-1");
+
+  const [erroredTurn] = conversationTurns([prompt, { ...progress, errorMessage: "Agent failed" }, final], false);
+  assert.equal(erroredTurn?.incomplete, true);
+  assert.equal(erroredTurn?.reply?.key, "final-1");
+
+  const [aborted] = conversationTurns([prompt, progress, { ...final, errorMessage: "Aborted" }], false);
+  assert.equal(aborted?.reply, undefined);
+  assert.equal(aborted?.incomplete, true);
+});
+
+test("a recovered tool failure still folds and reports its count", () => {
+  const failed: UIContentBlock = { ...tool, id: "read-failed", result: { text: "failure", isError: true } };
+  const recovered = { ...progress, content: [...progress.content, failed] };
+  const [turn] = conversationTurns([prompt, recovered, final], false);
+  assert.equal(turn?.failedTools, 1);
+  assert.equal(turn?.incomplete, false, "a settled turn with a real reply is not incomplete");
+  assert.equal(turn?.reply?.key, "final-1");
 });
 
 test("custom-only pages and consecutive prompts have safe group identities", () => {
