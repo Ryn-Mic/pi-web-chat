@@ -1,10 +1,11 @@
+import { cachedDateTimeFormat } from "./datetime-format";
 export function formatGitTimestamp(value: string, locale?: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   const year = String(date.getFullYear() % 100).padStart(2, "0");
   const month = date.getMonth() + 1;
   const day = date.getDate();
-  const time = new Intl.DateTimeFormat(locale, {
+  const time = cachedDateTimeFormat(locale, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",

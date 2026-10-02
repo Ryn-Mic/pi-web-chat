@@ -229,3 +229,25 @@ test("live tools remain visible before the running snapshot even on an empty tra
   chat.event({ type: "tool_end", toolCallId: "early-tool", toolName: "read", isError: false });
   await expect(page.locator("[data-execution-process]")).toHaveCount(0);
 });
+
+test("settled process content stays unmounted until it is revealed", async ({ page }) => {
+  await mockTurn(page, [prompt, progress, final]);
+  await login(page);
+  const process = page.locator("[data-execution-process]");
+  await expect(process).not.toHaveAttribute("open", "");
+  // A settled disclosure keeps no contents in the DOM: a tool-heavy transcript
+  // keeps roughly half of its nodes inside closed disclosures, so mounting them
+  // ahead of a reveal is the expensive default.
+  await expect(process.locator(":scope > div *")).toHaveCount(0);
+  await expect(page.getByText("Reading the documentation")).toHaveCount(0);
+
+  await process.locator(":scope > summary").click();
+  await expect(process).toHaveAttribute("open", "");
+  await expect(page.getByText("Reading the documentation")).toBeVisible();
+
+  // Revealed once → the contents stay mounted, so re-collapsing does not throw
+  // away what the reader opened inside.
+  await process.locator(":scope > summary").click();
+  await expect(process).not.toHaveAttribute("open", "");
+  await expect(process.locator(":scope > div *")).not.toHaveCount(0);
+});

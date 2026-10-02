@@ -7,6 +7,7 @@ import { activityEyeState, activityEyeTone } from "../lib/activity";
 import { getAgentPreference } from "../lib/agent";
 import { chatClient, useChatField } from "../lib/chat";
 import { onRequestOpenSessionsDrawer, setSessionsDrawerOpen } from "../lib/drawer";
+import { formatRowDateTime } from "../lib/datetime-format";
 import { localeTag, useLocale, useT } from "../lib/i18n";
 import { confirmDiscardWorkspaceTextDrafts, discardWorkspaceTextDrafts } from "../lib/file-text-drafts";
 import { markFreshDraftRequested } from "../lib/resume";
@@ -32,15 +33,6 @@ import {
   SidebarToggleIcon,
   TreeChevronIcon,
 } from "./MorphIcons";
-
-function formatDate(iso: string, locale: string) {
-  const d = new Date(iso);
-  return (
-    d.toLocaleDateString(locale, { month: "short", day: "numeric" }) +
-    " " +
-    d.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })
-  );
-}
 
 /** Project path → display name (last directory segment; "~/foo/bar" → "bar", "~" → "~") */
 function projectDisplay(project: string): string {
@@ -121,7 +113,7 @@ function SessionRow({
   const title = session.name ?? session.firstMessage ?? t("emptySession");
   const agent = session.agent ?? "pi";
   const agentLabel = agent === "codex" ? t("agentCodex") : t("agentPi");
-  const meta = `${formatDate(session.modified, localeTag(locale))} · ${t("messageCount", {
+  const meta = `${formatRowDateTime(session.modified, localeTag(locale))} · ${t("messageCount", {
     count: session.messageCount,
   })}`;
 

@@ -118,6 +118,7 @@ import {
 import { SessionSummaryIndex } from "./session-index.ts";
 import { SessionCatalog, SessionCatalogCursorError } from "./session-catalog.ts";
 import {
+  branchFromHeadFile,
   checkoutGitBranch,
   getGitBranches,
   getGitCommit,
@@ -1139,21 +1140,28 @@ const ALL_THINKING_LEVELS: UIThinkingLevel[] = [
 const gitBranchCache = new Map<string, { branch: string | null; at: number }>();
 const GIT_BRANCH_TTL_MS = 3_000;
 
-/** Git branch at the given cwd (null when not a git repo) */
-function gitBranchAt(cwd: string): string | null {
-  const hit = gitBranchCache.get(cwd);
-  if (hit && Date.now() - hit.at < GIT_BRANCH_TTL_MS) return hit.branch;
-  let branch: string | null = null;
+/** Spawn git for the layouts where HEAD is not readable directly. */
+function branchFromGit(cwd: string): string | null {
   try {
     const out = execFileSync("git", ["-C", cwd, "branch", "--show-current"], {
       encoding: "utf8",
       timeout: 2_000,
       stdio: ["ignore", "pipe", "ignore"],
     });
-    branch = out.trim() || null;
+    return out.trim() || null;
   } catch {
-    branch = null;
+    return null;
   }
+}
+
+/** Git branch at the given cwd (null when not a git repo) */
+function gitBranchAt(cwd: string): string | null {
+  const hit = gitBranchCache.get(cwd);
+  if (hit && Date.now() - hit.at < GIT_BRANCH_TTL_MS) return hit.branch;
+  // Reading .git/HEAD costs ~10µs against ~6ms for spawning git, and this runs
+  // from every snapshot build, so git is only the fallback.
+  const fromHead = branchFromHeadFile(cwd);
+  const branch = fromHead === undefined ? branchFromGit(cwd) : fromHead;
   gitBranchCache.set(cwd, { branch, at: Date.now() });
   return branch;
 }

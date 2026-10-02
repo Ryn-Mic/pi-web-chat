@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject
 import { createPortal } from "react-dom";
 import type { UIMessage, UIMessageAnchor } from "../../shared/protocol";
 import { setModalOverlayOpen } from "../lib/drawer";
+import { formatFullDateTime } from "../lib/datetime-format";
 import { localeTag, useLocale, useT } from "../lib/i18n";
 import { computeVisibleTicks, firstLoadedUserOrdinal, messageIndexForUserOrdinal, TAIL_EPSILON_PX, viewportUserOrdinal } from "../lib/message-anchors";
 import { LoadingIndicator } from "./LoadingIndicator";
@@ -747,7 +748,7 @@ export const MessageTimelineTicks = memo(function MessageTimelineTicks({
                     {anchor.timestamp != null && (
                       <span
                         className="shrink-0 text-[11px] text-faint tabular-nums"
-                        title={new Date(anchor.timestamp).toLocaleString(localeTag(locale))}
+                        title={formatFullDateTime(anchor.timestamp, localeTag(locale))}
                       >
                         {relativeAge(anchor.timestamp, relativeFormatter)}
                       </span>
