@@ -23,7 +23,12 @@ function snapshotFor(id: string, messages: UIMessage[]): UISnapshot {
   };
 }
 
-async function mockChatWithQuestions(page: Page, count = 10, answerLines = 2) {
+async function mockChatWithQuestions(
+  page: Page,
+  count = 10,
+  answerLines = 2,
+  options: { historyHasMore?: boolean } = {},
+): Promise<{ messages: UIMessage[]; update: (next: UIMessage[], isStreaming?: boolean) => void }> {
   const messages: UIMessage[] = [];
   for (let i = 1; i <= count; i++) {
     messages.push(message(`u-${i}`, `Question #${i} from user about topic ${i}`, "user"));
@@ -39,8 +44,14 @@ async function mockChatWithQuestions(page: Page, count = 10, answerLines = 2) {
     );
   }
 
-  const snapshot = snapshotFor("session-ticks", messages);
+  const build = (next: UIMessage[], isStreaming = false): UISnapshot => ({
+    ...snapshotFor("session-ticks", next),
+    isStreaming,
+    history: { cursor: options.historyHasMore ? "cursor-1" : null, hasMore: !!options.historyHasMore },
+  });
   let wsSocket: WebSocketRoute | null = null;
+  let seq = 0;
+  let revision = 0;
 
   await page.route("**/api/sessions?*", async (route) =>
     route.fulfill({
@@ -66,8 +77,17 @@ async function mockChatWithQuestions(page: Page, count = 10, answerLines = 2) {
   await page.routeWebSocket(/\/ws\?/, (socket) => {
     wsSocket = socket;
     socket.send(JSON.stringify({ type: "session_bound", sessionId: "session-ticks" }));
-    socket.send(JSON.stringify({ type: "snapshot", seq: 0, revision: 0, snapshot }));
+    socket.send(JSON.stringify({ type: "snapshot", seq: 0, revision: 0, snapshot: build(messages) }));
   });
+
+  return {
+    messages,
+    update(next: UIMessage[], isStreaming = false) {
+      wsSocket?.send(JSON.stringify({
+        type: "snapshot", seq: ++seq, revision: ++revision, snapshot: build(next, isStreaming),
+      }));
+    },
+  };
 }
 
 async function login(page: Page) {
@@ -169,15 +189,17 @@ async function visibleTickOrdinals(page: Page): Promise<number[]> {
 }
 
 /**
- * Top edge of the Nth loaded user prompt, relative to the scroll container.
- * Only meaningful when the whole transcript is loaded (no history pages).
+ * Distance between the Nth loaded user prompt's top edge and the top of the
+ * scroll container. Absolute value: a prompt scrolled far above the viewport is
+ * just as wrong as one below it, so an unasserted sign would make "the jump
+ * landed" vacuously true. Only meaningful with the whole transcript loaded.
  */
-async function loadedPromptTop(page: Page, ordinal: number): Promise<number> {
+async function loadedPromptTopDistance(page: Page, ordinal: number): Promise<number> {
   return page.evaluate((target) => {
     const scroller = document.querySelector(".message-list .thin-scroll")!;
     const containerTop = scroller.getBoundingClientRect().top;
     const prompt = Array.from(scroller.querySelectorAll("[data-msg-index]"))[target - 1]!;
-    return Math.round(prompt.getBoundingClientRect().top - containerTop);
+    return Math.abs(Math.round(prompt.getBoundingClientRect().top - containerTop));
   }, ordinal);
 }
 
@@ -203,7 +225,7 @@ test("timeline ticks: the highlighted tick corresponds to the prompt at the top 
   await flyout.getByText("Question #5 from user about topic 5").click();
 
   // The jump aligns the prompt to the top of the viewport…
-  await expect.poll(() => loadedPromptTop(page, 5)).toBeLessThanOrEqual(24);
+  await expect.poll(() => loadedPromptTopDistance(page, 5)).toBeLessThanOrEqual(24);
   // …and the highlighted tick is that same prompt, not its neighbour.
   await expect.poll(() => activeTickOrdinal(page)).toBe(5);
   expect(await visibleTickOrdinals(page)).toEqual([2, 3, 4, 5, 6, 7, 8]);
@@ -212,7 +234,7 @@ test("timeline ticks: the highlighted tick corresponds to the prompt at the top 
   await nav.locator(".group\\/ticks").click();
   await expect(flyout).toBeVisible();
   await flyout.getByText("Question #8 from user about topic 8").click();
-  await expect.poll(() => loadedPromptTop(page, 8)).toBeLessThanOrEqual(24);
+  await expect.poll(() => loadedPromptTopDistance(page, 8)).toBeLessThanOrEqual(24);
   await expect.poll(() => activeTickOrdinal(page)).toBe(8);
 
   // Scrolling back to the end re-anchors to the newest question.
@@ -294,4 +316,106 @@ test("timeline ticks: a transcript that starts mid-conversation is labelled by g
     document.querySelector(".message-list .thin-scroll")!.scrollTop = 0;
   });
   await expect.poll(() => activeTickOrdinal(page)).toBe(40);
+});
+
+test("timeline ticks: an open question flyout survives incoming messages and refreshes the index once", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 667 });
+  let anchorRequests = 0;
+  await page.route("**/api/sessions/session-ticks/anchors", (route) => {
+    anchorRequests += 1;
+    return route.fulfill({
+      json: {
+        anchors: Array.from({ length: 10 }, (_, i) => ({
+          id: `u${i + 1}`,
+          ordinal: i + 1,
+          text: `Question #${i + 1} from user about topic ${i + 1}`,
+        })),
+      },
+    });
+  });
+
+  const chat = await mockChatWithQuestions(page, 10, 2, { historyHasMore: true });
+  await login(page);
+
+  const nav = page.locator('aside[role="navigation"]');
+  await expect(nav).toBeVisible();
+  await expect.poll(() => anchorRequests).toBe(1);
+
+  await nav.locator(".group\\/ticks").click();
+  const flyout = nav.locator(".animate-in");
+  await expect(flyout).toBeVisible();
+  await flyout.hover();
+
+  // A streamed assistant message must neither collapse the flyout nor refetch the index.
+  chat.update([...chat.messages, message("a-live", "A streamed assistant answer.", "assistant")], true);
+  await expect(page.getByText("A streamed assistant answer.", { exact: true })).toBeVisible();
+  await expect(flyout).toBeVisible();
+  expect(anchorRequests).toBe(1);
+
+  // A new question changes the loaded user count, so the index refreshes exactly once.
+  chat.update(
+    [
+      ...chat.messages,
+      message("a-live", "A streamed assistant answer.", "assistant"),
+      message("u-11", "Question #11 from user about topic 11", "user"),
+    ],
+    true,
+  );
+  await expect(page.getByText("Question #11 from user about topic 11", { exact: true })).toBeVisible();
+  await expect.poll(() => anchorRequests).toBe(2);
+
+  chat.update(
+    [
+      ...chat.messages,
+      message("a-live", "A streamed assistant answer.", "assistant"),
+      message("u-11", "Question #11 from user about topic 11", "user"),
+      message("a-live-2", "More streamed text.", "assistant"),
+    ],
+    true,
+  );
+  await expect(page.getByText("More streamed text.", { exact: true })).toBeVisible();
+  expect(anchorRequests).toBe(2);
+});
+
+test("timeline ticks: a jump lands on its target inside a long transcript", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 667 });
+  await page.route("**/api/sessions/session-ticks/anchors", (route) =>
+    route.fulfill({
+      json: {
+        anchors: Array.from({ length: 60 }, (_, i) => ({
+          id: `u${i + 1}`,
+          ordinal: i + 1,
+          text: `Question #${i + 1} from user about topic ${i + 1}`,
+        })),
+      },
+    }),
+  );
+  await mockChatWithQuestions(page, 60, 3);
+  await login(page);
+
+  const nav = page.locator('aside[role="navigation"]');
+  await expect(nav).toBeVisible();
+  await expect.poll(() => activeTickOrdinal(page)).toBe(60);
+
+  // Long transcripts skip off-screen replies; the jump must still land exactly.
+  await nav.locator(".group\\/ticks").click();
+  const flyout = nav.locator(".animate-in");
+  await expect(flyout).toBeVisible();
+  await flyout.hover();
+  await flyout.getByText("Questions outline · (60)").click();
+  const outline = page.getByRole("dialog", { name: "Questions outline" });
+  await expect(outline).toBeVisible();
+  await outline.getByText("Question #5 from user about topic 5").click();
+
+  await expect.poll(() => loadedPromptTopDistance(page, 5)).toBeLessThanOrEqual(24);
+  await expect.poll(() => activeTickOrdinal(page)).toBe(5);
+
+  // And back to the end.
+  await page.evaluate(() => {
+    const scroller = document.querySelector(".message-list .thin-scroll")!;
+    scroller.scrollTop = scroller.scrollHeight;
+  });
+  await expect.poll(() => activeTickOrdinal(page)).toBe(60);
 });

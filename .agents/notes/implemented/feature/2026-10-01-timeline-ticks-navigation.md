@@ -38,7 +38,14 @@ Status: implemented
 - **跳转与判定必须同基准**：`scrollToMessage` 使用 `scrollIntoView({ block: "start" })`，把目标提问对齐到视口顶边（保留 `scroll-mt-4` 的 16px 留白），因此判定基准也必须是顶边，容差必须 `>= 16`。历史上曾以“上 25% 视野焦点最近者”判定，在短回答会话里跳转后焦点落到下一条提问上，导致“点第 N 问、高亮第 N+1 问”的偏差。
 - **下方提问绝不参与**：位于折叠线以下的提问永远不是当前节点，所以阅读长回答期间所属提问保持高亮，直到下一条提问真正滚过顶边。
 - **零矩形节点必须跳过**：`getBoundingClientRect()` 全 0 的元素（折叠/隐藏）不构成阅读位置，`rect.height === 0` 时忽略。
-- **触底优先**：`scrollHeight - scrollTop - clientHeight <= 60` 时直接取全局最新提问，保证“总高度不足一屏”的短会话也高亮最新一条。
+- **触底优先**：`scrollHeight - scrollTop - clientHeight <= TAIL_EPSILON_PX`（24px）时直接取全局最新提问，保证“总高度不足一屏”的短会话也高亮最新一条；该常量同时用于消息区“滚底按钮”的可见判定，避免两处对“已到底”给出不同答案。
+- **节点映射缓存**：判定需要每个提问的 `rect.top`。渲染出来的用户气泡在消息存续期间稳定，所以按 `[data-msg-index]` 建立一次 `Map<index, element>`（加载页变化时重建，使用前校验首节点仍 `isConnected`），把每帧 N 次 `querySelector` 降为 0 次，只保留不可避免的 `getBoundingClientRect`。绝不把 `content-visibility` 加在用户气泡上：估算尺寸会直接污染这层测量（见 [被否决的离屏跳过方案](../../rejected/feature/2026-10-02-content-visibility-offscreen-skip.md)）。
+
+## 浮层与索引的生命周期
+
+- **只有切换会话才重置**：浮层展开态、索引、失败态一律由 `sessionId` 变化重置。历史上这套重置还挂在“已加载消息数组”变化上，导致 streaming 期间每来一条消息就把用户刚打开的提问浮层强制收起，并顺带丢弃仍有效的 anchor 索引。
+- **索引只在提问数量变化时刷新**：`/api/sessions/:id/anchors` 记录“读取时的已加载提问条数”，仅当该条数再次变化（新提问到来或历史分页补入）才重新拉取。流式正文更新不会触发请求，长会话里不再出现“每个 delta 一次 anchors 请求”。
+- **时间格式化按语言缓存**：`Intl.RelativeTimeFormat` 由语言 memo 一次，供全量大纲每一行复用。
 
 ## Alternatives considered
 
@@ -50,10 +57,11 @@ Status: implemented
 ## Consequences
 
 - **收益**：既消灭了破坏沉浸感的常驻大药丸，又赋予了用户极致轻盈的代码编辑器缩略图/刻度尺般的高级交互质感；无论多少条消息都保持居中 7 个刻度，单手点开一秒跳步，2 秒自动退回静默；刻度高亮与屏幕上方的提问严格一一对应，长会话（历史分页加载）下也是。
-- **代价**：判定依赖真实 DOM 几何（`data-msg-index` 必须落在可见用户消息上），跳转基准与 `scroll-mt-*` 留白耦合，容差必须随留白调整；纯函数 `viewportUserOrdinal` 只覆盖“给定偏移量选哪一条”这一段，页面几何仍需 E2E 兜底。
+- **代价**：判定依赖真实 DOM 几何（`data-msg-index` 必须落在可见用户消息上），跳转基准与 `scroll-mt-*` 留白耦合，容差必须随留白调整；节点映射缓存要求用户气泡持续挂载，任何把用户消息改成“离屏卸载/估算尺寸”的优化都必须先改这一层测量；纯函数 `viewportUserOrdinal` 只覆盖“给定偏移量选哪一条”这一段，页面几何仍需 E2E 兜底。
 - **验证**：
   - `tests/message-anchors.test.ts` 算法单元测试：`computeVisibleTicks` 滑窗、`messageIndexForUserOrdinal` 后缀映射、新增 `firstLoadedUserOrdinal` 与 `viewportUserOrdinal`（顶边对齐、下方不参与、零矩形/NaN 忽略）；
   - `tests/e2e/timeline-ticks.spec.ts` 浏览器自动化端到端测试，覆盖刻度渲染、数量上限、高亮加粗变长、点击展开、点击跳转收起、2 秒无操作自动收拢，以及新增的“高亮刻度 = 视口顶边提问”（短回答几何下前后跳转 + 触底回锚）与“中途开始的 transcript 使用全局序号”（45 问会话只加载 6 条时高亮 45、窗口 39..45、滚到已加载区顶部高亮 40）；
   - 修复前后用同一份可复现 Playwright 用例取证：修复前跳转第 5 问后高亮 6、后缀会话触底高亮 6 且窗口 3..9；修复后分别为 5 与 45/39..45；
-  - 全量 424 项单元测试 + 40 项 E2E 测试 100% 通过；
+  - 新增 E2E：浮层在收到流式消息后保持展开且索引不重复请求（随后新增提问时恰好刷新一次）；60 轮长会话中从全量大纲跳转到早期提问仍精确落位并把高亮切回该提问；
+  - 全量 425 项单元测试 + 44 项 E2E 测试 100% 通过；
   - `npm run notes:check` 与 `npm run pack:check` 验证通过。
