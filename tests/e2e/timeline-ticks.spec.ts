@@ -189,15 +189,17 @@ async function visibleTickOrdinals(page: Page): Promise<number[]> {
 }
 
 /**
- * Top edge of the Nth loaded user prompt, relative to the scroll container.
- * Only meaningful when the whole transcript is loaded (no history pages).
+ * Distance between the Nth loaded user prompt's top edge and the top of the
+ * scroll container. Absolute value: a prompt scrolled far above the viewport is
+ * just as wrong as one below it, so an unasserted sign would make "the jump
+ * landed" vacuously true. Only meaningful with the whole transcript loaded.
  */
-async function loadedPromptTop(page: Page, ordinal: number): Promise<number> {
+async function loadedPromptTopDistance(page: Page, ordinal: number): Promise<number> {
   return page.evaluate((target) => {
     const scroller = document.querySelector(".message-list .thin-scroll")!;
     const containerTop = scroller.getBoundingClientRect().top;
     const prompt = Array.from(scroller.querySelectorAll("[data-msg-index]"))[target - 1]!;
-    return Math.round(prompt.getBoundingClientRect().top - containerTop);
+    return Math.abs(Math.round(prompt.getBoundingClientRect().top - containerTop));
   }, ordinal);
 }
 
@@ -223,7 +225,7 @@ test("timeline ticks: the highlighted tick corresponds to the prompt at the top 
   await flyout.getByText("Question #5 from user about topic 5").click();
 
   // The jump aligns the prompt to the top of the viewport…
-  await expect.poll(() => loadedPromptTop(page, 5)).toBeLessThanOrEqual(24);
+  await expect.poll(() => loadedPromptTopDistance(page, 5)).toBeLessThanOrEqual(24);
   // …and the highlighted tick is that same prompt, not its neighbour.
   await expect.poll(() => activeTickOrdinal(page)).toBe(5);
   expect(await visibleTickOrdinals(page)).toEqual([2, 3, 4, 5, 6, 7, 8]);
@@ -232,7 +234,7 @@ test("timeline ticks: the highlighted tick corresponds to the prompt at the top 
   await nav.locator(".group\\/ticks").click();
   await expect(flyout).toBeVisible();
   await flyout.getByText("Question #8 from user about topic 8").click();
-  await expect.poll(() => loadedPromptTop(page, 8)).toBeLessThanOrEqual(24);
+  await expect.poll(() => loadedPromptTopDistance(page, 8)).toBeLessThanOrEqual(24);
   await expect.poll(() => activeTickOrdinal(page)).toBe(8);
 
   // Scrolling back to the end re-anchors to the newest question.
@@ -407,7 +409,7 @@ test("timeline ticks: a jump lands on its target inside a long transcript", asyn
   await expect(outline).toBeVisible();
   await outline.getByText("Question #5 from user about topic 5").click();
 
-  await expect.poll(() => loadedPromptTop(page, 5)).toBeLessThanOrEqual(24);
+  await expect.poll(() => loadedPromptTopDistance(page, 5)).toBeLessThanOrEqual(24);
   await expect.poll(() => activeTickOrdinal(page)).toBe(5);
 
   // And back to the end.
