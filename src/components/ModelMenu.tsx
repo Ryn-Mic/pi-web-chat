@@ -2,7 +2,7 @@ import { Menu } from "@base-ui-components/react/menu";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UIModel } from "../../shared/protocol";
 import { useModels } from "../lib/api";
-import { chatClient, useChat } from "../lib/chat";
+import { chatClient, useChatField } from "../lib/chat";
 import { useT } from "../lib/i18n";
 import { LoadingIndicator } from "./LoadingIndicator";
 
@@ -26,7 +26,7 @@ export function ModelMenu({
   disabled?: boolean;
 }) {
   const t = useT();
-  const { snapshot } = useChat();
+  const snapshot = useChatField("snapshot");
   const { data: models, isPending, isFetching } = useModels(snapshot?.agent);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");

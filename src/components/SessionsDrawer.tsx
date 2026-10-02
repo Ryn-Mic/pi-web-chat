@@ -5,7 +5,7 @@ import type { UISessionInfo } from "../../shared/protocol";
 import { deleteSession, renameSession, useInvalidateSessions, useSessions } from "../lib/api";
 import { activityEyeState, activityEyeTone } from "../lib/activity";
 import { getAgentPreference } from "../lib/agent";
-import { chatClient, useChat } from "../lib/chat";
+import { chatClient, useChatField } from "../lib/chat";
 import { onRequestOpenSessionsDrawer, setSessionsDrawerOpen } from "../lib/drawer";
 import { localeTag, useLocale, useT } from "../lib/i18n";
 import { confirmDiscardWorkspaceTextDrafts, discardWorkspaceTextDrafts } from "../lib/file-text-drafts";
@@ -260,7 +260,7 @@ function SessionRow({
 /** Refresh the list on sessionFile change and stream end */
 function useSessionListSync(enabled: boolean) {
   const invalidate = useInvalidateSessions();
-  const { snapshot } = useChat();
+  const snapshot = useChatField("snapshot");
   const sessionFile = snapshot?.sessionFile;
   const isStreaming = snapshot?.isStreaming ?? false;
   const prevStreaming = useRef(isStreaming);

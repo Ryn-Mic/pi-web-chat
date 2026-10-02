@@ -54,18 +54,25 @@ export const VIEWPORT_ANCHOR_TOLERANCE_PX = 24;
 export const TAIL_EPSILON_PX = 24;
 
 /**
- * The user message a viewport is anchored to: the last one whose top edge has
- * reached the top of the viewport, in document order. Prompts below the fold
- * never win, so the prompt just scrolled to stays current while its answer is
- * read. Returning `null` means no prompt has reached the top edge yet.
+ * The user message a viewport is anchored to, from prompt positions measured as
+ * absolute offsets inside the scroll content: the last prompt (document order)
+ * whose top edge has scrolled to or past the viewport top. Prompts below the
+ * fold never win, so the prompt just scrolled to stays current while its answer
+ * is read. Returning `null` means no prompt has reached the top edge yet.
+ *
+ * Absolute offsets keep this a pure integer comparison: scrolling does not move
+ * any prompt inside the content, so a caller can cache the offsets and stop
+ * reading layout on every scroll frame.
  */
 export function viewportUserOrdinal(
-  offsets: readonly { ordinal: number; top: number }[],
+  offsets: readonly { ordinal: number; offset: number }[],
+  scrollTop: number,
   tolerance = VIEWPORT_ANCHOR_TOLERANCE_PX,
 ): number | null {
   let anchored: number | null = null;
-  for (const { ordinal, top } of offsets) {
-    if (!Number.isFinite(top) || top > tolerance) continue;
+  for (const { ordinal, offset } of offsets) {
+    if (!Number.isFinite(offset) || !Number.isFinite(scrollTop)) continue;
+    if (offset - scrollTop > tolerance) continue;
     anchored = ordinal;
   }
   return anchored;

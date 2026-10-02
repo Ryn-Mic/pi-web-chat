@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { useInvalidateGit, useInvalidateTree } from "../lib/api";
-import { chatClient, useChat } from "../lib/chat";
+import { chatClient, useChatField } from "../lib/chat";
 import {
   activatePreview,
   closePreview,
@@ -36,7 +36,7 @@ export function openWorkspacePreview(file: PreviewFileSelection): void {
 export function FileWorkspaceSidebar() {
   const t = useT();
   const open = useFilesPanelOpen();
-  const { snapshot } = useChat();
+  const snapshot = useChatField("snapshot");
   const tabKey = chatClient.activeTabKey ?? "unbound";
   const workspace = usePreviewWorkspace(tabKey);
   const invalidateGit = useInvalidateGit();

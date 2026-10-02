@@ -1,13 +1,13 @@
 import { Dialog } from "@base-ui-components/react/dialog";
 import { useEffect, useState } from "react";
-import { chatClient, useChat } from "../lib/chat";
+import { chatClient, useChatField } from "../lib/chat";
 import { useT } from "../lib/i18n";
 import { DIALOG_BACKDROP_CLASS, DIALOG_POPUP_CLASS } from "./ui";
 
 /** Browser implementation of the dialog-capable portion of pi's extension UI. */
 export function ExtensionUIHost() {
   const t = useT();
-  const { extensionUIRequest: request } = useChat();
+  const request = useChatField("extensionUIRequest");
   const [value, setValue] = useState("");
 
   useEffect(() => {

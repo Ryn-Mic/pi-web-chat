@@ -94,6 +94,7 @@ import {
 import { readSessionHistoryPage } from "./session-history.ts";
 import {
   createCodexUserMessageAnchors,
+  createSessionAnchorCache,
   createSessionUserMessageAnchors,
 } from "./session-anchors.ts";
 import { createCwdBoundCoreTools } from "./runtime-tools.ts";
@@ -979,6 +980,9 @@ async function acquireEntry(
   pending.set(id, p);
   return p;
 }
+
+/** File-stamped cache for the per-session question index (see session-anchors.ts). */
+const sessionAnchorCache = createSessionAnchorCache();
 
 /** Clean up empty, stale runtimes */
 setInterval(() => {
@@ -3253,9 +3257,13 @@ const httpServer = createServer(async (req, res) => {
         return;
       }
       try {
-        const loaded = entries.get(id);
-        const manager = loaded?.runtime.session.sessionManager ?? SessionManager.open(path);
-        const anchors = createSessionUserMessageAnchors(manager.getBranch());
+        // Cached by (mtime, size): a cache hit skips both the branch walk and the
+        // SessionManager.open parse for a session that is not loaded in memory.
+        const anchors = await sessionAnchorCache.read(path, () => {
+          const loaded = entries.get(id);
+          const manager = loaded?.runtime.session.sessionManager ?? SessionManager.open(path);
+          return createSessionUserMessageAnchors(manager.getBranch());
+        });
         res.writeHead(200, {
           "content-type": "application/json",
           "cache-control": "no-store",

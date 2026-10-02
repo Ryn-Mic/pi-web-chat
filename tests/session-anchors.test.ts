@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import {
   createCodexUserMessageAnchors,
+  createSessionAnchorCache,
   createSessionUserMessageAnchors,
+  sessionFileStamp,
 } from "../server/session-anchors.ts";
 
 test("builds a lightweight ordered index from active-branch user messages", () => {
@@ -148,4 +154,68 @@ test("rejects a repeated Codex item cursor instead of looping forever", async ()
     createCodexUserMessageAnchors(async () => ({ data: [], nextCursor: "same" })),
     /repeated cursor/,
   );
+});
+
+/**
+ * The anchor index is cached by file stamp: a hit must skip both the branch walk
+ * and the `SessionManager.open` parse, and any file change must rebuild.
+ */
+test("sessionFileStamp distinguishes appended content and missing files", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-web-anchors-"));
+  try {
+    const file = join(dir, "session.jsonl");
+    writeFileSync(file, "{}\n");
+    const first = sessionFileStamp(file);
+    appendFileSync(file, "{}\n");
+    assert.notEqual(first, sessionFileStamp(file));
+    assert.equal(sessionFileStamp(join(dir, "absent.jsonl")), "missing");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("createSessionAnchorCache rebuilds only when the session file changes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-web-anchors-cache-"));
+  try {
+    const file = join(dir, "session.jsonl");
+    writeFileSync(file, "{}\n");
+    const cache = createSessionAnchorCache();
+    let builds = 0;
+    const build = () => {
+      builds += 1;
+      return createSessionUserMessageAnchors([
+        { type: "message", id: "u1", message: { role: "user", content: [{ type: "text", text: `Question ${builds}` }] } },
+      ]);
+    };
+
+    const first = await cache.read(file, build);
+    const cached = await cache.read(file, build);
+    assert.equal(builds, 1);
+    assert.equal(cached, first, "a cache hit returns the same array instance");
+
+    appendFileSync(file, "{}\n");
+    const rebuilt = await cache.read(file, build);
+    assert.equal(builds, 2);
+    assert.notEqual(rebuilt, first);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("createSessionAnchorCache bounds its entries", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-web-anchors-lru-"));
+  try {
+    const cache = createSessionAnchorCache(2);
+    const build = () => createSessionUserMessageAnchors([
+      { type: "message", id: "u1", message: { role: "user", content: [{ type: "text", text: "Question" }] } },
+    ]);
+    for (const name of ["a", "b", "c"]) {
+      const file = join(dir, `${name}.jsonl`);
+      writeFileSync(file, "{}\n");
+      await cache.read(file, build);
+    }
+    assert.equal(cache.size(), 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

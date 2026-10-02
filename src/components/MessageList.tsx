@@ -3,13 +3,14 @@ import {
   type CSSProperties,
   type TouchEvent,
   type WheelEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import type { UIAgentKind, UIContentBlock, UIMessage } from "../../shared/protocol";
-import { chatClient, type ActiveTool } from "../lib/chat";
+import { chatClient, useChatField, type ActiveTool } from "../lib/chat";
 import { chatFontSizePixels, useChatFontSize } from "../lib/chatFontSize";
 import { buildEditDiffFromArgs, isUnifiedDiff } from "../lib/diff";
 import { useT } from "../lib/i18n";
@@ -883,10 +884,6 @@ export function EmptyStateHero({ cwd, agent }: { cwd?: string; agent: UIAgentKin
 
 export function MessageList({
   messages,
-  streamText,
-  streamThinking,
-  streamThinkingComplete,
-  activeTools,
   isStreaming,
   historyHasMore,
   historyLoading,
@@ -903,10 +900,6 @@ export function MessageList({
   onLoadHistoryThroughUserMessage,
 }: {
   messages: UIMessage[];
-  streamText: string;
-  streamThinking: string;
-  streamThinkingComplete: boolean;
-  activeTools: ActiveTool[];
   isStreaming: boolean;
   historyHasMore: boolean;
   historyLoading: boolean;
@@ -927,6 +920,13 @@ export function MessageList({
   ) => Promise<boolean>;
 }) {
   const t = useT();
+  // Streamed text/thinking/tools are read from the store here instead of being
+  // passed down from the page shell: only this component needs them, so a delta
+  // no longer re-renders the header, drawers, panels and composer around it.
+  const streamText = useChatField("streamText");
+  const streamThinking = useChatField("streamThinking");
+  const streamThinkingComplete = useChatField("streamThinkingComplete");
+  const activeTools = useChatField("activeTools");
   // Keep live content visible even if its lifecycle snapshot arrives out of order.
   const turnRunning = isStreaming || !!(streamText || streamThinking || activeTools.length);
   const turns = useMemo(() => conversationTurns(messages, turnRunning), [messages, turnRunning]);
@@ -984,12 +984,17 @@ export function MessageList({
     prevStreaming.current = isStreaming;
   }, [isStreaming, containerRef]);
 
+  /** Stop following the tail before any scroll that is not the user's own. */
+  const stopFollowingTail = useCallback(() => {
+    stickToBottom.current = false;
+    setIsAtBottom(false);
+  }, []);
+
   const loadOlder = async () => {
     const container = containerRef.current;
     const previousHeight = container?.scrollHeight ?? 0;
     const previousTop = container?.scrollTop ?? 0;
-    stickToBottom.current = false;
-    setIsAtBottom(false);
+    stopFollowingTail();
     const loaded = await onLoadOlder();
     if (!loaded) return;
     requestAnimationFrame(() => {
@@ -1130,6 +1135,7 @@ export function MessageList({
           ((ordinal, total) => chatClient.loadHistoryThroughUserMessage(ordinal, total))
         }
         containerRef={containerRef}
+        onAnchorJump={stopFollowingTail}
         hide={hidePromptNavigator}
       />
     </div>

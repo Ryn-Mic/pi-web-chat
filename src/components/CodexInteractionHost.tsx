@@ -4,7 +4,7 @@ import type {
   UICodexInteraction,
   UICodexInteractionResponse,
 } from "../../shared/protocol";
-import { chatClient, useChat } from "../lib/chat";
+import { chatClient, useChatField } from "../lib/chat";
 import { useT } from "../lib/i18n";
 import { PRIMARY_BUTTON_CLASS, SECONDARY_BUTTON_CLASS } from "./ui";
 
@@ -407,7 +407,7 @@ function McpFormBody({
 /** A reconnect-safe, explicitly user-controlled bridge for Codex app-server requests. */
 export function CodexInteractionHost() {
   const t = useT();
-  const { pendingInteractions } = useChat();
+  const pendingInteractions = useChatField("pendingInteractions");
   const interaction = pendingInteractions[0] ?? null;
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [otherAnswers, setOtherAnswers] = useState<Record<string, string>>({});

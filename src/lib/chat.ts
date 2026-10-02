@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 import type {
   ClientCommand,
   ServerEvent,
@@ -1455,8 +1455,46 @@ class ChatWorkspaceClient {
 
 export const chatClient = new ChatWorkspaceClient();
 
+/**
+ * Whole-state subscription. Re-renders on every store change, including each
+ * streamed flush, so prefer {@link useChatField} / {@link useChatPick} unless
+ * the component genuinely reads most of the state.
+ */
 export function useChat(): ChatState {
   return useSyncExternalStore(chatClient.subscribe, chatClient.getSnapshot);
+}
+
+/**
+ * Subscribe to a single store field.
+ *
+ * The store notifies every listener on any change, but a component that reads
+ * one field re-renders only when that field changes. Stream deltas rewrite
+ * `streamText` / `streamThinking` alone, so consumers of `snapshot` and friends
+ * stop re-rendering once per flush.
+ */
+export function useChatField<K extends keyof ChatState>(key: K): ChatState[K] {
+  return useSyncExternalStore(chatClient.subscribe, () => chatClient.getSnapshot()[key]);
+}
+
+/** Re-render only when one of the picked fields changes identity. */
+export function useChatPick<K extends keyof ChatState>(keys: readonly K[]): Pick<ChatState, K> {
+  const cache = useRef<{ state: ChatState | null; value: Pick<ChatState, K> } | null>(null);
+  const getSelection = useCallback(() => {
+    const state = chatClient.getSnapshot();
+    const cached = cache.current;
+    if (cached && cached.state === state) return cached.value;
+    const next = {} as Pick<ChatState, K>;
+    for (const key of keys) next[key] = state[key];
+    // A new state object with unchanged picked fields keeps the previous value,
+    // so `useSyncExternalStore` sees no change and skips the render.
+    if (cached && keys.every((key) => Object.is(cached.value[key], next[key]))) {
+      cache.current = { state, value: cached.value };
+      return cached.value;
+    }
+    cache.current = { state, value: next };
+    return next;
+  }, [keys]);
+  return useSyncExternalStore(chatClient.subscribe, getSelection);
 }
 
 export function useChatTabs(): readonly ChatTab[] {

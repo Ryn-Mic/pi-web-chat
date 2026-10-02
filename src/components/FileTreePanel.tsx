@@ -2,7 +2,7 @@ import { Dialog } from "@base-ui-components/react/dialog";
 import { useEffect, useState, type MouseEvent } from "react";
 import type { UIFileMatch, UITreeNode } from "../../shared/protocol";
 import { useFileSearch, useInvalidateGit, useInvalidateTree, useTree } from "../lib/api";
-import { chatClient, useChat } from "../lib/chat";
+import { chatClient, useChatField } from "../lib/chat";
 import { onRequestOpenFilesDrawer, setFilesDrawerOpen } from "../lib/drawer";
 import { previewIdentity } from "../lib/file-preview";
 import {
@@ -393,7 +393,7 @@ export function FileTreePanel({
   cwd?: string;
 }) {
   const t = useT();
-  const { snapshot } = useChat();
+  const snapshot = useChatField("snapshot");
   const cwd = cwdOverride ?? snapshot?.cwd;
   const [filterQuery, setFilterQuery] = useState("");
   const searchQuery = filterQuery.trim();
@@ -500,7 +500,7 @@ export function FilesDrawer({
   onSelectCommit?: (commit: { cwd: string; hash: string; subject: string; trigger?: HTMLElement | null }) => void;
 }) {
   const t = useT();
-  const { snapshot } = useChat();
+  const snapshot = useChatField("snapshot");
   const invalidateGit = useInvalidateGit();
   const invalidateTree = useInvalidateTree();
   const [open, setOpen] = useState(false);
